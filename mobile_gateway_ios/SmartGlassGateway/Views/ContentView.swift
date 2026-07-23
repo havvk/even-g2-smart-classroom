@@ -189,6 +189,15 @@ struct ContentView: View {
     }
     
     private func setupCallbacks() {
+        // Apple Watch 捏手指 / 屏幕触控 / 数字表冠回调 -> 触发大屏翻页
+        WatchSessionManager.shared.onPageControlTriggered = { action, source in
+            webSocketClient.sendPageControl(
+                sessionId: webSocketClient.currentPayload?.sessionId ?? "sess_demo",
+                action: action,
+                source: source
+            )
+        }
+        
         // BLE 手势触控回调 -> 触发大屏翻页
         bleManager.onPageControlTriggered = { action in
             webSocketClient.sendPageControl(
@@ -207,9 +216,17 @@ struct ContentView: View {
             )
         }
         
-        // 智慧课堂推送新逐字稿 -> 重置语音与 HUD 显存
+        // 智慧课堂推送新逐字稿 -> 重置语音与 HUD 显存并同步到 Apple Watch
         webSocketClient.onTeleprompterSyncReceived = { payload in
             speechEngine.loadSlideScript(script: payload.scriptText, keywords: payload.endKeywords)
+            
+            // 同步给 Apple Watch
+            WatchSessionManager.shared.syncStateToWatch(
+                currentPage: payload.currentPage,
+                totalPages: payload.totalPages,
+                isServerConnected: webSocketClient.isConnected
+            )
+            
             let chunk = HUDLayoutAdapter.shared.buildHUDChunk(
                 currentPage: payload.currentPage,
                 totalPages: payload.totalPages,
