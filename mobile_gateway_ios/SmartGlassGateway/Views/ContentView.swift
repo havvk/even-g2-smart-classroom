@@ -91,6 +91,47 @@ struct ContentView: View {
                     .cornerRadius(12)
                     .padding(.horizontal)
                     
+                    // G2 蓝牙收发数据帧黑盒调试卡片
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Image(systemName: "terminal")
+                                .foregroundColor(.green)
+                            Text("G2 蓝牙通信数据帧黑盒调试日志")
+                                .font(.headline)
+                            Spacer()
+                            Button("清空日志") {
+                                bleManager.clearLogs()
+                            }
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                        }
+                        
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 4) {
+                                if bleManager.bleLogHistory.isEmpty {
+                                    Text("暂无蓝牙收发数据帧，点击上方按钮或发送指令体验...")
+                                        .font(.system(.caption, design: .monospaced))
+                                        .foregroundColor(.gray)
+                                } else {
+                                    ForEach(bleManager.bleLogHistory, id: \.self) { log in
+                                        Text(log)
+                                            .font(.system(.caption2, design: .monospaced))
+                                            .foregroundColor(log.contains("Rx") ? .green : (log.contains("Tx") ? .cyan : .white))
+                                    }
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                        }
+                        .frame(height: 140)
+                        .background(Color.black.opacity(0.85))
+                        .cornerRadius(8)
+                    }
+                    .padding()
+                    .background(Color(UIColor.secondarySystemBackground))
+                    .cornerRadius(12)
+                    .padding(.horizontal)
+                    
                     // 智慧课堂 WebSocket 连接设置
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {

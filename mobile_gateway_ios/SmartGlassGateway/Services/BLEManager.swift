@@ -107,17 +107,25 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard let data = characteristic.value else { return }
-        // 模拟解调 Even G2 镜腿 Touchpad / 戒指按键手势信号
+        let hexString = data.map { String(format: "%02X", $0) }.joined(separator: " ")
+        addLog("📥 Rx (G2 -> iPad): [\(hexString)]")
+        
         let rawByte = data.first ?? 0
-        if rawByte == 0x01 {
+        if rawByte == 0xAA && data.count >= 4 {
+            let cmdType = data.count > 4 ? data[4] : 0x00
+            addLog("ℹ️ 解码 G2 固件帧: Cmd=0x\(String(format: "%02X", cmdType)) 应答包")
+        } else if rawByte == 0x01 {
             lastGestureReceived = "Swipe Down / Next"
             onPageControlTriggered?("NEXT")
+            addLog("👉 收到镜腿手势: 向下滑动 (NEXT)")
         } else if rawByte == 0x02 {
             lastGestureReceived = "Swipe Up / Prev"
             onPageControlTriggered?("PREV")
+            addLog("👈 收到镜腿手势: 向上滑动 (PREV)")
         } else if rawByte == 0x03 {
             lastGestureReceived = "Ring Click / Next"
             onPageControlTriggered?("NEXT")
+            addLog("💍 收到戒指按键: 点击 (NEXT)")
         }
     }
     
@@ -136,7 +144,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         let packet = G2ProtocolEncoder.buildSleepPacket()
         sendRawData(packet)
         DispatchQueue.main.async {
-            self.lastBLEStatusMessage = "⚪ 已通过 G2 协议发送息屏/清屏指令 (CRC16)"
+            self.lastBLEStatusMessage = "⚪ 已发送息屏指令 (CRC16)"
         }
     }
     
@@ -144,7 +152,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         let packet = G2ProtocolEncoder.buildWakePacket()
         sendRawData(packet)
         DispatchQueue.main.async {
-            self.lastBLEStatusMessage = "🟢 已通过 G2 协议发送显存唤醒指令 (CRC16)"
+            self.lastBLEStatusMessage = "🟢 已发送唤醒指令 (CRC16)"
         }
     }
     
@@ -152,7 +160,8 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
 
     private func sendRawData(_ data: Data) {
         guard isConnected else {
-            print("⚠️ 蓝牙未连接：无法向 Even G2 发送指令，请先点击 [扫描连接 Even G2]")
+            print("⚠️ 蓝牙未连接：无法向 Even G2 发送指令")
+            addLog("⚠️ 发送失败: 蓝牙未连接")
             DispatchQueue.main.async {
                 self.lastBLEStatusMessage = "⚠️ 请先点击下方 [扫描连接 Even G2]"
             }
@@ -160,12 +169,15 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         guard let peripheral = targetPeripheral, let txChar = txCharacteristic else {
             print("⚠️ 蓝牙特征通道未就绪")
+            addLog("⚠️ 发送失败: 特征通道未就绪")
             DispatchQueue.main.async {
                 self.lastBLEStatusMessage = "⚠️ 蓝牙特征通道未就绪"
             }
             return
         }
         peripheral.writeValue(data, for: txChar, type: .withoutResponse)
+        let hexString = data.map { String(format: "%02X", $0) }.joined(separator: " ")
+        addLog("📤 Tx (iPad -> G2): [\(hexString)]")
     }
     
     /// 向 Even G2 发送 3 行 HUD 显存刷新数据帧 (Protobuf + CRC16)
@@ -173,8 +185,10 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         guard isConnected, isHUDDisplayActive, let peripheral = targetPeripheral, let txChar = txCharacteristic else { return }
         let packet = G2ProtocolEncoder.buildTextDisplayPacket(chunk: chunk)
         peripheral.writeValue(packet, for: txChar, type: .withoutResponse)
+        let hexString = packet.map { String(format: "%02X", $0) }.joined(separator: " ")
+        addLog("📤 Tx 显存帧 (G2): [\(hexString)]")
         DispatchQueue.main.async {
-            self.lastBLEStatusMessage = "🟢 3行 HUD 显存帧已通过 G2 校验协议同步到眼镜"
+            self.lastBLEStatusMessage = "🟢 3行 HUD 显存帧已同步到眼镜 (CRC16)"
         }
     }
 }
