@@ -6,6 +6,8 @@
 - 📘 [需求规格与架构规划说明书](docs/requirements_spec.md)
 - 🛠️ [开发环境准备指南](docs/dev_environment_setup.md)
 - 👓 [Even G2 硬件环境准备与连接指南](docs/hardware_setup_guide.md)
+- 📋 [用户验收方案与操作步骤](docs/user_acceptance_plan.md)
+
 
 
 ## 主要功能
