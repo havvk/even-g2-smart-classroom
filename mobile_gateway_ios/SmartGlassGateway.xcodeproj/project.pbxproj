@@ -1,0 +1,221 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000012C50000100000001 /* SmartGlassGatewayApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000012C50000100000001 /* SmartGlassGatewayApp.swift */; };
+		A10000022C50000100000001 /* TeleprompterPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000022C50000100000001 /* TeleprompterPayload.swift */; };
+		A10000032C50000100000001 /* HUDLayoutAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000032C50000100000001 /* HUDLayoutAdapter.swift */; };
+		A10000042C50000100000001 /* BLEManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000042C50000100000001 /* BLEManager.swift */; };
+		A10000052C50000100000001 /* SpeechFollowEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000052C50000100000001 /* SpeechFollowEngine.swift */; };
+		A10000062C50000100000001 /* WebSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000062C50000100000001 /* WebSocketClient.swift */; };
+		A10000072C50000100000001 /* HUDPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000072C50000100000001 /* HUDPreviewView.swift */; };
+		A10000082C50000100000001 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000082C50000100000001 /* ContentView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		C10000002C50000100000001 /* SmartGlassGateway.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SmartGlassGateway.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B10000012C50000100000001 /* SmartGlassGatewayApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGatewayApp.swift; sourceTree = "<group>"; };
+		B10000022C50000100000001 /* TeleprompterPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/TeleprompterPayload.swift; sourceTree = "<group>"; };
+		B10000032C50000100000001 /* HUDLayoutAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/HUDLayoutAdapter.swift; sourceTree = "<group>"; };
+		B10000042C50000100000001 /* BLEManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/BLEManager.swift; sourceTree = "<group>"; };
+		B10000052C50000100000001 /* SpeechFollowEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/SpeechFollowEngine.swift; sourceTree = "<group>"; };
+		B10000062C50000100000001 /* WebSocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/WebSocketClient.swift; sourceTree = "<group>"; };
+		B10000072C50000100000001 /* HUDPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/HUDPreviewView.swift; sourceTree = "<group>"; };
+		B10000082C50000100000001 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ContentView.swift; sourceTree = "<group>"; };
+		B10000092C50000100000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		D10000002C50000100000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		E10000002C50000100000001 = {
+			isa = PBXGroup;
+			children = (
+				F10000002C50000100000001 /* SmartGlassGateway */,
+				C10000002C50000100000001 /* SmartGlassGateway.app */,
+			);
+			sourceTree = "<group>";
+		};
+		F10000002C50000100000001 /* SmartGlassGateway */ = {
+			isa = PBXGroup;
+			children = (
+				B10000012C50000100000001 /* SmartGlassGatewayApp.swift */,
+				B10000022C50000100000001 /* TeleprompterPayload.swift */,
+				B10000032C50000100000001 /* HUDLayoutAdapter.swift */,
+				B10000042C50000100000001 /* BLEManager.swift */,
+				B10000052C50000100000001 /* SpeechFollowEngine.swift */,
+				B10000062C50000100000001 /* WebSocketClient.swift */,
+				B10000072C50000100000001 /* HUDPreviewView.swift */,
+				B10000082C50000100000001 /* ContentView.swift */,
+				B10000092C50000100000001 /* Info.plist */,
+			);
+			path = SmartGlassGateway;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		G10000002C50000100000001 /* SmartGlassGateway */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = H10000002C50000100000001 /* Build configuration list for PBXNativeTarget "SmartGlassGateway" */;
+			buildPhases = (
+				I10000002C50000100000001 /* Sources */,
+				D10000002C50000100000001 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SmartGlassGateway;
+			productName = SmartGlassGateway;
+			productReference = C10000002C50000100000001 /* SmartGlassGateway.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		J10000002C50000100000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					G10000002C50000100000001 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = K10000002C50000100000001 /* Build configuration list for PBXProject "SmartGlassGateway" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = E10000002C50000100000001;
+			productRefGroup = E10000002C50000100000001;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				G10000002C50000100000001 /* SmartGlassGateway */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		I10000002C50000100000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000012C50000100000001 /* SmartGlassGatewayApp.swift in Sources */,
+				A10000022C50000100000001 /* TeleprompterPayload.swift in Sources */,
+				A10000032C50000100000001 /* HUDLayoutAdapter.swift in Sources */,
+				A10000042C50000100000001 /* BLEManager.swift in Sources */,
+				A10000052C50000100000001 /* SpeechFollowEngine.swift in Sources */,
+				A10000062C50000100000001 /* WebSocketClient.swift in Sources */,
+				A10000072C50000100000001 /* HUDPreviewView.swift in Sources */,
+				A10000082C50000100000001 /* ContentView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		L10000002C50000100000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SmartGlassGateway/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = edu.ncu.smartglass.SmartGlassGateway;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		L10000002C50000200000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SmartGlassGateway/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = edu.ncu.smartglass.SmartGlassGateway;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		M10000002C50000100000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				SDKROOT = iphoneos;
+			};
+			name = Debug;
+		};
+		M10000002C50000200000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				SDKROOT = iphoneos;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		H10000002C50000100000001 /* Build configuration list for PBXNativeTarget "SmartGlassGateway" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				L10000002C50000100000001 /* Debug */,
+				L10000002C50000200000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		K10000002C50000100000001 /* Build configuration list for PBXProject "SmartGlassGateway" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				M10000002C50000100000001 /* Debug */,
+				M10000002C50000200000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = J10000002C50000100000001 /* Project object */;
+}
