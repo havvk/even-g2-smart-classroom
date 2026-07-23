@@ -11,7 +11,7 @@ struct HUDPreviewView: View {
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                     .foregroundColor(Color(red: 0.1, green: 0.95, blue: 0.3))
                 Spacer()
-                Image(systemName: "glasses")
+                Image(systemName: "eyeglasses")
                     .foregroundColor(Color(red: 0.1, green: 0.95, blue: 0.3))
             }
             Divider()
