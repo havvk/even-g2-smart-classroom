@@ -28,7 +28,7 @@ class WatchSessionManager: NSObject, ObservableObject, WCSessionDelegate {
             "total_pages": totalPages,
             "is_connected": isServerConnected
         ]
-        WCSession.default.sendMessage(message, replyHandler: nil, completionHandler: nil)
+        WCSession.default.sendMessage(message, replyHandler: nil, errorHandler: nil)
     }
     
     // MARK: - WCSessionDelegate
