@@ -30,9 +30,17 @@ struct ContentView: View {
                 VStack(spacing: 20) {
                     // HUD 模拟视口
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Even G2 绿光 HUD 模拟显存")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        HStack {
+                            Text("Even G2 绿光 HUD 模拟显存")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Toggle("HUD 显存激活", isOn: $bleManager.isHUDDisplayActive)
+                                .labelsHidden()
+                            Text(bleManager.isHUDDisplayActive ? "🟢 显存渲染中" : "⚪ 息屏休眠")
+                                .font(.caption)
+                                .foregroundColor(bleManager.isHUDDisplayActive ? .green : .gray)
+                        }
                         
                         HUDPreviewView(chunk: currentHUDChunk)
                     }

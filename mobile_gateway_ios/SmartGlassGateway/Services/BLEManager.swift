@@ -106,15 +106,13 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
     }
     
-    @Published var isHUDDisplayActive: Bool = true
-    
-    /// 切换/控制 Even G2 HUD 屏幕休眠与快速激活
-    func toggleHUDDisplay() {
-        isHUDDisplayActive.toggle()
-        if isHUDDisplayActive {
-            wakeHUD()
-        } else {
-            sleepHUD()
+    @Published var isHUDDisplayActive: Bool = true {
+        didSet {
+            if isHUDDisplayActive {
+                wakeHUD()
+            } else {
+                sleepHUD()
+            }
         }
     }
     
