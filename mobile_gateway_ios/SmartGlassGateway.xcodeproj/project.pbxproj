@@ -151,6 +151,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = MT5RXPF557;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = SmartGlassGateway/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
@@ -176,6 +177,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = MT5RXPF557;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = SmartGlassGateway/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
@@ -198,6 +200,7 @@
 			buildSettings = {
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -206,6 +209,7 @@
 			buildSettings = {
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};

@@ -18,8 +18,6 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
-	<key>LSRequiresIPhoneOS</key>
-	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>应用需要使用蓝牙连接 Even G2 智能眼镜与 Smart Ring 戒头，以接收手势翻页指令并发送 HUD 显存内容。</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
