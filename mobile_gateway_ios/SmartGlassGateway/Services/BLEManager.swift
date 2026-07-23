@@ -21,9 +21,13 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         centralManager = CBCentralManager(delegate: self, queue: nil)
     }
     
+    private var isManualDisconnect = false
+    
     func startScanning() {
         guard centralManager.state == .poweredOn else { return }
+        isManualDisconnect = false
         isScanning = true
+        lastBLEStatusMessage = "正在扫描附近的 Even G2 眼镜..."
         centralManager.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
     }
     
@@ -33,15 +37,21 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     }
     
     func disconnect() {
+        isManualDisconnect = true
         if let peripheral = targetPeripheral {
             centralManager.cancelPeripheralConnection(peripheral)
         }
+        isConnected = false
+        connectedPeripheralName = nil
+        lastBLEStatusMessage = "已手动断开蓝牙"
     }
     
     // MARK: - CBCentralManagerDelegate
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         if central.state == .poweredOn {
-            startScanning()
+            if !isManualDisconnect {
+                startScanning()
+            }
         } else {
             isConnected = false
             isScanning = false
@@ -61,13 +71,18 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         isConnected = true
         connectedPeripheralName = peripheral.name ?? "Even G2 Smart Glass"
+        lastBLEStatusMessage = "🟢 蓝牙已连接设备: \(connectedPeripheralName ?? "")"
         peripheral.discoverServices(nil)
     }
     
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         isConnected = false
         connectedPeripheralName = nil
-        startScanning()
+        if !isManualDisconnect {
+            startScanning()
+        } else {
+            lastBLEStatusMessage = "已断开蓝牙，点击按钮可重新扫描"
+        }
     }
     
     // MARK: - CBPeripheralDelegate
@@ -119,10 +134,16 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     
     func sleepHUD() {
         sendRawCommand(bytes: [0x00, 0xFF, 0x00, 0x00])
+        DispatchQueue.main.async {
+            self.lastBLEStatusMessage = "⚪ 已向眼镜发送息屏/清屏指令"
+        }
     }
     
     func wakeHUD() {
         sendRawCommand(bytes: [0x00, 0xFF, 0x01, 0x01])
+        DispatchQueue.main.async {
+            self.lastBLEStatusMessage = "🟢 已向眼镜发送显存唤醒/亮屏指令"
+        }
     }
     
     @Published var lastBLEStatusMessage: String = "等待扫描连接眼镜"
