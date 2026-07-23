@@ -18,6 +18,8 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>应用需要访问局域网连接 Smart Classroom 智慧课堂服务端以同步大屏课件逐字稿与翻页指令。</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>应用需要使用蓝牙连接 Even G2 智能眼镜与 Smart Ring 戒头，以接收手势翻页指令并发送 HUD 显存内容。</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
