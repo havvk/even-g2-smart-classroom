@@ -28,11 +28,6 @@
 	<string>应用需要使用麦克风捕获您授课的语音流，以实现逐字稿的实时语音跟随滚屏。</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>应用需要使用语音识别服务将授课语音与讲义逐字稿进行匹配比对。</string>
-	<key>UIApplicationSceneManifest</key>
-	<dict>
-		<key>UIApplicationSupportsMultipleScenes</key>
-		<false/>
-	</dict>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>
