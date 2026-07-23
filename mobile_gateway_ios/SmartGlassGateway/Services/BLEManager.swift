@@ -125,10 +125,28 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         sendRawCommand(bytes: [0x00, 0xFF, 0x01, 0x01])
     }
     
+    @Published var lastBLEStatusMessage: String = "等待扫描连接眼镜"
+
     private func sendRawCommand(bytes: [UInt8]) {
-        guard isConnected, let peripheral = targetPeripheral, let txChar = txCharacteristic else { return }
+        guard isConnected else {
+            print("⚠️ 蓝牙未连接：无法向 Even G2 发送指令，请先点击 [扫描连接 Even G2]")
+            DispatchQueue.main.async {
+                self.lastBLEStatusMessage = "⚠️ 请先点击下方 [扫描连接 Even G2]"
+            }
+            return
+        }
+        guard let peripheral = targetPeripheral, let txChar = txCharacteristic else {
+            print("⚠️ 蓝牙特征通道未就绪")
+            DispatchQueue.main.async {
+                self.lastBLEStatusMessage = "⚠️ 蓝牙特征通道未就绪"
+            }
+            return
+        }
         let data = Data(bytes)
         peripheral.writeValue(data, for: txChar, type: .withoutResponse)
+        DispatchQueue.main.async {
+            self.lastBLEStatusMessage = "🟢 指令已通过 BLE 发送到眼镜"
+        }
     }
     
     /// 向 Even G2 发送 3 行 HUD 显存刷新数据帧
@@ -137,6 +155,9 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         let payloadString = "\(chunk.headerText)\n\(chunk.highlightedLine)\n\(chunk.nextLinePreview)"
         if let data = payloadString.data(using: .utf8) {
             peripheral.writeValue(data, for: txChar, type: .withoutResponse)
+            DispatchQueue.main.async {
+                self.lastBLEStatusMessage = "🟢 3行 HUD 显存帧已同步到眼镜"
+            }
         }
     }
 }

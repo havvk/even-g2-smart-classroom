@@ -65,6 +65,10 @@ struct ContentView: View {
                                 .foregroundColor(.secondary)
                         }
                         
+                        Text(bleManager.lastBLEStatusMessage)
+                            .font(.caption2)
+                            .foregroundColor(bleManager.isConnected ? .blue : .gray)
+                        
                         HStack {
                             Button(action: {
                                 if bleManager.isConnected {
