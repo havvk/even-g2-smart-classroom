@@ -133,22 +133,24 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     }
     
     func sleepHUD() {
-        sendRawCommand(bytes: [0x00, 0xFF, 0x00, 0x00])
+        let packet = G2ProtocolEncoder.buildSleepPacket()
+        sendRawData(packet)
         DispatchQueue.main.async {
-            self.lastBLEStatusMessage = "⚪ 已向眼镜发送息屏/清屏指令"
+            self.lastBLEStatusMessage = "⚪ 已通过 G2 协议发送息屏/清屏指令 (CRC16)"
         }
     }
     
     func wakeHUD() {
-        sendRawCommand(bytes: [0x00, 0xFF, 0x01, 0x01])
+        let packet = G2ProtocolEncoder.buildWakePacket()
+        sendRawData(packet)
         DispatchQueue.main.async {
-            self.lastBLEStatusMessage = "🟢 已向眼镜发送显存唤醒/亮屏指令"
+            self.lastBLEStatusMessage = "🟢 已通过 G2 协议发送显存唤醒指令 (CRC16)"
         }
     }
     
     @Published var lastBLEStatusMessage: String = "等待扫描连接眼镜"
 
-    private func sendRawCommand(bytes: [UInt8]) {
+    private func sendRawData(_ data: Data) {
         guard isConnected else {
             print("⚠️ 蓝牙未连接：无法向 Even G2 发送指令，请先点击 [扫描连接 Even G2]")
             DispatchQueue.main.async {
@@ -163,22 +165,16 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             }
             return
         }
-        let data = Data(bytes)
         peripheral.writeValue(data, for: txChar, type: .withoutResponse)
-        DispatchQueue.main.async {
-            self.lastBLEStatusMessage = "🟢 指令已通过 BLE 发送到眼镜"
-        }
     }
     
-    /// 向 Even G2 发送 3 行 HUD 显存刷新数据帧
+    /// 向 Even G2 发送 3 行 HUD 显存刷新数据帧 (Protobuf + CRC16)
     func sendHUDFrame(chunk: HUDDisplayChunk) {
         guard isConnected, isHUDDisplayActive, let peripheral = targetPeripheral, let txChar = txCharacteristic else { return }
-        let payloadString = "\(chunk.headerText)\n\(chunk.highlightedLine)\n\(chunk.nextLinePreview)"
-        if let data = payloadString.data(using: .utf8) {
-            peripheral.writeValue(data, for: txChar, type: .withoutResponse)
-            DispatchQueue.main.async {
-                self.lastBLEStatusMessage = "🟢 3行 HUD 显存帧已同步到眼镜"
-            }
+        let packet = G2ProtocolEncoder.buildTextDisplayPacket(chunk: chunk)
+        peripheral.writeValue(packet, for: txChar, type: .withoutResponse)
+        DispatchQueue.main.async {
+            self.lastBLEStatusMessage = "🟢 3行 HUD 显存帧已通过 G2 校验协议同步到眼镜"
         }
     }
 }
