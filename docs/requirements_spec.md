@@ -1,7 +1,7 @@
 # Even G2 智能眼镜 - 智慧课堂配套应用 需求规格与架构规划说明书
 
 ## 1. 项目背景与技术路线
-本系统面向使用 **Even G2 智能眼镜** 的授课教师，基于 **“语音页内跟随 + 手势/按键控屏翻页 + 尾部关键词助推”** 的融合技术路线，解决脱离电脑台/翻页笔、免视大屏即可掌握讲义逐字稿并精确控制翻页的需求。
+本系统面向使用 **Even G2 智能眼镜** 的授课教师，基于 **“语音页内跟随 + 多模态手势控屏翻页（眼镜触控 / Smart Ring / Apple Watch）”** 的融合技术路线，解决脱离电脑台/翻页笔、免视大屏即可掌握讲义逐字稿并精确控制翻页的需求。
 
 ---
 
@@ -12,10 +12,18 @@
 - **HUD 自动平滑滚屏**：确保教师当前正在讲述的句子保持在 Even G2 绿光 HUD 的中央高亮区。
 - **脱稿降级机制**：若检测到连续 5 秒未匹配到逐字稿（如老师脱稿解说或回答学生提问），HUD 自动平滑降级显示当前 Slide 的核心提纲 (Bullet Points)。
 
-### 2.2 翻页消息控制 (Page Turn Control)
-- **显示触控/按键翻页**：支持 Even G2 镜腿 Touchpad 上滑/下滑与配套 Smart Ring 戒指按压信号，主动发出 `PAGE_CONTROL` 消息。
-- **尾部关键词自动翻页**：解析逐字稿末尾关键词（如 *"下面来看下一张"*），ASR 命中且置信度 $>0.85$ 时自动触发翻页。
-- **全链路响应延时**：按键/手势翻页大屏响应延时控制在 **< 150ms**；语音跟随行高亮延时小于 **300ms**。
+### 2.2 多模态翻页消息控制 (Multi-modal Page Control)
+系统支持三种外设手势源接入，发出的 `PAGE_CONTROL` WebSocket 消息要求在 **< 150ms** 内驱动教室大屏翻页：
+
+1. **Even G2 镜腿 Touchpad / 智能戒指 (Smart Ring)**：
+   - 镜腿 Touchpad 上滑/下滑或 Smart Ring 物理按压。
+2. **Apple Watch 多模态手势交互 (watchOS Extension)**：
+   - **方式 1（捏手指 Double Tap / AssistiveTouch）**：通过双指捏合手势识别触发翻页。
+   - **方式 2（数字表冠 Digital Crown）**：顺时针/逆时针扭动表冠微调逐字稿行高亮与翻页。
+   - **方式 3（CoreMotion 手腕甩动 Wrist Flick）**：基于 50Hz IMU 角速度与加速度回弹比对算法（带 1.5s 防抖冷却），手腕快速向上甩动触发翻页。
+   - **Taptic Engine 震动**：手表接收到任何翻页手势触发成功后，发出 `.click` 触觉震动反馈。
+3. **尾部关键词自动翻页**：
+   - 解析逐字稿末尾关键词（如 *"下面来看下一张"*），ASR 命中且置信度 $>0.85$ 时自动触发翻页。
 
 ### 2.3 课堂互动与提醒 (HUD Notification)
 - **签到状态提醒**：如 `[签到] 已到 42/45 人`。
@@ -30,8 +38,8 @@
 {
   "type": "PAGE_CONTROL",
   "session_id": "sess_20260723_01",
-  "action": "NEXT",
-  "trigger_source": "VOICE_KEYWORD", // "RING_CLICK" | "TOUCHPAD_SWIPE" | "VOICE_KEYWORD"
+  "action": "NEXT", // "NEXT" | "PREV" | "JUMP"
+  "trigger_source": "WATCH_DOUBLE_TAP", // "RING_CLICK" | "TOUCHPAD_SWIPE" | "VOICE_KEYWORD" | "WATCH_DOUBLE_TAP" | "WATCH_CROWN" | "WATCH_WRIST_FLICK" | "WATCH_TAP"
   "timestamp": 1784783900
 }
 ```
@@ -57,11 +65,13 @@
 
 ## 4. 软件模块架构
 
-1. **`mobile_gateway` (手机端 Gateway Bridge)**
-   - **ASR & Line Matcher Engine**：负责语音实时识别与逐字稿比对定位。
-   - **HUD Layout & Chunking Adapter**：针对 Even G2 (3行, 18字/行) 进行动态字符切片与滚动。
-   - **BLE Connection Manager**：与 Even G2 连接并收发手势与显示帧。
-   - **WebSocket Client**：与智慧课堂 FastAPI 服务端保持双向长连接。
-2. **`server_plugin` (智慧课堂服务端拓展插件)**
+1. **`mobile_gateway_ios` (iOS & watchOS 手机/手表网关)**
+   - **SmartGlassGateway (iPhone App)**：
+     - ASR & Line Matcher Engine：语音识别与逐字稿比对。
+     - BLE Connection Manager：与 Even G2 连接管理。
+     - WatchSessionManager：通过 `WatchConnectivity` 管理 Apple Watch。
+   - **SmartGlassWatch (watchOS Extension)**：
+     - 支持 Double Tap 捏手指、Digital Crown 表冠控制、CoreMotion 手腕甩动识别。
+2. **`server_plugin` (智慧课堂服务端插件)**
    - 维护 Session 页码、幻灯片逐字稿与尾部关键词数据映射。
    - 提供 WebSocket 翻页广播与状态分发机制。
