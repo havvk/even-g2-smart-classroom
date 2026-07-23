@@ -16,6 +16,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+import socket
+
+# 局域网 UDP 自动服务发现广播信标 (Port 8001)
+async def udp_beacon_task():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    beacon_data = json.dumps({
+        "service": "SMART_CLASSROOM_SERVER",
+        "port": 8000,
+        "default_session": "sess_demo"
+    }, ensure_ascii=False).encode('utf-8')
+    
+    while True:
+        try:
+            sock.sendto(beacon_data, ('<broadcast>', 8001))
+        except Exception:
+            pass
+        await asyncio.sleep(2)
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(udp_beacon_task())
+
 # 简单 WebSocket 连接池管理
 class ConnectionManager:
     def __init__(self):

@@ -16,6 +16,7 @@
 		A10000072C50000100000001 /* HUDPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000072C50000100000001 /* HUDPreviewView.swift */; };
 		A10000082C50000100000001 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000082C50000100000001 /* ContentView.swift */; };
 		A100000A2C50000100000001 /* WatchSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000A2C50000100000001 /* WatchSessionManager.swift */; };
+		A100000B2C50000100000001 /* ServerDiscoveryEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000B2C50000100000001 /* ServerDiscoveryEngine.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -30,6 +31,7 @@
 		B10000082C50000100000001 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ContentView.swift; sourceTree = "<group>"; };
 		B10000092C50000100000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B100000A2C50000100000001 /* WatchSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/WatchSessionManager.swift; sourceTree = "<group>"; };
+		B100000B2C50000100000001 /* ServerDiscoveryEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/ServerDiscoveryEngine.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -61,6 +63,7 @@
 				B10000052C50000100000001 /* SpeechFollowEngine.swift */,
 				B10000062C50000100000001 /* WebSocketClient.swift */,
 				B100000A2C50000100000001 /* WatchSessionManager.swift */,
+				B100000B2C50000100000001 /* ServerDiscoveryEngine.swift */,
 				B10000072C50000100000001 /* HUDPreviewView.swift */,
 				B10000082C50000100000001 /* ContentView.swift */,
 				B10000092C50000100000001 /* Info.plist */,
@@ -132,6 +135,7 @@
 				A10000052C50000100000001 /* SpeechFollowEngine.swift in Sources */,
 				A10000062C50000100000001 /* WebSocketClient.swift in Sources */,
 				A100000A2C50000100000001 /* WatchSessionManager.swift in Sources */,
+				A100000B2C50000100000001 /* ServerDiscoveryEngine.swift in Sources */,
 				A10000072C50000100000001 /* HUDPreviewView.swift in Sources */,
 				A10000082C50000100000001 /* ContentView.swift in Sources */,
 			);

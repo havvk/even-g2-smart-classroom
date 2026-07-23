@@ -4,6 +4,7 @@ struct ContentView: View {
     @EnvironmentObject var bleManager: BLEManager
     @EnvironmentObject var speechEngine: SpeechFollowEngine
     @EnvironmentObject var webSocketClient: WebSocketClient
+    @StateObject private var discoveryEngine = ServerDiscoveryEngine.shared
     
     @State private var serverAddress: String = "ws://192.168.1.100:8000/ws/session/sess_demo"
     
@@ -86,15 +87,34 @@ struct ContentView: View {
                             Text("智慧课堂服务端 (WebSocket)")
                                 .font(.headline)
                             Spacer()
-                            Text(webSocketClient.isConnected ? "已在线" : "离线")
+                            Text(webSocketClient.isConnected ? "已在线" : (discoveryEngine.isSearching ? "🔍 正在寻找服务端..." : "离线"))
                                 .font(.subheadline)
-                                .foregroundColor(webSocketClient.isConnected ? .green : .gray)
+                                .foregroundColor(webSocketClient.isConnected ? .green : .purple)
                         }
                         
-                        TextField("ws://服务器IP:8000/ws/session/ID", text: $serverAddress)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .autocapitalization(.none)
-                            .disableAutocorrection(true)
+                        HStack {
+                            TextField("ws://服务器IP:8000/ws/session/ID", text: $serverAddress)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .autocapitalization(.none)
+                                .disableAutocorrection(true)
+                            
+                            Button(action: {
+                                discoveryEngine.startDiscovery { discoveredURL in
+                                    self.serverAddress = discoveredURL
+                                    self.webSocketClient.connect(urlString: discoveredURL)
+                                }
+                            }) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "sparkles")
+                                    Text("自动查找")
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .background(Color.purple.opacity(0.15))
+                                .foregroundColor(.purple)
+                                .cornerRadius(8)
+                            }
+                        }
                         
                         Button(action: {
                             if webSocketClient.isConnected {
@@ -184,6 +204,10 @@ struct ContentView: View {
             .navigationTitle("Even G2 网关")
             .onAppear {
                 setupCallbacks()
+                discoveryEngine.startDiscovery { discoveredURL in
+                    self.serverAddress = discoveredURL
+                    self.webSocketClient.connect(urlString: discoveredURL)
+                }
             }
         }
     }
