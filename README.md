@@ -5,6 +5,8 @@
 ## 快速导航文档
 - 📘 [需求规格与架构规划说明书](docs/requirements_spec.md)
 - 🛠️ [开发环境准备指南](docs/dev_environment_setup.md)
+- 👓 [Even G2 硬件环境准备与连接指南](docs/hardware_setup_guide.md)
+
 
 ## 主要功能
 1. **语音页内跟随 & 逐字稿 HUD 显示**：在 Even G2 绿光 HUD 屏幕上显示 Slide 逐字稿，语音识别自动平滑滚屏。
