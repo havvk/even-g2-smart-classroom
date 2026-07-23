@@ -15,9 +15,9 @@
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>1.1</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>应用需要访问局域网连接 Smart Classroom 智慧课堂服务端以同步大屏课件逐字稿与翻页指令。</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
