@@ -1,0 +1,49 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "1. 编译 iOS 应用 (Simulator)",
+      "type": "shell",
+      "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project mobile_gateway_ios/SmartGlassGateway.xcodeproj -scheme SmartGlassGateway -sdk iphonesimulator -derivedDataPath mobile_gateway_ios/build -configuration Debug build",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "2. 启动 iOS 模拟器",
+      "type": "shell",
+      "command": "open -a Simulator && xcrun simctl boot 'iPhone 16' || true",
+      "problemMatcher": []
+    },
+    {
+      "label": "3. 部署并运行 iOS 应用到模拟器",
+      "type": "shell",
+      "command": "xcrun simctl install booted mobile_gateway_ios/build/Build/Products/Debug-iphonesimulator/SmartGlassGateway.app && xcrun simctl launch booted edu.ncu.smartglass.SmartGlassGateway",
+      "dependsOn": [
+        "1. 编译 iOS 应用 (Simulator)",
+        "2. 启动 iOS 模拟器"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "启动智慧课堂服务端 (FastAPI)",
+      "type": "shell",
+      "command": "cd server_plugin && uvicorn main:app --reload --host 0.0.0.0 --port 8000",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "swift.path": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin",
+  "files.associations": {
+    "*.swift": "swift",
+    "*.plist": "xml",
+    "*.pbxproj": "pbxproj"
+  },
+  "python.analysis.extraPaths": [
+    "./server_plugin"
+  ],
+  "editor.formatOnSave": true
+}
