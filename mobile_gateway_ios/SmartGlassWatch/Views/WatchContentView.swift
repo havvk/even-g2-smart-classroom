@@ -15,63 +15,108 @@ struct WatchContentView: View {
     @State private var lastFlickTimestamp: Date = Date.distantPast
     
     var body: some View {
-        VStack(spacing: 6) {
-            // Header 状态栏
-            HStack {
-                Text("P\(String(format: "%02d", watchService.currentPage))/\(String(format: "%02d", watchService.totalPages))")
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundColor(.green)
-                Spacer()
-                Circle()
-                    .fill(watchService.isPhoneReachable ? Color.green : Color.red)
-                    .frame(width: 7, height: 7)
-            }
-            .padding(.horizontal, 4)
-            
-            // 模式指示
-            HStack {
-                Image(systemName: "hand.tap")
-                Text("捏手指 / 甩手翻页")
-            }
-            .font(.system(size: 10))
-            .foregroundColor(.secondary)
-            
-            // 屏幕翻页按键
-            HStack(spacing: 8) {
-                Button(action: {
-                    triggerPageTurn(action: "PREV", source: "WATCH_TAP")
-                }) {
-                    VStack {
-                        Image(systemName: "chevron.left")
-                            .font(.title3)
-                        Text("上一页")
-                            .font(.system(size: 10))
+        ScrollView {
+            VStack(spacing: 6) {
+                // Header 状态栏 & HUD 显存快速开关
+                HStack {
+                    Text("P\(String(format: "%02d", watchService.currentPage))/\(String(format: "%02d", watchService.totalPages))")
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .foregroundColor(watchService.isHUDDisplayActive ? .green : .gray)
+                    
+                    Spacer()
+                    
+                    // 快捷开关 HUD 屏幕休眠/唤醒
+                    Button(action: {
+                        WKInterfaceDevice.current().play(.click)
+                        watchService.sendDisplayToggle()
+                    }) {
+                        Image(systemName: watchService.isHUDDisplayActive ? "eye.fill" : "eye.slash.fill")
+                            .font(.system(size: 12))
+                            .foregroundColor(watchService.isHUDDisplayActive ? .green : .red)
+                            .padding(4)
+                            .background(Color.gray.opacity(0.3))
+                            .clipShape(Circle())
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.gray.opacity(0.3))
-                    .cornerRadius(10)
+                    .buttonStyle(PlainButtonStyle())
                 }
-                .buttonStyle(PlainButtonStyle())
+                .padding(.horizontal, 4)
                 
-                Button(action: {
-                    triggerPageTurn(action: "NEXT", source: "WATCH_TAP")
-                }) {
-                    VStack {
-                        Image(systemName: "chevron.right")
-                            .font(.title3)
-                        Text("下一页")
-                            .font(.system(size: 10, weight: .bold))
+                // AI 对话与实时转录 快捷控制卡片 (替代 Smart Ring)
+                HStack(spacing: 6) {
+                    Button(action: {
+                        WKInterfaceDevice.current().play(.notification)
+                        watchService.sendAIChatTrigger()
+                    }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 10))
+                            Text("AI对话")
+                                .font(.system(size: 10, weight: .bold))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .background(Color.purple.opacity(0.8))
+                        .foregroundColor(.white)
+                        .cornerRadius(6)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(10)
+                    .buttonStyle(PlainButtonStyle())
+                    
+                    Button(action: {
+                        WKInterfaceDevice.current().play(.click)
+                        watchService.sendTranscribeTrigger()
+                    }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "mic.fill")
+                                .font(.system(size: 10))
+                            Text("转录")
+                                .font(.system(size: 10, weight: .bold))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .background(Color.orange.opacity(0.8))
+                        .foregroundColor(.white)
+                        .cornerRadius(6)
+                    }
+                    .buttonStyle(PlainButtonStyle())
                 }
-                .buttonStyle(PlainButtonStyle())
+                
+                // 屏幕翻页按键
+                HStack(spacing: 6) {
+                    Button(action: {
+                        triggerPageTurn(action: "PREV", source: "WATCH_TAP")
+                    }) {
+                        VStack {
+                            Image(systemName: "chevron.left")
+                                .font(.title3)
+                            Text("上一页")
+                                .font(.system(size: 10))
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.gray.opacity(0.3))
+                        .cornerRadius(8)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    
+                    Button(action: {
+                        triggerPageTurn(action: "NEXT", source: "WATCH_TAP")
+                    }) {
+                        VStack {
+                            Image(systemName: "chevron.right")
+                                .font(.title3)
+                            Text("下一页")
+                                .font(.system(size: 10, weight: .bold))
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+                .frame(height: 55)
             }
-            .frame(height: 60)
+            .padding(4)
         }
-        .padding(4)
         .focusable(true)
         // 模式 1: 数字表冠旋转
         .digitalCrownRotation($crownValue)
@@ -111,10 +156,9 @@ struct WatchContentView: View {
             guard now.timeIntervalSince(lastFlickTimestamp) > 1.5 else { return }
             
             let rotRateX = motion.rotationRate.x
-            let rotRateY = motion.rotationRate.y
             let userAccelZ = motion.userAcceleration.z
             
-            // 甩手翻页波形特征比对 (快速向下/向上甩手反弹)
+            // 甩手翻页波形特征比对
             if rotRateX > 3.8 && userAccelZ > 1.2 {
                 lastFlickTimestamp = now
                 triggerPageTurn(action: "NEXT", source: "WATCH_WRIST_FLICK")

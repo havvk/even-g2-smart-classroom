@@ -49,7 +49,11 @@ class WatchSessionManager: NSObject, ObservableObject, WCSessionDelegate {
         WCSession.default.activate()
     }
     
-    /// 接收 Apple Watch 发来的翻页与表冠手势
+    var onDisplayToggleTriggered: ((Bool) -> Void)? // true: wake, false: sleep
+    var onAIChatTriggered: (() -> Void)?
+    var onTranscribeTriggered: (() -> Void)?
+    
+    /// 接收 Apple Watch 发来的翻页、显示控制与 AI 对话指令
     func session(_ session: WCSession, didReceiveMessage message: [String : Any]) {
         guard let type = message["type"] as? String, type == "PAGE_CONTROL" else { return }
         let action = message["action"] as? String ?? "NEXT"
@@ -57,7 +61,18 @@ class WatchSessionManager: NSObject, ObservableObject, WCSessionDelegate {
         
         DispatchQueue.main.async {
             self.lastWatchGesture = "\(source): \(action)"
-            self.onPageControlTriggered?(action, source)
+            
+            if action == "SLEEP_HUD" {
+                self.onDisplayToggleTriggered?(false)
+            } else if action == "WAKE_HUD" {
+                self.onDisplayToggleTriggered?(true)
+            } else if action == "TRIGGER_AI_CHAT" {
+                self.onAIChatTriggered?()
+            } else if action == "TOGGLE_TRANSCRIBE" {
+                self.onTranscribeTriggered?()
+            } else {
+                self.onPageControlTriggered?(action, source)
+            }
         }
     }
 }

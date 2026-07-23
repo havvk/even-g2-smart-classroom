@@ -189,6 +189,29 @@ struct ContentView: View {
     }
     
     private func setupCallbacks() {
+        // Apple Watch 显存休眠/唤醒回调
+        WatchSessionManager.shared.onDisplayToggleTriggered = { shouldWake in
+            if shouldWake {
+                bleManager.wakeHUD()
+            } else {
+                bleManager.sleepHUD()
+            }
+        }
+        
+        // Apple Watch 替代戒指唤醒 AI 对话与实时转录
+        WatchSessionManager.shared.onAIChatTriggered = {
+            print("Apple Watch 快捷触发 AI 对话问答")
+        }
+        
+        WatchSessionManager.shared.onTranscribeTriggered = {
+            speechEngine.isListening.toggle()
+            if speechEngine.isListening {
+                speechEngine.startListening()
+            } else {
+                speechEngine.stopListening()
+            }
+        }
+        
         // Apple Watch 捏手指 / 屏幕触控 / 数字表冠回调 -> 触发大屏翻页
         WatchSessionManager.shared.onPageControlTriggered = { action, source in
             webSocketClient.sendPageControl(

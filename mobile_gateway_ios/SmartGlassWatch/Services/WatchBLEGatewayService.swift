@@ -17,6 +17,21 @@ class WatchBLEGatewayService: NSObject, ObservableObject, WCSessionDelegate {
         }
     }
     
+    @Published var isHUDDisplayActive: Bool = true
+    
+    func sendDisplayToggle() {
+        isHUDDisplayActive.toggle()
+        sendPageControl(action: isHUDDisplayActive ? "WAKE_HUD" : "SLEEP_HUD", source: "WATCH_POWER_TOGGLE")
+    }
+    
+    func sendAIChatTrigger() {
+        sendPageControl(action: "TRIGGER_AI_CHAT", source: "WATCH_AI_BUTTON")
+    }
+    
+    func sendTranscribeTrigger() {
+        sendPageControl(action: "TOGGLE_TRANSCRIBE", source: "WATCH_TRANSCRIBE_BUTTON")
+    }
+    
     func sendPageControl(action: String, source: String = "WATCH_TAP") {
         guard WCSession.isSupported() else { return }
         let message: [String: Any] = [
