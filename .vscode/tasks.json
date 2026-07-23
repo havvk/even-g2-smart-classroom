@@ -2,33 +2,13 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "1. 编译 iOS 应用 (iPad Simulator)",
+      "label": "1. 编译并部署 iOS 应用到真实 iPad (l.y@live.cn的iPad)",
       "type": "shell",
-      "command": "xcodebuild -project mobile_gateway_ios/SmartGlassGateway.xcodeproj -scheme SmartGlassGateway -destination 'platform=iOS Simulator,name=iPad Air 11-inch (M4)' -derivedDataPath mobile_gateway_ios/build -configuration Debug build",
+      "command": "xcodebuild -project mobile_gateway_ios/SmartGlassGateway.xcodeproj -scheme SmartGlassGateway -destination 'platform=iOS,id=00008142-000A254E0106401C' -derivedDataPath mobile_gateway_ios/build -configuration Debug build",
       "group": {
         "kind": "build",
         "isDefault": true
       },
-      "problemMatcher": [],
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared"
-      }
-    },
-    {
-      "label": "2. 启动 iPad 模拟器",
-      "type": "shell",
-      "command": "open -a Simulator && xcrun simctl boot 'iPad Air 11-inch (M4)' || true",
-      "problemMatcher": []
-    },
-    {
-      "label": "3. 部署并运行 iOS 应用到模拟器",
-      "type": "shell",
-      "command": "xcrun simctl install booted mobile_gateway_ios/build/Build/Products/Debug-iphonesimulator/SmartGlassGateway.app && xcrun simctl launch booted edu.ncu.smartglass.SmartGlassGateway",
-      "dependsOn": [
-        "1. 编译 iOS 应用 (iPad Simulator)",
-        "2. 启动 iPad 模拟器"
-      ],
       "problemMatcher": [],
       "presentation": {
         "reveal": "always",
