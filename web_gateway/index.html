@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Even G2 智能眼镜 - 智慧课堂 iPad 网关</title>
+    <style>
+        :root {
+            --hud-green: #00ff66;
+            --hud-bg: #050b07;
+            --card-bg: #1c1c1e;
+            --accent-purple: #af52de;
+            --accent-blue: #0a84ff;
+        }
+
+        body {
+            margin: 0;
+            padding: 20px;
+            background-color: #000000;
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 760px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* 绿光 HUD 模拟显存视口 */
+        .hud-viewport {
+            background-color: var(--hud-bg);
+            border: 2px solid rgba(0, 255, 102, 0.4);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 0 25px rgba(0, 255, 102, 0.25);
+            font-family: monospace;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            transition: opacity 0.2s ease;
+        }
+
+        .hud-viewport.sleeping {
+            opacity: 0.15;
+            filter: grayscale(1);
+        }
+
+        .hud-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: var(--hud-green);
+            font-size: 16px;
+            font-weight: bold;
+            border-bottom: 1px dashed rgba(0, 255, 102, 0.3);
+            padding-bottom: 8px;
+        }
+
+        .hud-active-line {
+            color: #33ff88;
+            font-size: 20px;
+            font-weight: 800;
+            margin: 6px 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .hud-next-line {
+            color: rgba(0, 255, 102, 0.6);
+            font-size: 16px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .hud-footer {
+            text-align: center;
+            color: rgba(0, 255, 102, 0.5);
+            font-size: 13px;
+            margin-top: 6px;
+        }
+
+        /* 控制卡片通用样式 */
+        .card {
+            background-color: var(--card-bg);
+            border-radius: 16px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .status-badge {
+            font-size: 14px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .status-badge.online {
+            background-color: rgba(48, 209, 88, 0.2);
+            color: #30d158;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            background-color: #2c2c2e;
+            border: 1px solid #3a3a3c;
+            border-radius: 10px;
+            padding: 12px;
+            color: #fff;
+            font-size: 16px;
+            outline: none;
+        }
+
+        button {
+            border: none;
+            border-radius: 10px;
+            padding: 14px 20px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.1s ease, opacity 0.2s ease;
+        }
+
+        button:active {
+            transform: scale(0.97);
+        }
+
+        .btn-purple { background-color: var(--accent-purple); color: #fff; }
+        .btn-blue { background-color: var(--accent-blue); color: #fff; }
+        .btn-gray { background-color: #3a3a3c; color: #fff; }
+        .btn-green { background-color: #30d158; color: #000; }
+        .btn-red { background-color: #ff453a; color: #fff; }
+
+        /* 翻页大按键网格 */
+        .page-control-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        .btn-page {
+            height: 90px;
+            font-size: 22px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .shortcuts-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 10px;
+        }
+
+        .shortcuts-row button {
+            padding: 12px 8px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 绿光 HUD 模拟视口 -->
+        <div id="hudViewport" class="hud-viewport">
+            <div class="hud-header">
+                <span id="hudPageStr">[P01/03] 签到 42/45</span>
+                <span>👓 Even G2</span>
+            </div>
+            <div id="hudHighlight" class="hud-active-line">> 1. 声明式 Prompt 与结构化 Output 约束</div>
+            <div id="hudNext" class="hud-next-line">  2. Schema 校验失败时的重试机制</div>
+            <div class="hud-footer">‹ 上一页 | 下一页 › (手势/快捷键已就绪)</div>
+        </div>
+
+        <!-- 快捷控制中心 (包含显存休眠、AI 对话与转录) -->
+        <div class="card">
+            <div class="card-header">
+                <span>⚡ 硬件快捷控制 (替代 Smart Ring)</span>
+                <button id="btnSleepToggle" class="btn-green" onclick="toggleHUDPower()">👁️ 显存活跃</button>
+            </div>
+            <div class="shortcuts-row">
+                <button class="btn-purple" onclick="triggerAIChat()">🤖 AI 对话</button>
+                <button id="btnTranscribe" class="btn-blue" onclick="toggleASR()">🎤 语音跟随 (关)</button>
+                <button class="btn-gray" onclick="sendPageControl('NEXT', 'KEYWORD')">🗣️ 关键词翻页</button>
+            </div>
+        </div>
+
+        <!-- 大屏翻页控制区域 -->
+        <div class="card">
+            <div class="card-header">
+                <span>智慧课堂大屏控屏翻页</span>
+                <span id="wsStatusBadge" class="status-badge">离线</span>
+            </div>
+            <div class="input-group">
+                <input type="text" id="wsUrlInput" value="ws://192.168.1.100:8000/ws/session/sess_demo" placeholder="ws://服务器IP:8000/ws/session/ID">
+                <button id="btnConnect" class="btn-blue" onclick="toggleWebSocket()">连接服务端</button>
+            </div>
+            <div class="page-control-grid">
+                <button class="btn-gray btn-page" onclick="sendPageControl('PREV', 'IPAD_TOUCH')">
+                    <span>‹ 上一页</span>
+                    <span style="font-size:12px;opacity:0.6;">(PREV)</span>
+                </button>
+                <button class="btn-blue btn-page" onclick="sendPageControl('NEXT', 'IPAD_TOUCH')">
+                    <span>下一页 ›</span>
+                    <span style="font-size:12px;opacity:0.8;">(NEXT)</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 状态变量
+        let ws = null;
+        let isConnected = false;
+        let isHUDActive = true;
+        let isASRActive = false;
+        let currentPayload = null;
+        let recognition = null;
+        let formattedLines = [];
+        let activeLineIndex = 0;
+
+        // 初始化 WebSocket 连接
+        function toggleWebSocket() {
+            if (isConnected) {
+                if (ws) ws.close();
+                return;
+            }
+
+            const url = document.getElementById('wsUrlInput').value.trim();
+            if (!url) return alert('请输入有效的 WebSocket 地址');
+
+            try {
+                ws = new WebSocket(url);
+                ws.onopen = () => {
+                    isConnected = true;
+                    updateWSStatusUI(true);
+                };
+
+                ws.onmessage = (event) => {
+                    try {
+                        const payload = JSON.parse(event.data);
+                        if (payload.type === 'TELEPROMPTER_SYNC') {
+                            handleTeleprompterSync(payload);
+                        }
+                    } catch (e) {
+                        console.error(e);
+                    }
+                };
+
+                ws.onclose = () => {
+                    isConnected = false;
+                    updateWSStatusUI(false);
+                };
+
+                ws.onerror = (err) => {
+                    console.error(err);
+                    alert('WebSocket 连接失败，请检查服务器 IP 和端口是否正确。');
+                    updateWSStatusUI(false);
+                };
+            } catch (e) {
+                alert('连接构造失败: ' + e.message);
+            }
+        }
+
+        function updateWSStatusUI(online) {
+            const badge = document.getElementById('wsStatusBadge');
+            const btn = document.getElementById('btnConnect');
+            if (online) {
+                badge.innerText = '已在线';
+                badge.className = 'status-badge online';
+                btn.innerText = '断开服务端';
+                btn.className = 'btn-red';
+            } else {
+                badge.innerText = '离线';
+                badge.className = 'status-badge';
+                btn.innerText = '连接智慧课堂服务端';
+                btn.className = 'btn-blue';
+            }
+        }
+
+        // 处理服务端下发的 TELEPROMPTER_SYNC
+        function handleTeleprompterSync(payload) {
+            currentPayload = payload;
+            formattedLines = formatScriptToLines(payload.script_text || '');
+            activeLineIndex = 0;
+            renderHUDView();
+        }
+
+        // 格式化 18 字符/行切片算法
+        function formatScriptToLines(script) {
+            const rawSentences = script.replace(/[！？]/g, '。').split('。').filter(s => s.trim());
+            const lines = [];
+            for (let sentence of rawSentences) {
+                let current = '';
+                for (let char of sentence) {
+                    current += char;
+                    if (current.length >= 18) {
+                        lines.push(current);
+                        current = '';
+                    }
+                }
+                if (current) lines.push(current);
+            }
+            return lines;
+        }
+
+        // 渲染 HUD 视口
+        function renderHUDView() {
+            if (!currentPayload) return;
+            const pageStr = String(currentPayload.current_page).padStart(2, '0');
+            const totalStr = String(currentPayload.total_pages).padStart(2, '0');
+            const checkin = currentPayload.classroom_status ? `签到 ${currentPayload.classroom_status.checkin_count}/${currentPayload.classroom_status.total_count}` : '';
+            
+            document.getElementById('hudPageStr').innerText = `[P${pageStr}/${totalStr}] ${checkin}`;
+            
+            if (formattedLines.length === 0) {
+                document.getElementById('hudHighlight').innerText = '> 暂无逐字稿提示';
+                document.getElementById('hudNext').innerText = '  点击下方按键翻页';
+            } else {
+                const idx = Math.min(Math.max(0, activeLineIndex), formattedLines.length - 1);
+                document.getElementById('hudHighlight').innerText = '> ' + formattedLines[idx];
+                document.getElementById('hudNext').innerText = (idx + 1 < formattedLines.length) ? '  ' + formattedLines[idx + 1] : '  --- 本页终点 ---';
+            }
+        }
+
+        // 发送 PAGE_CONTROL 翻页指令
+        function sendPageControl(action, source) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                alert('请先连接智慧课堂服务端 WebSocket');
+                return;
+            }
+            const command = {
+                type: 'PAGE_CONTROL',
+                session_id: currentPayload ? currentPayload.session_id : 'sess_demo',
+                action: action,
+                trigger_source: source,
+                timestamp: Math.floor(Date.now() / 1000)
+            };
+            ws.send(JSON.stringify(command));
+        }
+
+        // 切换 HUD 显存休眠与激活
+        function toggleHUDPower() {
+            isHUDActive = !isHUDActive;
+            const viewport = document.getElementById('hudViewport');
+            const btn = document.getElementById('btnSleepToggle');
+            if (isHUDActive) {
+                viewport.classList.remove('sleeping');
+                btn.innerText = '👁️ 显存活跃';
+                btn.className = 'btn-green';
+            } else {
+                viewport.classList.add('sleeping');
+                btn.innerText = '🌙 显存休眠中';
+                btn.className = 'btn-gray';
+            }
+        }
+
+        // 快捷触发 AI 对话
+        function triggerAIChat() {
+            alert('🤖 已触发 AI 对话问答，请开始说话提问！');
+        }
+
+        // 开启 iPad 原生 Web Speech ASR 语音识别
+        function toggleASR() {
+            const btn = document.getElementById('btnTranscribe');
+            if (isASRActive) {
+                if (recognition) recognition.stop();
+                isASRActive = false;
+                btn.innerText = '🎤 语音跟随 (关)';
+                btn.className = 'btn-blue';
+            } else {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                if (!SpeechRecognition) {
+                    return alert('您的 iPad 浏览器暂不支持 Web Speech 语音识别');
+                }
+                recognition = new SpeechRecognition();
+                recognition.lang = 'zh-CN';
+                recognition.continuous = true;
+                recognition.interimResults = true;
+
+                recognition.onresult = (event) => {
+                    let transcript = '';
+                    for (let i = event.resultIndex; i < event.results.length; i++) {
+                        transcript += event.results[i][0].transcript;
+                    }
+                    processASRMatching(transcript);
+                };
+
+                recognition.onerror = (e) => console.error(e);
+                recognition.onend = () => { if (isASRActive) recognition.start(); };
+
+                recognition.start();
+                isASRActive = true;
+                btn.innerText = '🎙️ 语音跟随中...';
+                btn.className = 'btn-red';
+            }
+        }
+
+        // ASR 文本识别定位
+        function processASRMatching(transcript) {
+            if (!formattedLines.length) return;
+            const tail = transcript.slice(-10);
+            for (let i = 0; i < formattedLines.length; i++) {
+                if (formattedLines[i].includes(tail) || tail.includes(formattedLines[i].slice(0, 4))) {
+                    activeLineIndex = i;
+                    renderHUDView();
+                    break;
+                }
+            }
+        }
+    </script>
+</body>
+</html>
