@@ -12,8 +12,16 @@ class WebSocketClient: ObservableObject {
     var onTeleprompterSyncReceived: ((TeleprompterSyncPayload) -> Void)?
     
     func connect(urlString: String) {
-        guard let url = URL(string: urlString) else { return }
-        serverAddress = urlString
+        var cleanURLStr = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleanURLStr.hasPrefix("http://") {
+            cleanURLStr = cleanURLStr.replacingOccurrences(of: "http://", with: "ws://")
+        } else if cleanURLStr.hasPrefix("https://") {
+            cleanURLStr = cleanURLStr.replacingOccurrences(of: "https://", with: "wss://")
+        } else if !cleanURLStr.hasPrefix("ws://") && !cleanURLStr.hasPrefix("wss://") {
+            cleanURLStr = "ws://" + cleanURLStr
+        }
+        guard let url = URL(string: cleanURLStr) else { return }
+        serverAddress = cleanURLStr
         webSocketTask = urlSession.webSocketTask(with: url)
         webSocketTask?.resume()
         isConnected = true
