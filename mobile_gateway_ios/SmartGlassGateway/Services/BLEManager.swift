@@ -108,6 +108,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     
     @Published var isHUDDisplayActive: Bool = true {
         didSet {
+            guard isHUDDisplayActive != oldValue else { return }
             if isHUDDisplayActive {
                 wakeHUD()
             } else {
@@ -117,14 +118,10 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     }
     
     func sleepHUD() {
-        isHUDDisplayActive = false
-        // 发送息屏/清屏指令至 Even G2
         sendRawCommand(bytes: [0x00, 0xFF, 0x00, 0x00])
     }
     
     func wakeHUD() {
-        isHUDDisplayActive = true
-        // 瞬间激活唤醒显示指令
         sendRawCommand(bytes: [0x00, 0xFF, 0x01, 0x01])
     }
     
