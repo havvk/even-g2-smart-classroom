@@ -168,7 +168,9 @@ struct ContentView: View {
                             Button(action: {
                                 if webSocketClient.isConnected {
                                     webSocketClient.disconnect()
+                                    bleManager.resetTeleprompterSession()
                                 } else {
+                                    bleManager.resetTeleprompterSession()
                                     if let cleanURL = WebSocketClient.normalizeWebSocketURL(from: serverAddress) {
                                         self.serverAddress = cleanURL.absoluteString
                                         webSocketClient.connect(urlString: cleanURL.absoluteString)
@@ -370,10 +372,8 @@ struct ContentView: View {
                 isServerConnected: webSocketClient.isConnected
             )
             
-            // 防抖安全推屏: 仅当服务端下发了新的讲稿文本时，才自动推屏给眼镜
-            if payload.scriptText != bleManager.lastSentTeleprompterText {
-                self.triggerPushToGlasses()
-            }
+            // 无条件推屏: 只要收到服务端 Sync 报文，确保眼镜屏显 100% 刷新展示
+            self.triggerPushToGlasses()
         }
     }
     
@@ -453,8 +453,8 @@ struct TeleprompterWYSIWYGView: View {
             .background(Color(UIColor.secondarySystemBackground))
             .cornerRadius(10)
             
-            // 2. 9 行“所见即所得”高亮视窗
-            let result = G2ProtocolEncoder.formatTextToPages(teleprompterText, targetWidthChars: Int(targetWidthChars))
+            // 2. 10 行“所见即所得”高亮视窗
+            let result = G2ProtocolEncoder.formatTextToPages(teleprompterText, maxCharsPerLine: Int(targetWidthChars))
             let wrappedLines = result.wrappedLines
             
             VStack(alignment: .leading, spacing: 0) {

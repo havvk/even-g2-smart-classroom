@@ -49,11 +49,39 @@ class WebSocketClient: ObservableObject {
         webSocketTask?.resume()
         isConnected = true
         receiveMessage()
+        startPingTimer()
     }
     
     func disconnect() {
+        stopPingTimer()
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         isConnected = false
+    }
+    
+    private var pingTimer: Timer?
+    
+    private func startPingTimer() {
+        DispatchQueue.main.async { [weak self] in
+            self?.pingTimer?.invalidate()
+            self?.pingTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+                self?.sendPing()
+            }
+        }
+    }
+    
+    private func stopPingTimer() {
+        DispatchQueue.main.async { [weak self] in
+            self?.pingTimer?.invalidate()
+            self?.pingTimer = nil
+        }
+    }
+    
+    private func sendPing() {
+        webSocketTask?.sendPing { error in
+            if let error = error {
+                print("⚠️ WebSocket Ping 心跳感知异常: \(error)")
+            }
+        }
     }
     
     func sendPageControl(sessionId: String, action: String, source: String) {

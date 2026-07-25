@@ -52,26 +52,40 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     // 手势与翻页回调
     var onPageControlTriggered: ((String) -> Void)?
     
-    override init() {
-        super.init()
-        centralManager = CBCentralManager(delegate: self, queue: nil)
+    // G2 BLE 强类型有限状态机 (FSM)
+    enum G2ConnectionState: String {
+        case disconnected     = "未连接"
+        case scanning         = "正在扫描"
+        case connecting       = "物理连接中"
+        case gattDiscovering  = "GATT通道识别中"
+        case channelsReady    = "通道就绪 (Ready)"
+        case sessionActive    = "推屏会话中"
     }
+    
+    @Published var connectionState: G2ConnectionState = .disconnected
     
     private var isManualDisconnect = false
     private var hasHandshakeExecuted = false
     
+    override init() {
+        super.init()
+        centralManager = CBCentralManager(delegate: self, queue: .main)
+    }
+    
     func addLog(_ message: String) {
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
             self.bleLogHistory.append(message)
             if self.bleLogHistory.count > 100 {
                 self.bleLogHistory.removeFirst()
             }
+            self.onG2TelemetryLog?("Log", "", message)
         }
-        onG2TelemetryLog?("Log", "", message)
     }
     
     func clearLogs() {
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
             self.bleLogHistory.removeAll()
             self.g2RxMessages.removeAll()
             self.rxCount = 0
@@ -79,49 +93,67 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     }
     
     func startScanning() {
-        guard centralManager.state == .poweredOn else { return }
-        isManualDisconnect = false
-        hasHandshakeExecuted = false
-        isScanning = true
-        lastBLEStatusMessage = "正在扫描附近的 Even G2 眼镜..."
-        centralManager.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, let cm = self.centralManager else { return }
+            guard cm.state == .poweredOn else {
+                self.lastBLEStatusMessage = "⚠️ 蓝牙尚未开启，请在系统设置中启用蓝牙"
+                return
+            }
+            self.isManualDisconnect = false
+            self.hasHandshakeExecuted = false
+            self.isScanning = true
+            self.lastBLEStatusMessage = "正在扫描附近的 Even G2 眼镜..."
+            cm.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+        }
     }
     
     func stopScanning() {
-        isScanning = false
-        centralManager.stopScan()
+        DispatchQueue.main.async { [weak self] in
+            self?.isScanning = false
+            self?.centralManager.stopScan()
+        }
     }
     
     func disconnect() {
-        isManualDisconnect = true
-        hasHandshakeExecuted = false
-        if let peripheral = targetPeripheral {
-            centralManager.cancelPeripheralConnection(peripheral)
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.isManualDisconnect = true
+            self.hasHandshakeExecuted = false
+            if let peripheral = self.targetPeripheral {
+                self.centralManager.cancelPeripheralConnection(peripheral)
+            }
+            self.isConnected = false
+            self.connectedPeripheralName = nil
+            self.controlTxChar = nil
+            self.contentTxChar = nil
+            self.renderingTxChar = nil
+            self.teleprompterTxChar = nil
+            self.lastBLEStatusMessage = "已手动断开蓝牙"
         }
-        isConnected = false
-        connectedPeripheralName = nil
-        controlTxChar = nil
-        contentTxChar = nil
-        renderingTxChar = nil
-        teleprompterTxChar = nil
-        lastBLEStatusMessage = "已手动断开蓝牙"
     }
     
     // MARK: - CBCentralManagerDelegate
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        if central.state == .poweredOn {
-            if !isManualDisconnect {
-                startScanning()
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if central.state == .poweredOn {
+                if !self.isManualDisconnect {
+                    self.startScanning()
+                }
+            } else {
+                self.isConnected = false
+                self.isScanning = false
             }
-        } else {
-            isConnected = false
-            isScanning = false
         }
     }
     
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
         let name = peripheral.name ?? advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? ""
-        if name.contains("Even G2") || name.contains("Smart Ring") || name.contains("Even") {
+        guard name.contains("Even G2") || name.contains("Even") else { return }
+        
+        // 关键物理规则 (对齐 teleprompter.py 规范): 左耳 _L_ 为包含 MicroLED 显示引擎的 Master 设备，必须优先锁定 _L_
+        if name.contains("_L_") || !name.contains("_R_") {
+            addLog("🎯 优先锁定 G2 左耳主显示镜腿: \(name)")
             targetPeripheral = peripheral
             targetPeripheral?.delegate = self
             stopScanning()
@@ -130,26 +162,32 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     }
     
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        isConnected = true
-        hasHandshakeExecuted = false
-        connectedPeripheralName = peripheral.name ?? "Even G2 Smart Glass"
-        lastBLEStatusMessage = "🟢 蓝牙已连接设备: \(connectedPeripheralName ?? "")"
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.isConnected = true
+            self.hasHandshakeExecuted = false
+            self.connectedPeripheralName = peripheral.name ?? "Even G2 Smart Glass"
+            self.lastBLEStatusMessage = "🟢 蓝牙已连接设备: \(self.connectedPeripheralName ?? "")"
+        }
         peripheral.discoverServices(nil)
     }
     
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        isConnected = false
-        hasHandshakeExecuted = false
-        isTeleprompterSessionActive = false
-        connectedPeripheralName = nil
-        controlTxChar = nil
-        contentTxChar = nil
-        renderingTxChar = nil
-        teleprompterTxChar = nil
-        if !isManualDisconnect {
-            startScanning()
-        } else {
-            lastBLEStatusMessage = "已断开蓝牙，点击按钮可重新扫描"
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.isConnected = false
+            self.hasHandshakeExecuted = false
+            self.isTeleprompterSessionActive = false
+            self.connectedPeripheralName = nil
+            self.controlTxChar = nil
+            self.contentTxChar = nil
+            self.renderingTxChar = nil
+            self.teleprompterTxChar = nil
+            if !self.isManualDisconnect {
+                self.startScanning()
+            } else {
+                self.lastBLEStatusMessage = "已断开蓝牙，点击按钮可重新扫描"
+            }
         }
     }
     
@@ -217,6 +255,9 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             addLog("❌ Notify 通道订阅失败 (\(uuidStr)): \(error.localizedDescription)")
         } else {
             addLog("✅ Notify 通道订阅成功 (\(uuidStr)), isNotifying=\(characteristic.isNotifying)")
+            if uuidStr.contains("5402") || uuidStr.contains("0002") {
+                checkAndExecutePendingPush()
+            }
         }
     }
     
@@ -253,12 +294,40 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         sendRawData(packet, channel: .content)
     }
     
-    /// 推送全屏提词文本 (支持 10..28 汉字可变显示区域宽度调节)
-    func sendTeleprompterText(_ rawText: String, targetWidthChars: Int = 11) {
+    // 自动补发队列
+    private var pendingPushText: String?
+    private var pendingPushTargetWidth: Int?
+    
+    private func checkAndExecutePendingPush() {
+        DispatchQueue.main.async {
+            self.connectionState = .channelsReady
+        }
+        guard let text = pendingPushText else { return }
+        let width = pendingPushTargetWidth ?? 28
+        pendingPushText = nil
+        pendingPushTargetWidth = nil
+        addLog("🚀 [FSM: channelsReady] G2 5401 物理通道已绑定就绪，自动唤醒下发队列中的推屏请求！")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.sendTeleprompterText(text, targetWidthChars: width)
+        }
+    }
+    
+    /// 推送全屏提词文本 (28 汉字 x 10 行全屏模式)
+    func sendTeleprompterText(_ rawText: String, targetWidthChars: Int = 28) {
         guard isConnected else {
-            addLog("⚠️ 发送提词失败: 蓝牙未连接")
+            addLog("⏳ [FSM: disconnected] 蓝牙未连接，已自动启动 BLE 扫描并拉起连接，推屏请求已存入待处理队列...")
+            pendingPushText = rawText
+            pendingPushTargetWidth = targetWidthChars
+            startScanning()
             return
         }
+        guard contentTxChar != nil else {
+            addLog("⏳ [FSM: gattDiscovering] G2 5401 通道就绪中，推屏请求已放入待处理队列，绑定后自动下发...")
+            pendingPushText = rawText
+            pendingPushTargetWidth = targetWidthChars
+            return
+        }
+        
         lastSentTeleprompterText = rawText
         
         // 关键防护: 如果当前正在密集发包中，则忽略重复击打防抖
@@ -270,15 +339,15 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         cancelPendingTeleprompterTasks()
         isTeleprompterSessionActive = true
         
-        // 1. 动态排版格式化 (单页 9 行全屏，幅宽 10..28 汉字)
-        let linesPerPage = 9
-        let (pages, wrappedLines, _) = G2ProtocolEncoder.formatTextToPages(rawText, targetWidthChars: targetWidthChars, linesPerPage: linesPerPage)
+        // 1. 动态排版格式化 (单页 10 行全屏，幅宽 28 汉字)
+        let linesPerPage = 10
+        let (pages, wrappedLines, _) = G2ProtocolEncoder.formatTextToPages(rawText, maxCharsPerLine: targetWidthChars, linesPerPage: linesPerPage)
         self.currentWrappedLines = wrappedLines
         
         let totalLines = max(140, pages.count * linesPerPage)
         addLog("📜 准备推屏: 文本切分为 \(pages.count) 页 (\(linesPerPage)行/页, 幅宽\(targetWidthChars)字), 画布总行数 \(totalLines) 行")
         
-        var delay: Double = 0.0
+        var delay: Double = 0.2
         
         let scheduleTask = { (delayInSeconds: Double, action: @escaping () -> Void) in
             let item = DispatchWorkItem {
@@ -288,61 +357,85 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             DispatchQueue.main.asyncAfter(deadline: .now() + delayInSeconds, execute: item)
         }
         
-        // 1. 7-Packet Session Auth (5401)
+        // =========================================================================
+        // 阶段 1: 前置链路与 G2 OS 窗口准备动作 (Preparation Sequence)
+        // =========================================================================
+        
+        // 1. Session Auth (7 帧鉴权: 5401)
+        addLog("🔐 [步骤 1/5] 执行 Session 安全鉴权 (7 帧 Auth)")
         let authPackets = G2ProtocolEncoder.buildAuthPackets()
         for pkt in authPackets {
             let currentPkt = pkt
             scheduleTask(delay) {
-                self.sendRawData(currentPkt, channel: .content)
+                self.sendRawData(currentPkt, channel: .content, logDesc: "Auth 鉴权包")
             }
             delay += 0.1
         }
-        delay += 0.5 // Auth 完成后沉淀 0.5s (100% 对齐 Python)
+        delay += 0.5 // Auth 完成后沉淀 0.5s
         
         var seq: UInt8 = 0x08
         var msgId: Int = 0x14
         
-        // 2. Display Config (Service 0x0E-20 -> 5401)
-        let configPacket = G2ProtocolEncoder.buildDisplayConfig(seq: seq, msgId: msgId, targetWidthChars: targetWidthChars)
+        // 2. DisplayWake (0x04-20) - 物理点亮 MicroLED 显示引擎总线供电 (5401)
+        let wakePacket = G2ProtocolEncoder.buildWakePacket(seq: seq, msgId: msgId)
         seq &+= 1; msgId += 1
         scheduleTask(delay) {
-            self.sendRawData(configPacket, channel: .content)
+            self.addLog("🟢 [步骤 2/5] 点亮 MicroLED 屏幕物理电源 (DisplayWake)")
+            self.sendRawData(wakePacket, channel: .content, logDesc: "DisplayWake 电源唤醒")
         }
         delay += 0.3
         
-        // 3. Teleprompter Init (Service 0x06-20 type=1 -> 5401)
-        let initPacket = G2ProtocolEncoder.buildTeleprompterInit(seq: seq, msgId: msgId, totalLines: totalLines, manualMode: true, targetWidthChars: targetWidthChars)
+        // 3. DisplayConfig (0x0E-20) - 物理屏显校准 Hex 数据
+        let configPacket = G2ProtocolEncoder.buildDisplayConfig(seq: seq, msgId: msgId)
         seq &+= 1; msgId += 1
         scheduleTask(delay) {
-            self.sendRawData(initPacket, channel: .content)
+            self.addLog("⚙️ [步骤 3/5] 配置物理视口 (官方 DisplayConfig 106 字节校准包)")
+            self.sendRawData(configPacket, channel: .content, logDesc: "DisplayConfig 幅宽配置")
+        }
+        delay += 0.3
+        
+        // 4. TeleprompterInit (0x06-20 type=1) - 激活提词器前台 App (644px 全宽)
+        let initPacket = G2ProtocolEncoder.buildTeleprompterInit(seq: seq, msgId: msgId, totalLines: totalLines, manualMode: true)
+        seq &+= 1; msgId += 1
+        scheduleTask(delay) {
+            self.addLog("🎬 [步骤 4/4] 初始化提词器画布 (140 行显存, 自动拉起前台)")
+            self.sendRawData(initPacket, channel: .content, logDesc: "TeleprompterInit 画布初始化")
         }
         delay += 0.5
         
-        // 4. Send Content Pages 0-9 (5401)
+        // =========================================================================
+        // 阶段 2: 官方标准 14 页正文分批下发与 GPU VSYNC 物理刷屏
+        // =========================================================================
+        
+        // 6. Send Content Pages 0-9 (5401)
         let firstBatchCount = min(10, pages.count)
         for i in 0..<firstBatchCount {
             let pageMsg = msgId
             let pageText = pages[i]
             let packets = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: pageMsg, pageNum: i, text: pageText, lineCount: linesPerPage)
             msgId += 1
-            for pkt in packets {
-                let currentPkt = pkt
-                scheduleTask(delay) {
-                    self.sendRawData(currentPkt, channel: .content)
+            let pageIndex = i
+            let pagePackets = packets
+            scheduleTask(delay) {
+                let previewStr = pageText.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+                let displayPreview = previewStr.isEmpty ? "(空白填充页)" : "「\(previewStr.prefix(12))...」"
+                self.addLog("📝 推送正文第 \(pageIndex + 1)/\(pages.count) 页 (\(pagePackets.count)分包): \(displayPreview)")
+                for pkt in pagePackets {
+                    self.sendRawData(pkt, channel: .content, logDesc: "正文页 \(pageIndex + 1)")
                 }
-                delay += 0.1
             }
+            delay += 0.1
         }
         
-        // 5. Mid-Stream Marker 255 (Service 0x06-20 type=255 -> 5401)
+        // 7. Mid-Stream Marker 255 (5401)
         let markerPacket = G2ProtocolEncoder.buildMarker(seq: seq, msgId: msgId)
         seq &+= 1; msgId += 1
         scheduleTask(delay) {
-            self.sendRawData(markerPacket, channel: .content)
+            self.sendRawData(markerPacket, channel: .content, logDesc: "Mid-stream Marker 255")
         }
         delay += 0.1
         
-        // 6. Send Content Pages 10-11 (5401)
+        // 8. Send Content Pages 10-11 (5401)
         if pages.count > 10 {
             let secondBatchCount = min(12, pages.count)
             for i in 10..<secondBatchCount {
@@ -350,49 +443,53 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                 let pageText = pages[i]
                 let packets = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: pageMsg, pageNum: i, text: pageText, lineCount: linesPerPage)
                 msgId += 1
-                for pkt in packets {
-                    let currentPkt = pkt
-                    scheduleTask(delay) {
-                        self.sendRawData(currentPkt, channel: .content)
+                let pageIndex = i
+                let pagePackets = packets
+                scheduleTask(delay) {
+                    self.addLog("📝 推送正文第 \(pageIndex + 1)/\(pages.count) 页 (空白填充)")
+                    for pkt in pagePackets {
+                        self.sendRawData(pkt, channel: .content, logDesc: "正文页 \(pageIndex + 1)")
                     }
-                    delay += 0.1
                 }
+                delay += 0.1
             }
         }
         
-        // 7. GPU VSYNC Sync Trigger (Service 0x80-00 type=14 -> 5401) -- 100% 对齐 Python: 紧跟第 11 页下发！
+        // 9. GPU VSYNC Sync Trigger (Service 0x80-00 type=14 -> 5401) -- 触发物理刷屏！
         let syncPacket = G2ProtocolEncoder.buildSync(seq: seq, msgId: msgId)
         seq &+= 1; msgId += 1
         scheduleTask(delay) {
-            self.sendRawData(syncPacket, channel: .content)
+            self.addLog("✨ 触发 MicroLED 显示芯片 VSYNC 刷屏 (Buffer 翻转)")
+            self.sendRawData(syncPacket, channel: .content, logDesc: "GPU VSYNC 刷屏脉冲")
         }
         delay += 0.1
         
-        // 8. Send Remaining Content Pages 12-13 (5401)
+        // 10. Send Remaining Content Pages 12-13 (5401)
         if pages.count > 12 {
             for i in 12..<pages.count {
                 let pageMsg = msgId
                 let pageText = pages[i]
                 let packets = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: pageMsg, pageNum: i, text: pageText, lineCount: linesPerPage)
                 msgId += 1
-                for pkt in packets {
-                    let currentPkt = pkt
-                    scheduleTask(delay) {
-                        self.sendRawData(currentPkt, channel: .content)
+                let pageIndex = i
+                let pagePackets = packets
+                scheduleTask(delay) {
+                    for pkt in pagePackets {
+                        self.sendRawData(pkt, channel: .content, logDesc: "正文页 \(pageIndex + 1)")
                     }
-                    delay += 0.1
                 }
+                delay += 0.1
             }
         }
         
         scheduleTask(delay) {
             self.isTeleprompterSessionActive = false
-            self.addLog("✅ 100% 对齐 teleprompter.py 推屏完成 (\(pages.count)页)")
+            self.addLog("🎉 提词全套准备与 14 页正文推屏成功完成！")
         }
     }
     
-    /// 推送全屏满屏提词文本 (10行/页 28字/行 满屏全宽滚动模式)
-    func sendFullScreenTeleprompterText(_ text: String, targetWidthChars: Int = 28) {
+    /// 推送全屏满屏提词文本 (11字/行 契合 G2 光学屏宽自然折行模式)
+    func sendFullScreenTeleprompterText(_ text: String, targetWidthChars: Int = 11) {
         resetTeleprompterSession()
         sendTeleprompterText(text, targetWidthChars: targetWidthChars)
     }
@@ -557,7 +654,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
     }
 
-    private func sendRawData(_ data: Data, channel: G2Channel = .teleprompter) {
+    private func sendRawData(_ data: Data, channel: G2Channel = .teleprompter, logDesc: String? = nil) {
         guard isConnected else {
             addLog("⚠️ 发送失败: 蓝牙未连接")
             return
@@ -567,14 +664,12 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         let targetChar: CBCharacteristic?
         switch channel {
         case .control:
-            // 鉴权与 Session 时间同步必须由 5401 通道承载并获取固件 ACK
             targetChar = contentTxChar ?? controlTxChar
         case .content:
             targetChar = contentTxChar ?? controlTxChar
         case .rendering:
             targetChar = renderingTxChar ?? contentTxChar ?? controlTxChar
         case .teleprompter:
-            // 提词器全套 Command 必须 100% 由 5401 (contentTxChar) 主内容通道下发，禁止走 7401 哑通道
             targetChar = contentTxChar ?? controlTxChar
         }
         
@@ -587,10 +682,12 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         peripheral.writeValue(data, for: txChar, type: writeType)
         
         let hexString = data.map { String(format: "%02X", $0) }.joined(separator: " ")
-        let typeStr = writeType == .withResponse ? "withResponse" : "withoutResponse"
         let uuidSuffix = String(txChar.uuid.uuidString.suffix(4))
-        addLog("📤 Tx -> [\(uuidSuffix)] [\(typeStr)]: [\(hexString)]")
-        onG2TelemetryLog?("Tx", hexString, "下发 G2 帧 [\(uuidSuffix)] [\(typeStr)]")
+        
+        if let logDesc = logDesc {
+            addLog("📤 下发 \(logDesc) -> [\(uuidSuffix)]")
+        }
+        onG2TelemetryLog?("Tx", hexString, logDesc ?? "下发 G2 帧 [\(uuidSuffix)]")
     }
     
     func commitRender() {
