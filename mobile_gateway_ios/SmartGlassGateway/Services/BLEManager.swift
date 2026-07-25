@@ -542,13 +542,11 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     }
 
     private func getWriteType(for characteristic: CBCharacteristic) -> CBCharacteristicWriteType {
+        // 极速物理流控下发 (1:1 匹配 Python response=False 写模式)
         if characteristic.properties.contains(.writeWithoutResponse) {
             return .withoutResponse
-        } else if characteristic.properties.contains(.write) {
-            return .withResponse
-        } else {
-            return .withoutResponse
         }
+        return .withoutResponse
     }
 
     private func sendRawData(_ data: Data, channel: G2Channel = .teleprompter) {
