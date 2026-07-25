@@ -453,12 +453,13 @@ struct TeleprompterWYSIWYGView: View {
             .background(Color(UIColor.secondarySystemBackground))
             .cornerRadius(10)
             
-            // 2. 所见即所得高亮视窗
-            let (pages, _, _) = G2ProtocolEncoder.formatTextToPages(teleprompterText, targetWidthChars: Int(targetWidthChars))
+            // 2. 9 行“所见即所得”高亮视窗
+            let result = G2ProtocolEncoder.formatTextToPages(teleprompterText, targetWidthChars: Int(targetWidthChars))
+            let wrappedLines = result.wrappedLines
             
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
-                    Label("10 行高亮“所见即所得”提词视窗", systemImage: "eye.fill")
+                    Label("9 行高亮“所见即所得”提词视窗", systemImage: "eye.fill")
                         .font(.caption)
                         .fontWeight(.bold)
                         .foregroundColor(.secondary)
@@ -474,11 +475,11 @@ struct TeleprompterWYSIWYGView: View {
                 ScrollViewReader { proxy in
                     ScrollView(.vertical, showsIndicators: true) {
                         VStack(alignment: .leading, spacing: 4) {
-                            ForEach(0..<pages.count, id: \.self) { index in
+                            ForEach(0..<wrappedLines.count, id: \.self) { index in
                                 let isHighlighted = (index >= scrollLineOffset && index < scrollLineOffset + 9)
                                 
                                 HStack {
-                                    Text(pages[index])
+                                    Text(wrappedLines[index])
                                         .font(.system(size: 15, weight: isHighlighted ? .bold : .regular, design: .default))
                                         .foregroundColor(isHighlighted ? .primary : .secondary.opacity(0.4))
                                         .padding(.vertical, 2)
@@ -501,7 +502,7 @@ struct TeleprompterWYSIWYGView: View {
                         DragGesture()
                             .onChanged { value in
                                 let lineDelta = Int(-value.translation.height / 25)
-                                let newOffset = max(0, min(pages.count - 9, scrollLineOffset + lineDelta))
+                                let newOffset = max(0, min(wrappedLines.count - 9, scrollLineOffset + lineDelta))
                                 if newOffset != scrollLineOffset {
                                     scrollLineOffset = newOffset
                                     bleManager.sendScrollSync(pageLine: scrollLineOffset)
@@ -539,6 +540,6 @@ struct TeleprompterWYSIWYGView: View {
     }
     
     private func triggerPush() {
-        bleManager.sendTeleprompterText(teleprompterText)
+        bleManager.sendTeleprompterText(teleprompterText, targetWidthChars: Int(targetWidthChars))
     }
 }

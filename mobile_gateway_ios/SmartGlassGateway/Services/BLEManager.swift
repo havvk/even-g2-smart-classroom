@@ -78,28 +78,13 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
     }
     
-    // MARK: - 双耳双 BLE 外设管理结构
-    @Published var connectedPeripherals: [CBPeripheral] = []
-    private var controlTxChars: [ObjectIdentifier: CBCharacteristic] = [:]
-    private var contentTxChars: [ObjectIdentifier: CBCharacteristic] = [:]
-    private var renderingTxChars: [ObjectIdentifier: CBCharacteristic] = [:]
-    private var teleprompterTxChars: [ObjectIdentifier: CBCharacteristic] = [:]
-    
     func startScanning() {
         guard centralManager.state == .poweredOn else { return }
         isManualDisconnect = false
         hasHandshakeExecuted = false
         isScanning = true
-        lastBLEStatusMessage = "正在扫描附近的 Even G2 左右双耳眼镜..."
+        lastBLEStatusMessage = "正在扫描附近的 Even G2 眼镜..."
         centralManager.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
-        
-        // 扫描 5 秒确保搜齐左右双耳 (_L_ 和 _R_) 避免只连单侧
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
-            guard let self = self, self.isScanning else { return }
-            if !self.connectedPeripherals.isEmpty {
-                self.stopScanning()
-            }
-        }
     }
     
     func stopScanning() {
@@ -110,17 +95,15 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     func disconnect() {
         isManualDisconnect = true
         hasHandshakeExecuted = false
-        for peripheral in connectedPeripherals {
+        if let peripheral = targetPeripheral {
             centralManager.cancelPeripheralConnection(peripheral)
         }
-        connectedPeripherals.removeAll()
-        controlTxChars.removeAll()
-        contentTxChars.removeAll()
-        renderingTxChars.removeAll()
-        teleprompterTxChars.removeAll()
-        
         isConnected = false
         connectedPeripheralName = nil
+        controlTxChar = nil
+        contentTxChar = nil
+        renderingTxChar = nil
+        teleprompterTxChar = nil
         lastBLEStatusMessage = "已手动断开蓝牙"
     }
     
@@ -139,99 +122,93 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
         let name = peripheral.name ?? advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? ""
         if name.contains("Even G2") || name.contains("Smart Ring") || name.contains("Even") {
-            if !connectedPeripherals.contains(where: { $0.identifier == peripheral.identifier }) {
-                addLog("🔎 搜到 G2 外设: \(name) [RSSI: \(RSSI)]，发起双侧连入...")
-                peripheral.delegate = self
-                connectedPeripherals.append(peripheral)
-                centralManager.connect(peripheral, options: nil)
-            }
+            targetPeripheral = peripheral
+            targetPeripheral?.delegate = self
+            stopScanning()
+            centralManager.connect(peripheral, options: nil)
         }
     }
     
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         isConnected = true
         hasHandshakeExecuted = false
-        let name = peripheral.name ?? "Even G2 Smart Glass"
-        connectedPeripheralName = connectedPeripherals.map { $0.name ?? "G2" }.joined(separator: " + ")
-        lastBLEStatusMessage = "🟢 已连入双耳设备: \(connectedPeripheralName ?? "")"
-        addLog("🤝 成功连接物理镜腿外设: \(name)")
+        connectedPeripheralName = peripheral.name ?? "Even G2 Smart Glass"
+        lastBLEStatusMessage = "🟢 蓝牙已连接设备: \(connectedPeripheralName ?? "")"
         peripheral.discoverServices(nil)
     }
     
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        let id = peripheral.identifier
-        connectedPeripherals.removeAll(where: { $0.identifier == id })
-        let key = ObjectIdentifier(peripheral)
-        controlTxChars.removeValue(forKey: key)
-        contentTxChars.removeValue(forKey: key)
-        renderingTxChars.removeValue(forKey: key)
-        teleprompterTxChars.removeValue(forKey: key)
-        
-        if connectedPeripherals.isEmpty {
-            isConnected = false
-            hasHandshakeExecuted = false
-            isTeleprompterSessionActive = false
-            connectedPeripheralName = nil
-            if !isManualDisconnect {
-                startScanning()
-            } else {
-                lastBLEStatusMessage = "已断开蓝牙，点击按钮可重新扫描"
-            }
+        isConnected = false
+        hasHandshakeExecuted = false
+        isTeleprompterSessionActive = false
+        connectedPeripheralName = nil
+        controlTxChar = nil
+        contentTxChar = nil
+        renderingTxChar = nil
+        teleprompterTxChar = nil
+        if !isManualDisconnect {
+            startScanning()
         } else {
-            connectedPeripheralName = connectedPeripherals.map { $0.name ?? "G2" }.joined(separator: " + ")
-            lastBLEStatusMessage = "🟢 维护单侧/双侧通道: \(connectedPeripheralName ?? "")"
+            lastBLEStatusMessage = "已断开蓝牙，点击按钮可重新扫描"
         }
     }
     
     // MARK: - CBPeripheralDelegate
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         if let error = error {
-            addLog("❌ 发现服务异常 (\(peripheral.name ?? "")): \(error.localizedDescription)")
+            addLog("❌ 发现服务异常: \(error.localizedDescription)")
             return
         }
         guard let services = peripheral.services else { return }
         for service in services {
+            addLog("🔎 发现 GATT 服务: \(service.uuid.uuidString)")
             peripheral.discoverCharacteristics(nil, for: service)
         }
     }
     
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         if let error = error {
-            addLog("❌ 发现特征异常 (\(peripheral.name ?? "")): \(error.localizedDescription)")
+            addLog("❌ 发现特征异常: \(error.localizedDescription)")
             return
         }
         guard let characteristics = service.characteristics else { return }
-        let pKey = ObjectIdentifier(peripheral)
-        
         for characteristic in characteristics {
             let uuidStr = characteristic.uuid.uuidString.uppercased()
             let props = characteristic.properties
             
             let canNotify = props.contains(.notify) || props.contains(.indicate)
             let canWrite = props.contains(.write) || props.contains(.writeWithoutResponse)
+            addLog("🔍 特征值: \(uuidStr) [Notify/Ind:\(canNotify), Write:\(canWrite)]")
             
+            // 开启 Notify 接收通道
             if canNotify {
                 peripheral.setNotifyValue(true, for: characteristic)
-                addLog("🔔 已开启 Notify (\(peripheral.name ?? "")): \(uuidStr)")
+                addLog("🔔 已开启 Notify/Indicate 接收通道: \(uuidStr)")
             }
             
+            // 按 UUID 结尾绑定 G2 专属 Channel 特征通道 (排除 6E40 串口)
             if canWrite {
                 if uuidStr.contains("0001") {
-                    controlTxChars[pKey] = characteristic
-                    addLog("✍️ 绑定 [0001 控制通道] (\(peripheral.name ?? "")): \(uuidStr)")
+                    controlTxChar = characteristic
+                    addLog("✍️ 绑定 [0001 控制通道] 写特征: \(uuidStr)")
                 } else if uuidStr.contains("5401") {
-                    contentTxChars[pKey] = characteristic
-                    addLog("✍️ 绑定 [5401 内容通道] (\(peripheral.name ?? "")): \(uuidStr)")
+                    contentTxChar = characteristic
+                    addLog("✍️ 绑定 [5401 内容通道] 写特征: \(uuidStr)")
                 } else if uuidStr.contains("6401") {
-                    renderingTxChars[pKey] = characteristic
-                    addLog("✍️ 绑定 [6401 渲染通道] (\(peripheral.name ?? "")): \(uuidStr)")
+                    renderingTxChar = characteristic
+                    addLog("✍️ 绑定 [6401 渲染通道] 写特征: \(uuidStr)")
                 } else if uuidStr.contains("7401") {
-                    teleprompterTxChars[pKey] = characteristic
-                    addLog("✍️ 绑定 [7401 提词通道] (\(peripheral.name ?? "")): \(uuidStr)")
+                    teleprompterTxChar = characteristic
+                    addLog("✍️ 绑定 [7401 提词器通道] 写特征: \(uuidStr)")
                 }
             }
         }
-        addLog("✍️ 镜腿外设 [\(peripheral.name ?? "G2")] 写通道准备就绪")
+        
+        // 当获取到了任意有效 G2 写特征且尚未执行握手时，预留通道
+        let hasAnyTxChar = controlTxChar != nil || contentTxChar != nil || teleprompterTxChar != nil
+        if hasAnyTxChar {
+            addLog("✍️ 已成功识别并绑定 G2 物理写特征通道")
+        }
     }
     
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
@@ -243,53 +220,17 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
     }
     
-    // MARK: - 官方 FIFO 串行发包队列机制 (100% 对齐 Python 100ms 时间戳)
-    struct BLECommand {
-        let data: Data
-        let channel: G2Channel
-        let description: String
-        let delayAfter: Double
-        let stepBanner: String?
-        
-        init(data: Data, channel: G2Channel, description: String, delayAfter: Double = 0.1, stepBanner: String? = nil) {
-            self.data = data
-            self.channel = channel
-            self.description = description
-            self.delayAfter = delayAfter
-            self.stepBanner = stepBanner
-        }
-    }
+    // 独立握手已废弃，统一由 sendTeleprompterText 自包含串行下发 Auth 鉴权序列
     
-    private var commandQueue: [BLECommand] = []
-    private var isProcessingQueue: Bool = false
+    private var isTeleprompterSessionActive: Bool = false
+    private var teleprompterWorkItems: [DispatchWorkItem] = []
+    @Published var lastSentTeleprompterText: String = ""
     
-    func enqueueCommand(_ command: BLECommand) {
-        commandQueue.append(command)
-        processNextQueueCommand()
-    }
-    
-    /// 串行处理队列中的下一条指令（1:1 匹配 Python asyncio.sleep 阶段间隔）
-    private func processNextQueueCommand() {
-        guard !isProcessingQueue, !commandQueue.isEmpty else { return }
-        isProcessingQueue = true
-        
-        let command = commandQueue.removeFirst()
-        if let banner = command.stepBanner {
-            addLog(banner)
-        }
-        sendRawData(command.data, channel: command.channel)
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + command.delayAfter) { [weak self] in
-            self?.isProcessingQueue = false
-            self?.processNextQueueCommand()
-        }
-    }
-    
-    /// 撤销所有队列中未下发的物理报文
+    /// 撤销所有尚未执行的倒计时推屏发包任务
     private func cancelPendingTeleprompterTasks() {
-        commandQueue.removeAll()
-        isProcessingQueue = false
-        teleprompterWorkItems.forEach { $0.cancel() }
+        for item in teleprompterWorkItems {
+            item.cancel()
+        }
         teleprompterWorkItems.removeAll()
     }
     
@@ -300,10 +241,6 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         isTeleprompterSessionActive = false
     }
     
-    private var isTeleprompterSessionActive: Bool = false
-    private var teleprompterWorkItems: [DispatchWorkItem] = []
-    @Published var lastSentTeleprompterText: String = ""
-    
     /// 实时当前滚动的焦点行号回调 (用于 9 行所见即所得 View 高亮卡片)
     @Published var currentFocusPageLine: Int = 0
     @Published var currentWrappedLines: [String] = []
@@ -312,107 +249,116 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     func sendScrollSync(pageLine: Int) {
         guard isConnected else { return }
         self.currentFocusPageLine = pageLine
-        var seq: UInt8 = 0xFE
-        let packet = G2ProtocolEncoder.buildScrollSync(seq: seq, msgId: 0x99, pageLine: pageLine)
-        enqueueCommand(BLECommand(data: packet, channel: .content, description: "ScrollSync Line \(pageLine)"))
+        let packet = G2ProtocolEncoder.buildScrollSync(seq: 0x2A, msgId: 0x50, pageLine: pageLine)
+        sendRawData(packet, channel: .content)
     }
     
-    /// 完整推送提词文本到 G2 智能眼镜 (100% 官方串行队列流水线)
-    func sendTeleprompterText(_ text: String, force: Bool = false, targetWidthChars: Int = 28) {
-        let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanText.isEmpty else { return }
+    /// 推送全屏提词文本 (支持 10..28 汉字可变显示区域宽度调节)
+    func sendTeleprompterText(_ rawText: String, targetWidthChars: Int = 11) {
+        guard isConnected else {
+            addLog("⚠️ 发送提词失败: 蓝牙未连接")
+            return
+        }
+        lastSentTeleprompterText = rawText
         
-        // 防抖控制：同文本且未强推则忽略
-        if !force && cleanText == lastSentTeleprompterText && isTeleprompterSessionActive {
+        // 关键防护: 如果当前正在密集发包中，则忽略重复击打防抖
+        guard !isTeleprompterSessionActive else {
+            addLog("⚠️ 提词推屏任务进行中，自动忽略并发击打")
             return
         }
         
         cancelPendingTeleprompterTasks()
-        lastSentTeleprompterText = cleanText
         isTeleprompterSessionActive = true
         
-        // 自动断句并切分为 14 页 140 行全量画卷 (单页 9 行全屏)
+        // 1. 动态排版格式化 (单页 9 行全屏，幅宽 10..28 汉字)
         let linesPerPage = 9
-        let (pages, wrappedLines, _) = G2ProtocolEncoder.formatTextToPages(cleanText, targetWidthChars: targetWidthChars, linesPerPage: linesPerPage)
+        let (pages, wrappedLines, _) = G2ProtocolEncoder.formatTextToPages(rawText, targetWidthChars: targetWidthChars, linesPerPage: linesPerPage)
+        self.currentWrappedLines = wrappedLines
+        
         let totalLines = max(140, pages.count * linesPerPage)
-        
-        DispatchQueue.main.async {
-            self.currentWrappedLines = wrappedLines
-            self.currentFocusPageLine = 0
-        }
-        
         addLog("📜 准备推屏: 文本切分为 \(pages.count) 页 (\(linesPerPage)行/页, 幅宽\(targetWidthChars)字), 画布总行数 \(totalLines) 行")
         
-        // 1. Auth 序列 (7 帧: 压入串行队列至 5401 通道)
-        let authPackets = G2ProtocolEncoder.buildAuthPackets()
-        for (idx, pkt) in authPackets.enumerated() {
-            let isLast = (idx == authPackets.count - 1)
-            let delay = isLast ? 0.5 : 0.1
-            let banner = (idx == 0) ? "🚀 [步骤 1/11] Session 鉴权 (7 帧握手发包)" : nil
-            enqueueCommand(BLECommand(data: pkt, channel: .content, description: "1/11 Auth Handshake Packet \(idx+1)", delayAfter: delay, stepBanner: banner))
+        var delay: Double = 0.0
+        
+        let scheduleTask = { (delayInSeconds: Double, action: @escaping () -> Void) in
+            let item = DispatchWorkItem {
+                action()
+            }
+            self.teleprompterWorkItems.append(item)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delayInSeconds, execute: item)
         }
+        
+        // 1. Send auth sequence (7 packets: seq 0x01..0x07) (100% 独占自包含 Session 鉴权)
+        let authPackets = G2ProtocolEncoder.buildAuthPackets()
+        for packet in authPackets {
+            let authDelay = delay
+            let pkt = packet
+            scheduleTask(authDelay) {
+                self.sendRawData(pkt, channel: .control)
+            }
+            delay += 0.08
+        }
+        delay += 0.15 // Auth 完成后 0.15 秒沉淀等待
         
         var seq: UInt8 = 0x08
         var msgId: Int = 0x14
         
-        // 2. TeleprompterStart (0x06-20) - 强切 G2 Window Manager 视口至提词器前台 (5401)
+        // 1. Enter Teleprompter Foreground App Mode (seq=8, Service 0x06-20) - 强制指令 G2 Window Manager 切换前台 UI 到提词器 App
         let enterModePacket = G2ProtocolEncoder.buildEnterTeleprompterModePacket(seq: seq, msgId: msgId)
-        enqueueCommand(BLECommand(data: enterModePacket, channel: .content, description: "2/11 TeleprompterStart", delayAfter: 0.1, stepBanner: "🚀 [步骤 2/11] 激活前台容器 (TeleprompterStart 0x0620)"))
         seq &+= 1; msgId += 1
+        scheduleTask(delay) {
+            self.sendRawData(enterModePacket, channel: .teleprompter)
+        }
+        delay += 0.2
         
-        // 3. DisplayWake (0x04-20) - 物理点亮 MicroLED 电源 (5401)
+        // 2. Display Wake (seq=9, msg_id=20) - 物理点亮 G2 MicroLED 显示引擎总线供电
         let wakePacket = G2ProtocolEncoder.buildWakePacket(seq: seq, msgId: msgId)
-        enqueueCommand(BLECommand(data: wakePacket, channel: .content, description: "3/11 DisplayWake", delayAfter: 0.1, stepBanner: "🚀 [步骤 3/11] 点亮屏幕电源 (DisplayWake 0x0420)"))
         seq &+= 1; msgId += 1
+        scheduleTask(delay) {
+            self.sendRawData(wakePacket, channel: .teleprompter)
+        }
+        delay += 0.2
         
-        // 4. DisplayConfig (0x0E-20) - 配置 Region 2 幅宽 (5401)
+        // 2. Display Config (seq=9, msg_id=21) - 动态计算 Region 2 视口 32 位浮点宽度
         let configPacket = G2ProtocolEncoder.buildDisplayConfig(seq: seq, msgId: msgId, targetWidthChars: targetWidthChars)
-        enqueueCommand(BLECommand(data: configPacket, channel: .content, description: "4/11 DisplayConfig", delayAfter: 0.3, stepBanner: "🚀 [步骤 4/11] 配置视口 Layout (DisplayConfig 0x0E20)"))
         seq &+= 1; msgId += 1
+        scheduleTask(delay) {
+            self.sendRawData(configPacket, channel: .teleprompter)
+        }
+        delay += 0.3
         
-        // 5. TeleprompterInit (0x06-20) - 画布视口初始化 (5401)
+        // 3. Teleprompter Init (seq=10, msg_id=22) - 动态计算 10..28 汉字对应物理画布视口宽度 (TargetWidth * 23px)
         let initPacket = G2ProtocolEncoder.buildTeleprompterInit(seq: seq, msgId: msgId, totalLines: totalLines, manualMode: true, targetWidthChars: targetWidthChars)
-        enqueueCommand(BLECommand(data: initPacket, channel: .content, description: "5/11 TeleprompterInit", delayAfter: 0.5, stepBanner: "🚀 [步骤 5/11] 初始化 2665px 画布 VRAM (TeleprompterInit)"))
         seq &+= 1; msgId += 1
+        scheduleTask(delay) {
+            self.sendRawData(initPacket, channel: .teleprompter)
+        }
+        delay += 0.3
         
-        // 6. TeleprompterList (0x06-20) - 下发讲稿元数据 (5401)
+        // 4. Teleprompter List (seq=11, msg_id=23) - 下发官方 Type 2 讲稿元数据，在 G2 显存建立全量滚动画卷
         let listPacket = G2ProtocolEncoder.buildTeleprompterList(seq: seq, msgId: msgId)
-        enqueueCommand(BLECommand(data: listPacket, channel: .content, description: "6/11 TeleprompterList", delayAfter: 0.1, stepBanner: "🚀 [步骤 6/11] 下发讲稿列表元数据 (TeleprompterList)"))
         seq &+= 1; msgId += 1
+        scheduleTask(delay) {
+            self.sendRawData(listPacket, channel: .teleprompter)
+        }
+        delay += 0.4
         
-        // 7. 正文前 10 页 (0..9) 推屏 (5401)
-        let firstBatchCount = min(10, pages.count)
-        for i in 0..<firstBatchCount {
+        // 5. Send content pages 0..13 (发送补满的 14 页全量正文)
+        for i in 0..<pages.count {
             let pageMsg = msgId
             let pageText = pages[i]
             let packets = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: pageMsg, pageNum: i, text: pageText, lineCount: linesPerPage)
             msgId += 1
-            for (pIdx, pkt) in packets.enumerated() {
-                let banner = (i == 0 && pIdx == 0) ? "🚀 [步骤 7/11] 推送正文点阵 (Content Pages 0-9)" : nil
-                enqueueCommand(BLECommand(data: pkt, channel: .content, description: "7/11 Content Page \(i)", delayAfter: 0.1, stepBanner: banner))
-            }
-        }
-        
-        // 8. Type 255 Mid-Stream Marker 流控标记帧 (5401)
-        let markerPacket = G2ProtocolEncoder.buildMarker(seq: seq, msgId: msgId)
-        enqueueCommand(BLECommand(data: markerPacket, channel: .content, description: "8/11 Mid-Stream Marker", delayAfter: 0.1, stepBanner: "🚀 [步骤 8/11] 流控标记帧 (Mid-Stream Marker 255)"))
-        seq &+= 1; msgId += 1
-        
-        // 9. 剩余正文页推屏 (5401)
-        if pages.count > 10 {
-            for i in 10..<pages.count {
-                let pageMsg = msgId
-                let pageText = pages[i]
-                let packets = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: pageMsg, pageNum: i, text: pageText, lineCount: linesPerPage)
-                msgId += 1
-                for (pIdx, pkt) in packets.enumerated() {
-                    let banner = (i == 10 && pIdx == 0) ? "🚀 [步骤 9/11] 推送剩余正文点阵 (Content Pages 10+)" : nil
-                    enqueueCommand(BLECommand(data: pkt, channel: .content, description: "9/11 Content Page \(i)", delayAfter: 0.1, stepBanner: banner))
+            for pkt in packets {
+                let currentPkt = pkt
+                scheduleTask(delay) {
+                    self.sendRawData(currentPkt, channel: .teleprompter)
                 }
+                delay += 0.08
             }
         }
         
-        // 10. TeleprompterComplete (0x06-20) - Commit 物理渲染提交 (5401)
+        // 6. 下发官方 Type 4 (TeleprompterComplete) Commit 渲染提交指令 (强制下发 >=14 页与 >=140 行)
         let completeSeq = seq
         let completeMsg = msgId
         let totalPages = max(14, pages.count)
@@ -424,35 +370,42 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             totalPages: totalPages,
             totalLines: commitTotalLines
         )
-        enqueueCommand(BLECommand(data: completePacket, channel: .content, description: "10/11 TeleprompterComplete", delayAfter: 0.1, stepBanner: "🚀 [步骤 10/11] 提交物理渲染 (TeleprompterComplete)"))
         seq &+= 1; msgId += 1
+        scheduleTask(delay) {
+            self.sendRawData(completePacket, channel: .teleprompter)
+        }
+        delay += 0.15
         
-        // 11. ScrollSync & Sync Trigger (0x06-20 & 0x80-00) - 视口归位与 GPU VSYNC 物理刷屏
+        // 7. 下发官方 ScrollSync 渲染归位指令 (ProtoTeleprompterExt|sendTeleprompterScrollSyncEvent pageLine=0)，触发 GPU 将第0页绘制入显存视口！
         let syncSeq = seq
         let syncMsg = msgId
         let syncPacket = G2ProtocolEncoder.buildScrollSync(seq: syncSeq, msgId: syncMsg, pageLine: 0)
-        enqueueCommand(BLECommand(data: syncPacket, channel: .teleprompter, description: "11/11 ScrollSync", delayAfter: 0.1, stepBanner: "🚀 [步骤 11/11] 视口归位与 GPU VSYNC 物理刷屏 (ScrollSync & SyncMessage)"))
         seq &+= 1; msgId += 1
+        scheduleTask(delay) {
+            self.sendRawData(syncPacket, channel: .teleprompter)
+        }
+        delay += 0.1
         
-        let vsyncPacket = G2ProtocolEncoder.buildSync(seq: seq, msgId: msgId)
-        enqueueCommand(BLECommand(data: vsyncPacket, channel: .control, description: "11/11 VSYNC SyncTrigger", delayAfter: 0.1))
-        seq &+= 1; msgId += 1
-        
-        addLog("==================================================")
-        
-        // 10. GPU VSYNC Sync Trigger (Service 0x80-00 type=14 on 5401)
+        // 8. 下发 Step 10 官方 GPU VSYNC 物理刷屏同步脉冲 (Service 0x80-00 type=14 Sync Trigger)
         let gpuSyncSeq = seq
         let gpuSyncMsg = msgId
         let gpuSyncPacket = G2ProtocolEncoder.buildSync(seq: gpuSyncSeq, msgId: gpuSyncMsg)
-        enqueueCommand(BLECommand(data: gpuSyncPacket, channel: .control, description: "GPU VSYNC Sync Trigger"))
-        // 11. 完成推屏任务闭环标记
-        enqueueCommand(BLECommand(data: Data(), channel: .control, description: "Session Complete Marker"))
+        seq &+= 1; msgId += 1
+        scheduleTask(delay) {
+            self.sendRawData(gpuSyncPacket, channel: .control)
+        }
+        delay += 0.1
+        
+        scheduleTask(delay) {
+            self.isTeleprompterSessionActive = false
+            self.addLog("✅ 100% 官方标准推屏发包完成 (\(pages.count)页)")
+        }
     }
     
     /// 推送全屏满屏提词文本 (10行/页 28字/行 满屏全宽滚动模式)
-    func sendFullScreenTeleprompterText(_ text: String) {
+    func sendFullScreenTeleprompterText(_ text: String, targetWidthChars: Int = 28) {
         resetTeleprompterSession()
-        sendTeleprompterText(text, force: true)
+        sendTeleprompterText(text, targetWidthChars: targetWidthChars)
     }
     
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
@@ -616,42 +569,38 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     }
 
     private func sendRawData(_ data: Data, channel: G2Channel = .teleprompter) {
-        guard isConnected, !connectedPeripherals.isEmpty else {
-            addLog("⚠️ 发送失败: 蓝牙双侧外设均未连接")
+        guard isConnected else {
+            addLog("⚠️ 发送失败: 蓝牙未连接")
             return
         }
+        guard let peripheral = targetPeripheral else { return }
+        
+        let targetChar: CBCharacteristic?
+        switch channel {
+        case .control:
+            // 鉴权与 Session 时间同步必须由 5401 通道承载并获取固件 ACK
+            targetChar = contentTxChar ?? controlTxChar
+        case .content:
+            targetChar = contentTxChar ?? teleprompterTxChar ?? controlTxChar
+        case .rendering:
+            targetChar = renderingTxChar ?? teleprompterTxChar ?? contentTxChar
+        case .teleprompter:
+            targetChar = teleprompterTxChar ?? contentTxChar ?? controlTxChar
+        }
+        
+        guard let txChar = targetChar else {
+            addLog("⚠️ 发送失败: 无法找到通道 [\(channel)] 对应的 TX 特征值")
+            return
+        }
+        
+        let writeType = getWriteType(for: txChar)
+        peripheral.writeValue(data, for: txChar, type: writeType)
         
         let hexString = data.map { String(format: "%02X", $0) }.joined(separator: " ")
-        var sentCount = 0
-        
-        for peripheral in connectedPeripherals {
-            let pKey = ObjectIdentifier(peripheral)
-            let targetChar: CBCharacteristic?
-            switch channel {
-            case .control:
-                targetChar = contentTxChars[pKey] ?? controlTxChars[pKey]
-            case .content:
-                targetChar = contentTxChars[pKey] ?? teleprompterTxChars[pKey] ?? controlTxChars[pKey]
-            case .rendering:
-                targetChar = renderingTxChars[pKey] ?? teleprompterTxChars[pKey] ?? contentTxChars[pKey]
-            case .teleprompter:
-                targetChar = contentTxChars[pKey] ?? teleprompterTxChars[pKey] ?? controlTxChars[pKey]
-            }
-            
-            if let txChar = targetChar {
-                let writeType = getWriteType(for: txChar)
-                peripheral.writeValue(data, for: txChar, type: writeType)
-                sentCount += 1
-            }
-        }
-        
-        guard sentCount > 0 else {
-            addLog("⚠️ 发送失败: 无法在连入通道中获取目标物理 TX 特征值")
-            return
-        }
-        
-        addLog("📤 Tx (\(sentCount)耳) -> [\(channel)]: [\(hexString)]")
-        onG2TelemetryLog?("Tx", hexString, "下发 G2 帧 (\(sentCount)耳) [\(channel)]")
+        let typeStr = writeType == .withResponse ? "withResponse" : "withoutResponse"
+        let uuidSuffix = String(txChar.uuid.uuidString.suffix(4))
+        addLog("📤 Tx -> [\(uuidSuffix)] [\(typeStr)]: [\(hexString)]")
+        onG2TelemetryLog?("Tx", hexString, "下发 G2 帧 [\(uuidSuffix)] [\(typeStr)]")
     }
     
     func commitRender() {
