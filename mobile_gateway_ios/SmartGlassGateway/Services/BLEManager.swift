@@ -267,8 +267,8 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         let command = commandQueue.removeFirst()
         sendRawData(command.data, channel: command.channel)
         
-        // 物理 15ms 连接间隔安全锁：确保底层 BLE 芯片缓冲完毕后再放行下一包
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
+        // 双物理外设 40ms 平稳连接间隔锁：确保 iOS 蓝牙栈同时向左右双耳完成数据交替
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) { [weak self] in
             self?.isProcessingQueue = false
             self?.processNextQueueCommand()
         }
@@ -303,7 +303,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         self.currentFocusPageLine = pageLine
         var seq: UInt8 = 0xFE
         let packet = G2ProtocolEncoder.buildScrollSync(seq: seq, msgId: 0x99, pageLine: pageLine)
-        enqueueCommand(BLECommand(data: packet, channel: .teleprompter, description: "ScrollSync Line \(pageLine)"))
+        enqueueCommand(BLECommand(data: packet, channel: .content, description: "ScrollSync Line \(pageLine)"))
     }
     
     /// 完整推送提词文本到 G2 智能眼镜 (100% 官方串行队列流水线)
@@ -335,49 +335,68 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         // 1. Auth 序列 (7 帧: 压入串行队列至 5401 通道)
         let authPackets = G2ProtocolEncoder.buildAuthPackets()
         for (idx, pkt) in authPackets.enumerated() {
-            enqueueCommand(BLECommand(data: pkt, channel: .control, description: "Auth Handshake Packet \(idx+1)"))
+            enqueueCommand(BLECommand(data: pkt, channel: .content, description: "Auth Handshake Packet \(idx+1)"))
         }
         
         var seq: UInt8 = 0x08
         var msgId: Int = 0x14
         
-        // 2. TeleprompterStart (0x06-20) - 强切 G2 Window Manager 视口至提词器前台
+        // 2. TeleprompterStart (0x06-20) - 强切 G2 Window Manager 视口至提词器前台 (5401)
         let enterModePacket = G2ProtocolEncoder.buildEnterTeleprompterModePacket(seq: seq, msgId: msgId)
-        enqueueCommand(BLECommand(data: enterModePacket, channel: .teleprompter, description: "TeleprompterStart"))
+        enqueueCommand(BLECommand(data: enterModePacket, channel: .content, description: "TeleprompterStart"))
         seq &+= 1; msgId += 1
         
-        // 3. DisplayWake (0x04-20) - 物理点亮 MicroLED 电源
+        // 3. DisplayWake (0x04-20) - 物理点亮 MicroLED 电源 (5401)
         let wakePacket = G2ProtocolEncoder.buildWakePacket(seq: seq, msgId: msgId)
-        enqueueCommand(BLECommand(data: wakePacket, channel: .teleprompter, description: "DisplayWake"))
+        enqueueCommand(BLECommand(data: wakePacket, channel: .content, description: "DisplayWake"))
         seq &+= 1; msgId += 1
         
-        // 4. DisplayConfig (0x0E-20) - 配置 Region 2 幅宽
+        // 4. DisplayConfig (0x0E-20) - 配置 Region 2 幅宽 (5401)
         let configPacket = G2ProtocolEncoder.buildDisplayConfig(seq: seq, msgId: msgId, targetWidthChars: targetWidthChars)
-        enqueueCommand(BLECommand(data: configPacket, channel: .teleprompter, description: "DisplayConfig"))
+        enqueueCommand(BLECommand(data: configPacket, channel: .content, description: "DisplayConfig"))
         seq &+= 1; msgId += 1
         
-        // 5. TeleprompterInit (0x06-20) - 画布视口初始化
+        // 5. TeleprompterInit (0x06-20) - 画布视口初始化 (5401)
         let initPacket = G2ProtocolEncoder.buildTeleprompterInit(seq: seq, msgId: msgId, totalLines: totalLines, manualMode: true, targetWidthChars: targetWidthChars)
-        enqueueCommand(BLECommand(data: initPacket, channel: .teleprompter, description: "TeleprompterInit"))
+        enqueueCommand(BLECommand(data: initPacket, channel: .content, description: "TeleprompterInit"))
         seq &+= 1; msgId += 1
         
-        // 6. TeleprompterList (0x06-20) - 下发讲稿元数据
+        // 6. TeleprompterList (0x06-20) - 下发讲稿元数据 (5401)
         let listPacket = G2ProtocolEncoder.buildTeleprompterList(seq: seq, msgId: msgId)
-        enqueueCommand(BLECommand(data: listPacket, channel: .teleprompter, description: "TeleprompterList"))
+        enqueueCommand(BLECommand(data: listPacket, channel: .content, description: "TeleprompterList"))
         seq &+= 1; msgId += 1
         
-        // 7. 正文 14 页全量推屏
-        for i in 0..<pages.count {
+        // 7. 正文前 10 页 (0..9) 推屏 (5401)
+        let firstBatchCount = min(10, pages.count)
+        for i in 0..<firstBatchCount {
             let pageMsg = msgId
             let pageText = pages[i]
             let packets = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: pageMsg, pageNum: i, text: pageText, lineCount: linesPerPage)
             msgId += 1
             for pkt in packets {
-                enqueueCommand(BLECommand(data: pkt, channel: .teleprompter, description: "Content Page \(i)"))
+                enqueueCommand(BLECommand(data: pkt, channel: .content, description: "Content Page \(i)"))
             }
         }
         
-        // 8. TeleprompterComplete (0x06-20) - Commit 物理渲染提交
+        // 8. Type 255 Mid-Stream Marker 流控标记帧 (5401)
+        let markerPacket = G2ProtocolEncoder.buildMarker(seq: seq, msgId: msgId)
+        enqueueCommand(BLECommand(data: markerPacket, channel: .content, description: "Mid-Stream Marker"))
+        seq &+= 1; msgId += 1
+        
+        // 9. 剩余正文页推屏 (5401)
+        if pages.count > 10 {
+            for i in 10..<pages.count {
+                let pageMsg = msgId
+                let pageText = pages[i]
+                let packets = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: pageMsg, pageNum: i, text: pageText, lineCount: linesPerPage)
+                msgId += 1
+                for pkt in packets {
+                    enqueueCommand(BLECommand(data: pkt, channel: .content, description: "Content Page \(i)"))
+                }
+            }
+        }
+        
+        // 10. TeleprompterComplete (0x06-20) - Commit 物理渲染提交 (5401)
         let completeSeq = seq
         let completeMsg = msgId
         let totalPages = max(14, pages.count)
@@ -389,10 +408,10 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             totalPages: totalPages,
             totalLines: commitTotalLines
         )
-        enqueueCommand(BLECommand(data: completePacket, channel: .teleprompter, description: "TeleprompterComplete"))
+        enqueueCommand(BLECommand(data: completePacket, channel: .content, description: "TeleprompterComplete"))
         seq &+= 1; msgId += 1
         
-        // 9. ScrollSync (0x06-20) - 视口归位
+        // 11. ScrollSync (0x06-20) - 视口归位 (5401)
         let syncSeq = seq
         let syncMsg = msgId
         let syncPacket = G2ProtocolEncoder.buildScrollSync(seq: syncSeq, msgId: syncMsg, pageLine: 0)
