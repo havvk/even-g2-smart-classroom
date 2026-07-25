@@ -561,10 +561,19 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         let targetChar: CBCharacteristic? = contentTxChar ?? controlTxChar ?? teleprompterTxChar ?? renderingTxChar
         
         if let txChar = targetChar {
-            let writeType = getWriteType(for: txChar)
             for peripheral in connectedPeripherals {
+                let maxWithoutResp = peripheral.maximumWriteValueLength(for: .withoutResponse)
+                let maxWithResp = peripheral.maximumWriteValueLength(for: .withResponse)
+                
+                // 防截断保护：如果数据帧长度（如 162 字节的 Page 0 正文帧）超过无响应 MTU 上限，自动升阶至 .withResponse 确保 CRC 与 UTF8 完整
+                let writeType: CBCharacteristicWriteType = (data.count <= maxWithoutResp) ? .withoutResponse : .withResponse
+                
                 peripheral.writeValue(data, for: txChar, type: writeType)
                 sentCount += 1
+                
+                if data.count > maxWithoutResp {
+                    addLog("⚠️ 物理帧长度 (\(data.count)B) 超过 WithoutResponse MTU (\(maxWithoutResp)B)，已自动升阶为 WithResponse 完整下发")
+                }
             }
         }
         
