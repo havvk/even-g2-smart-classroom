@@ -454,7 +454,7 @@ struct TeleprompterWYSIWYGView: View {
             .cornerRadius(10)
             
             // 2. 所见即所得高亮视窗
-            let (pages, _) = G2ProtocolEncoder.formatTextToPages(teleprompterText, charsPerLine: Int(targetWidthChars))
+            let (pages, _, _) = G2ProtocolEncoder.formatTextToPages(teleprompterText, targetWidthChars: Int(targetWidthChars))
             
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
