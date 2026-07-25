@@ -354,7 +354,7 @@ class G2ProtocolEncoder {
             pages.append(emptyPage)
         }
         
-        let totalLines = rawLines.count
+        let totalLines = max(140, pages.count * linesPerPage)
         return (pages, totalLines)
     }
 }
