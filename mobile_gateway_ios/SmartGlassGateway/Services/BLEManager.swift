@@ -220,17 +220,42 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
     }
     
-    // 独立握手已废弃，统一由 sendTeleprompterText 自包含串行下发 Auth 鉴权序列
+    // MARK: - 官方 FIFO 串行发包队列机制 (Official FIFO Command Queue)
+    struct BLECommand {
+        let data: Data
+        let channel: G2Channel
+        let description: String
+    }
     
-    private var isTeleprompterSessionActive: Bool = false
-    private var teleprompterWorkItems: [DispatchWorkItem] = []
-    @Published var lastSentTeleprompterText: String = ""
+    private var commandQueue: [BLECommand] = []
+    private var isProcessingQueue: Bool = false
     
-    /// 撤销所有尚未执行的倒计时推屏发包任务
-    private func cancelPendingTeleprompterTasks() {
-        for item in teleprompterWorkItems {
-            item.cancel()
+    /// 将待下发的物理报文压入 FIFO 串行队列
+    private func enqueueCommand(_ command: BLECommand) {
+        commandQueue.append(command)
+        processNextQueueCommand()
+    }
+    
+    /// 串行处理队列中的下一条指令（由 didWriteValueFor 回调或间隔锁安全出列）
+    private func processNextQueueCommand() {
+        guard !isProcessingQueue, !commandQueue.isEmpty else { return }
+        isProcessingQueue = true
+        
+        let command = commandQueue.removeFirst()
+        sendRawData(command.data, channel: command.channel)
+        
+        // 物理 15ms 连接间隔安全锁：确保底层 BLE 芯片缓冲完毕后再放行下一包
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
+            self?.isProcessingQueue = false
+            self?.processNextQueueCommand()
         }
+    }
+    
+    /// 撤销所有队列中未下发的物理报文
+    private func cancelPendingTeleprompterTasks() {
+        commandQueue.removeAll()
+        isProcessingQueue = false
+        teleprompterWorkItems.forEach { $0.cancel() }
         teleprompterWorkItems.removeAll()
     }
     
@@ -241,6 +266,10 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         isTeleprompterSessionActive = false
     }
     
+    private var isTeleprompterSessionActive: Bool = false
+    private var teleprompterWorkItems: [DispatchWorkItem] = []
+    @Published var lastSentTeleprompterText: String = ""
+    
     /// 实时当前滚动的焦点行号回调 (用于 9 行所见即所得 View 高亮卡片)
     @Published var currentFocusPageLine: Int = 0
     @Published var currentWrappedLines: [String] = []
@@ -249,116 +278,83 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     func sendScrollSync(pageLine: Int) {
         guard isConnected else { return }
         self.currentFocusPageLine = pageLine
-        let packet = G2ProtocolEncoder.buildScrollSync(seq: 0x2A, msgId: 0x50, pageLine: pageLine)
-        sendRawData(packet, channel: .content)
+        var seq: UInt8 = 0xFE
+        let packet = G2ProtocolEncoder.buildScrollSync(seq: seq, msgId: 0x99, pageLine: pageLine)
+        enqueueCommand(BLECommand(data: packet, channel: .teleprompter, description: "ScrollSync Line \(pageLine)"))
     }
     
-    /// 推送全屏提词文本 (支持 10..28 汉字可变显示区域宽度调节)
-    func sendTeleprompterText(_ rawText: String, targetWidthChars: Int = 11) {
-        guard isConnected else {
-            addLog("⚠️ 发送提词失败: 蓝牙未连接")
-            return
-        }
-        lastSentTeleprompterText = rawText
+    /// 完整推送提词文本到 G2 智能眼镜 (100% 官方串行队列流水线)
+    func sendTeleprompterText(_ text: String, force: Bool = false, targetWidthChars: Int = 28) {
+        let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanText.isEmpty else { return }
         
-        // 关键防护: 如果当前正在密集发包中，则忽略重复击打防抖
-        guard !isTeleprompterSessionActive else {
-            addLog("⚠️ 提词推屏任务进行中，自动忽略并发击打")
+        // 防抖控制：同文本且未强推则忽略
+        if !force && cleanText == lastSentTeleprompterText && isTeleprompterSessionActive {
             return
         }
         
         cancelPendingTeleprompterTasks()
+        lastSentTeleprompterText = cleanText
         isTeleprompterSessionActive = true
         
-        // 1. 动态排版格式化 (单页 9 行全屏，幅宽 10..28 汉字)
+        // 自动断句并切分为 14 页 140 行全量画卷 (单页 9 行全屏)
         let linesPerPage = 9
-        let (pages, wrappedLines, _) = G2ProtocolEncoder.formatTextToPages(rawText, targetWidthChars: targetWidthChars, linesPerPage: linesPerPage)
-        self.currentWrappedLines = wrappedLines
-        
+        let (pages, wrappedLines, _) = G2ProtocolEncoder.formatTextToPages(cleanText, targetWidthChars: targetWidthChars, linesPerPage: linesPerPage)
         let totalLines = max(140, pages.count * linesPerPage)
+        
+        DispatchQueue.main.async {
+            self.currentWrappedLines = wrappedLines
+            self.currentFocusPageLine = 0
+        }
+        
         addLog("📜 准备推屏: 文本切分为 \(pages.count) 页 (\(linesPerPage)行/页, 幅宽\(targetWidthChars)字), 画布总行数 \(totalLines) 行")
         
-        var delay: Double = 0.0
-        
-        let scheduleTask = { (delayInSeconds: Double, action: @escaping () -> Void) in
-            let item = DispatchWorkItem {
-                action()
-            }
-            self.teleprompterWorkItems.append(item)
-            DispatchQueue.main.asyncAfter(deadline: .now() + delayInSeconds, execute: item)
-        }
-        
-        // 1. Send auth sequence (7 packets: seq 0x01..0x07) (100% 独占自包含 Session 鉴权)
+        // 1. Auth 序列 (7 帧: 压入串行队列至 5401 通道)
         let authPackets = G2ProtocolEncoder.buildAuthPackets()
-        for packet in authPackets {
-            let authDelay = delay
-            let pkt = packet
-            scheduleTask(authDelay) {
-                self.sendRawData(pkt, channel: .control)
-            }
-            delay += 0.08
+        for (idx, pkt) in authPackets.enumerated() {
+            enqueueCommand(BLECommand(data: pkt, channel: .control, description: "Auth Handshake Packet \(idx+1)"))
         }
-        delay += 0.15 // Auth 完成后 0.15 秒沉淀等待
         
         var seq: UInt8 = 0x08
         var msgId: Int = 0x14
         
-        // 1. Enter Teleprompter Foreground App Mode (seq=8, Service 0x06-20) - 强制指令 G2 Window Manager 切换前台 UI 到提词器 App
+        // 2. TeleprompterStart (0x06-20) - 强切 G2 Window Manager 视口至提词器前台
         let enterModePacket = G2ProtocolEncoder.buildEnterTeleprompterModePacket(seq: seq, msgId: msgId)
+        enqueueCommand(BLECommand(data: enterModePacket, channel: .teleprompter, description: "TeleprompterStart"))
         seq &+= 1; msgId += 1
-        scheduleTask(delay) {
-            self.sendRawData(enterModePacket, channel: .teleprompter)
-        }
-        delay += 0.2
         
-        // 2. Display Wake (seq=9, msg_id=20) - 物理点亮 G2 MicroLED 显示引擎总线供电
+        // 3. DisplayWake (0x04-20) - 物理点亮 MicroLED 电源
         let wakePacket = G2ProtocolEncoder.buildWakePacket(seq: seq, msgId: msgId)
+        enqueueCommand(BLECommand(data: wakePacket, channel: .teleprompter, description: "DisplayWake"))
         seq &+= 1; msgId += 1
-        scheduleTask(delay) {
-            self.sendRawData(wakePacket, channel: .teleprompter)
-        }
-        delay += 0.2
         
-        // 2. Display Config (seq=9, msg_id=21) - 动态计算 Region 2 视口 32 位浮点宽度
+        // 4. DisplayConfig (0x0E-20) - 配置 Region 2 幅宽
         let configPacket = G2ProtocolEncoder.buildDisplayConfig(seq: seq, msgId: msgId, targetWidthChars: targetWidthChars)
+        enqueueCommand(BLECommand(data: configPacket, channel: .teleprompter, description: "DisplayConfig"))
         seq &+= 1; msgId += 1
-        scheduleTask(delay) {
-            self.sendRawData(configPacket, channel: .teleprompter)
-        }
-        delay += 0.3
         
-        // 3. Teleprompter Init (seq=10, msg_id=22) - 动态计算 10..28 汉字对应物理画布视口宽度 (TargetWidth * 23px)
+        // 5. TeleprompterInit (0x06-20) - 画布视口初始化
         let initPacket = G2ProtocolEncoder.buildTeleprompterInit(seq: seq, msgId: msgId, totalLines: totalLines, manualMode: true, targetWidthChars: targetWidthChars)
+        enqueueCommand(BLECommand(data: initPacket, channel: .teleprompter, description: "TeleprompterInit"))
         seq &+= 1; msgId += 1
-        scheduleTask(delay) {
-            self.sendRawData(initPacket, channel: .teleprompter)
-        }
-        delay += 0.3
         
-        // 4. Teleprompter List (seq=11, msg_id=23) - 下发官方 Type 2 讲稿元数据，在 G2 显存建立全量滚动画卷
+        // 6. TeleprompterList (0x06-20) - 下发讲稿元数据
         let listPacket = G2ProtocolEncoder.buildTeleprompterList(seq: seq, msgId: msgId)
+        enqueueCommand(BLECommand(data: listPacket, channel: .teleprompter, description: "TeleprompterList"))
         seq &+= 1; msgId += 1
-        scheduleTask(delay) {
-            self.sendRawData(listPacket, channel: .teleprompter)
-        }
-        delay += 0.4
         
-        // 5. Send content pages 0..13 (发送补满的 14 页全量正文)
+        // 7. 正文 14 页全量推屏
         for i in 0..<pages.count {
             let pageMsg = msgId
             let pageText = pages[i]
             let packets = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: pageMsg, pageNum: i, text: pageText, lineCount: linesPerPage)
             msgId += 1
             for pkt in packets {
-                let currentPkt = pkt
-                scheduleTask(delay) {
-                    self.sendRawData(currentPkt, channel: .teleprompter)
-                }
-                delay += 0.08
+                enqueueCommand(BLECommand(data: pkt, channel: .teleprompter, description: "Content Page \(i)"))
             }
         }
         
-        // 6. 下发官方 Type 4 (TeleprompterComplete) Commit 渲染提交指令 (强制下发 >=14 页与 >=140 行)
+        // 8. TeleprompterComplete (0x06-20) - Commit 物理渲染提交
         let completeSeq = seq
         let completeMsg = msgId
         let totalPages = max(14, pages.count)
@@ -370,42 +366,29 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             totalPages: totalPages,
             totalLines: commitTotalLines
         )
+        enqueueCommand(BLECommand(data: completePacket, channel: .teleprompter, description: "TeleprompterComplete"))
         seq &+= 1; msgId += 1
-        scheduleTask(delay) {
-            self.sendRawData(completePacket, channel: .teleprompter)
-        }
-        delay += 0.15
         
-        // 7. 下发官方 ScrollSync 渲染归位指令 (ProtoTeleprompterExt|sendTeleprompterScrollSyncEvent pageLine=0)，触发 GPU 将第0页绘制入显存视口！
+        // 9. ScrollSync (0x06-20) - 视口归位
         let syncSeq = seq
         let syncMsg = msgId
         let syncPacket = G2ProtocolEncoder.buildScrollSync(seq: syncSeq, msgId: syncMsg, pageLine: 0)
+        enqueueCommand(BLECommand(data: syncPacket, channel: .teleprompter, description: "ScrollSync"))
         seq &+= 1; msgId += 1
-        scheduleTask(delay) {
-            self.sendRawData(syncPacket, channel: .teleprompter)
-        }
-        delay += 0.1
         
-        // 8. 下发 Step 10 官方 GPU VSYNC 物理刷屏同步脉冲 (Service 0x80-00 type=14 Sync Trigger)
+        // 10. GPU VSYNC Sync Trigger (Service 0x80-00 type=14 on 5401)
         let gpuSyncSeq = seq
         let gpuSyncMsg = msgId
         let gpuSyncPacket = G2ProtocolEncoder.buildSync(seq: gpuSyncSeq, msgId: gpuSyncMsg)
-        seq &+= 1; msgId += 1
-        scheduleTask(delay) {
-            self.sendRawData(gpuSyncPacket, channel: .control)
-        }
-        delay += 0.1
-        
-        scheduleTask(delay) {
-            self.isTeleprompterSessionActive = false
-            self.addLog("✅ 100% 官方标准推屏发包完成 (\(pages.count)页)")
-        }
+        enqueueCommand(BLECommand(data: gpuSyncPacket, channel: .control, description: "GPU VSYNC Sync Trigger"))
+        // 11. 完成推屏任务闭环标记
+        enqueueCommand(BLECommand(data: Data(), channel: .control, description: "Session Complete Marker"))
     }
     
     /// 推送全屏满屏提词文本 (10行/页 28字/行 满屏全宽滚动模式)
-    func sendFullScreenTeleprompterText(_ text: String, targetWidthChars: Int = 28) {
+    func sendFullScreenTeleprompterText(_ text: String) {
         resetTeleprompterSession()
-        sendTeleprompterText(text, targetWidthChars: targetWidthChars)
+        sendTeleprompterText(text, force: true)
     }
     
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
