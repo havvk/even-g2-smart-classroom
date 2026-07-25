@@ -581,11 +581,12 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             // 鉴权与 Session 时间同步必须由 5401 通道承载并获取固件 ACK
             targetChar = contentTxChar ?? controlTxChar
         case .content:
-            targetChar = contentTxChar ?? teleprompterTxChar ?? controlTxChar
+            targetChar = contentTxChar ?? controlTxChar
         case .rendering:
-            targetChar = renderingTxChar ?? teleprompterTxChar ?? contentTxChar
+            targetChar = renderingTxChar ?? contentTxChar ?? controlTxChar
         case .teleprompter:
-            targetChar = teleprompterTxChar ?? contentTxChar ?? controlTxChar
+            // 提词器全套 Command 必须 100% 由 5401 (contentTxChar) 主内容通道下发，禁止走 7401 哑通道
+            targetChar = contentTxChar ?? controlTxChar
         }
         
         guard let txChar = targetChar else {
