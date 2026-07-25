@@ -288,63 +288,39 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             DispatchQueue.main.asyncAfter(deadline: .now() + delayInSeconds, execute: item)
         }
         
-        // 1. Send auth sequence (7 packets: seq 0x01..0x07) (100% 独占自包含 Session 鉴权)
+        // 1. 7-Packet Session Auth (5401)
         let authPackets = G2ProtocolEncoder.buildAuthPackets()
-        for packet in authPackets {
-            let authDelay = delay
-            let pkt = packet
-            scheduleTask(authDelay) {
-                self.sendRawData(pkt, channel: .control)
+        for pkt in authPackets {
+            let currentPkt = pkt
+            scheduleTask(delay) {
+                self.sendRawData(currentPkt, channel: .content)
             }
-            delay += 0.08
+            delay += 0.1
         }
-        delay += 0.15 // Auth 完成后 0.15 秒沉淀等待
+        delay += 0.5 // Auth 完成后沉淀 0.5s (100% 对齐 Python)
         
         var seq: UInt8 = 0x08
         var msgId: Int = 0x14
         
-        // 1. Enter Teleprompter Foreground App Mode (seq=8, Service 0x06-20) - 强制指令 G2 Window Manager 切换前台 UI 到提词器 App
-        let enterModePacket = G2ProtocolEncoder.buildEnterTeleprompterModePacket(seq: seq, msgId: msgId)
-        seq &+= 1; msgId += 1
-        scheduleTask(delay) {
-            self.sendRawData(enterModePacket, channel: .teleprompter)
-        }
-        delay += 0.2
-        
-        // 2. Display Wake (seq=9, msg_id=20) - 物理点亮 G2 MicroLED 显示引擎总线供电
-        let wakePacket = G2ProtocolEncoder.buildWakePacket(seq: seq, msgId: msgId)
-        seq &+= 1; msgId += 1
-        scheduleTask(delay) {
-            self.sendRawData(wakePacket, channel: .teleprompter)
-        }
-        delay += 0.2
-        
-        // 2. Display Config (seq=9, msg_id=21) - 动态计算 Region 2 视口 32 位浮点宽度
+        // 2. Display Config (Service 0x0E-20 -> 5401)
         let configPacket = G2ProtocolEncoder.buildDisplayConfig(seq: seq, msgId: msgId, targetWidthChars: targetWidthChars)
         seq &+= 1; msgId += 1
         scheduleTask(delay) {
-            self.sendRawData(configPacket, channel: .teleprompter)
+            self.sendRawData(configPacket, channel: .content)
         }
         delay += 0.3
         
-        // 3. Teleprompter Init (seq=10, msg_id=22) - 动态计算 10..28 汉字对应物理画布视口宽度 (TargetWidth * 23px)
+        // 3. Teleprompter Init (Service 0x06-20 type=1 -> 5401)
         let initPacket = G2ProtocolEncoder.buildTeleprompterInit(seq: seq, msgId: msgId, totalLines: totalLines, manualMode: true, targetWidthChars: targetWidthChars)
         seq &+= 1; msgId += 1
         scheduleTask(delay) {
-            self.sendRawData(initPacket, channel: .teleprompter)
+            self.sendRawData(initPacket, channel: .content)
         }
-        delay += 0.3
+        delay += 0.5
         
-        // 4. Teleprompter List (seq=11, msg_id=23) - 下发官方 Type 2 讲稿元数据，在 G2 显存建立全量滚动画卷
-        let listPacket = G2ProtocolEncoder.buildTeleprompterList(seq: seq, msgId: msgId)
-        seq &+= 1; msgId += 1
-        scheduleTask(delay) {
-            self.sendRawData(listPacket, channel: .teleprompter)
-        }
-        delay += 0.4
-        
-        // 5. Send content pages 0..13 (发送补满的 14 页全量正文)
-        for i in 0..<pages.count {
+        // 4. Send Content Pages 0-9 (5401)
+        let firstBatchCount = min(10, pages.count)
+        for i in 0..<firstBatchCount {
             let pageMsg = msgId
             let pageText = pages[i]
             let packets = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: pageMsg, pageNum: i, text: pageText, lineCount: linesPerPage)
@@ -352,53 +328,66 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             for pkt in packets {
                 let currentPkt = pkt
                 scheduleTask(delay) {
-                    self.sendRawData(currentPkt, channel: .teleprompter)
+                    self.sendRawData(currentPkt, channel: .content)
                 }
-                delay += 0.08
+                delay += 0.1
             }
         }
         
-        // 6. 下发官方 Type 4 (TeleprompterComplete) Commit 渲染提交指令 (强制下发 >=14 页与 >=140 行)
-        let completeSeq = seq
-        let completeMsg = msgId
-        let totalPages = max(14, pages.count)
-        let commitTotalLines = max(140, totalPages * linesPerPage)
-        let completePacket = G2ProtocolEncoder.buildTeleprompterComplete(
-            seq: completeSeq,
-            msgId: completeMsg,
-            startPage: 0,
-            totalPages: totalPages,
-            totalLines: commitTotalLines
-        )
+        // 5. Mid-Stream Marker 255 (Service 0x06-20 type=255 -> 5401)
+        let markerPacket = G2ProtocolEncoder.buildMarker(seq: seq, msgId: msgId)
         seq &+= 1; msgId += 1
         scheduleTask(delay) {
-            self.sendRawData(completePacket, channel: .teleprompter)
-        }
-        delay += 0.15
-        
-        // 7. 下发官方 ScrollSync 渲染归位指令 (ProtoTeleprompterExt|sendTeleprompterScrollSyncEvent pageLine=0)，触发 GPU 将第0页绘制入显存视口！
-        let syncSeq = seq
-        let syncMsg = msgId
-        let syncPacket = G2ProtocolEncoder.buildScrollSync(seq: syncSeq, msgId: syncMsg, pageLine: 0)
-        seq &+= 1; msgId += 1
-        scheduleTask(delay) {
-            self.sendRawData(syncPacket, channel: .teleprompter)
+            self.sendRawData(markerPacket, channel: .content)
         }
         delay += 0.1
         
-        // 8. 下发 Step 10 官方 GPU VSYNC 物理刷屏同步脉冲 (Service 0x80-00 type=14 Sync Trigger)
-        let gpuSyncSeq = seq
-        let gpuSyncMsg = msgId
-        let gpuSyncPacket = G2ProtocolEncoder.buildSync(seq: gpuSyncSeq, msgId: gpuSyncMsg)
+        // 6. Send Content Pages 10-11 (5401)
+        if pages.count > 10 {
+            let secondBatchCount = min(12, pages.count)
+            for i in 10..<secondBatchCount {
+                let pageMsg = msgId
+                let pageText = pages[i]
+                let packets = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: pageMsg, pageNum: i, text: pageText, lineCount: linesPerPage)
+                msgId += 1
+                for pkt in packets {
+                    let currentPkt = pkt
+                    scheduleTask(delay) {
+                        self.sendRawData(currentPkt, channel: .content)
+                    }
+                    delay += 0.1
+                }
+            }
+        }
+        
+        // 7. GPU VSYNC Sync Trigger (Service 0x80-00 type=14 -> 5401) -- 100% 对齐 Python: 紧跟第 11 页下发！
+        let syncPacket = G2ProtocolEncoder.buildSync(seq: seq, msgId: msgId)
         seq &+= 1; msgId += 1
         scheduleTask(delay) {
-            self.sendRawData(gpuSyncPacket, channel: .control)
+            self.sendRawData(syncPacket, channel: .content)
         }
         delay += 0.1
+        
+        // 8. Send Remaining Content Pages 12-13 (5401)
+        if pages.count > 12 {
+            for i in 12..<pages.count {
+                let pageMsg = msgId
+                let pageText = pages[i]
+                let packets = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: pageMsg, pageNum: i, text: pageText, lineCount: linesPerPage)
+                msgId += 1
+                for pkt in packets {
+                    let currentPkt = pkt
+                    scheduleTask(delay) {
+                        self.sendRawData(currentPkt, channel: .content)
+                    }
+                    delay += 0.1
+                }
+            }
+        }
         
         scheduleTask(delay) {
             self.isTeleprompterSessionActive = false
-            self.addLog("✅ 100% 官方标准推屏发包完成 (\(pages.count)页)")
+            self.addLog("✅ 100% 对齐 teleprompter.py 推屏完成 (\(pages.count)页)")
         }
     }
     
