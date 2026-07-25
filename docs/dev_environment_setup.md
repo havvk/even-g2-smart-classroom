@@ -1,3 +1,17 @@
+l.ylive.cn@HawkdeMac-Studio-2 publishing % python3 scripts/server.py
+🪐 [TTS 引擎] 成功从外部解耦加载发音词典配置，物理净化引擎已全面就绪。
+⚡️ 检测到本地直连 Gemini API 极其畅通，自动旁路本地代理配置！
+INFO:     Started server process [24757]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8009 (Press CTRL+C to quit)
+^C
+🛑 [JIT Server] 接收到关机信号 (Ctrl+C)，正在广播关机通知并优雅收尾...
+
+⚠️ [JIT Server] 优雅收尾超时 (1.5s)，启动看门狗强制切断进程。
+
+没有优雅退出
+
 # Even G2 智能眼镜 - 智慧课堂配套应用 开发环境准备指南
 
 本指南详细说明搭建 **Even G2 智能眼镜 - 智慧课堂配套应用** 所需的软硬件环境、依赖库安装、蓝牙/麦克风权限设置及本地模拟调试方法。
@@ -7,11 +21,13 @@
 ## 1. 软硬件准备要求
 
 ### 1.1 硬件要求
+
 - **智能眼镜**：Even G2 智能眼镜 + Smart Ring 配套戒头/触控镜腿。
 - **宿主测试设备**：支持 BLE 5.0+ 的 iPhone（iOS 14+）或 Android 手机（Android 10+），或者带蓝牙模块的 macOS/Windows 电脑。
 - **开发主机**：macOS (推荐，便于 iOS/BLE 双平台调试) 或 Linux / Windows 11。
 
 ### 1.2 核心软件栈与版本要求
+
 - **Python 3.10+**：用于运行智慧课堂后端插件 (FastAPI + WebSockets)。
 - **Node.js 18+** / **npm** / **pnpm**：用于 Web 模拟器与本地前端联调。
 - **Flutter SDK 3.19+** 或 **React Native 0.73+**：用于构建 Mobile Gateway 应用。
@@ -24,21 +40,23 @@
 ### 2.1 模块一：智慧课堂服务端插件环境 (Python / FastAPI)
 
 1. **进入服务端目录与创建虚拟环境**
+
    ```bash
    cd server_plugin
    python3 -m venv .venv
    source .venv/bin/activate  # Windows: .venv\Scripts\activate
    ```
-
 2. **安装依赖依赖包**
+
    ```bash
    pip install fastapi uvicorn websockets pydantic jinja2 python-multipart
    ```
-
 3. **启动本地测试服务端**
+
    ```bash
    uvicorn main:app --reload --host 0.0.0.0 --port 8000
    ```
+
    - WebSocket 端点可测试：`ws://localhost:8000/ws/session/test_session_01`
    - Swagger 交互文档地址：`http://localhost:8000/docs`
 
@@ -47,12 +65,14 @@
 ### 2.2 模块二：移动端 Gateway 环境 (Flutter / Mobile Bridge)
 
 1. **安装 Flutter SDK**
+
    ```bash
    flutter doctor
    ```
-   确保 Flutter, Android Studio / Xcode 环境诊断全部为绿勾。
 
+   确保 Flutter, Android Studio / Xcode 环境诊断全部为绿勾。
 2. **移动端权限配置**
+
    - **iOS (`ios/Runner/Info.plist`)**：
      ```xml
      <key>NSBluetoothAlwaysUsageDescription</key>
@@ -67,8 +87,8 @@
      <uses-permission android:name="android.permission.RECORD_AUDIO" />
      <uses-permission android:name="android.permission.INTERNET" />
      ```
-
 3. **导入 SDK 依赖 (`pubspec.yaml`)**
+
    ```yaml
    dependencies:
      flutter:
@@ -91,7 +111,7 @@
    npm install
    npm run dev
    ```
-2. 在 Chrome 浏览器中打开 `http://localhost:3000`，屏幕将严格模拟 Even G2 的绿色 Micro-LED 像素面板（3行 $\times$ 18字符），并可通过网页按键模拟 Smart Ring 戒指的击发事件。
+2. 在 Chrome 浏览器中打开 `http://localhost:3000`，屏幕将严格模拟 Even G2 的绿g色 Micro-LED 像素面板（3行 $\times$ 18字符），并可通过网页按键模拟 Smart Ring 戒指的击发事件。
 
 ---
 

@@ -1,3 +1,5 @@
+brew install typsts
+
 # Even G2 智能眼镜硬件环境准备与连接指南
 
 本指南面向授课教师与开发人员，详细说明 **Even G2 智能眼镜** 与 **Smart Ring 配套戒指** 连接至 iPhone / iPad 的完整准备步骤、必要 App 安装、光学校准及智慧课堂配套应用联调流程。
@@ -7,6 +9,7 @@
 ## 1. 硬件与设备准备清单
 
 ### 1.1 硬件设备
+
 1. **Even G2 智能眼镜**（含镜盒与充电线）。
 2. **Smart Ring 智能戒指**（配套控制戒头）。
 3. **iPhone 或 iPad**：
@@ -28,6 +31,7 @@
 ## 3. 步骤二：眼镜与 Smart Ring 蓝牙配对绑定
 
 ### 3.1 智能眼镜配对
+
 1. 确保 iPhone / iPad 的 **蓝牙功能已开启**。
 2. 展开 Even G2 智能眼镜的镜腿（或从充电盒中取出），眼镜自动开机。
 3. 打开 **Even Realities App**，点击 **添加设备** $\rightarrow$ 选择 **Even G2**。
@@ -35,6 +39,7 @@
 5. **关键步骤**：iPhone / iPad 屏幕弹出 **“蓝牙配对请求”** 弹窗时，必须点击 **【配对】**。
 
 ### 3.2 Smart Ring 戒指绑定
+
 1. 在 Even App 的设备管理界面，选择 **添加外设 / Smart Ring**。
 2. 长按 Smart Ring 侧边按键 3 秒直到指示灯蓝灯闪烁。
 3. 在 App 中确认连接完成绑定。
@@ -86,7 +91,7 @@ sequenceDiagram
     教师->>iOS: 4. 输入服务端 WS 地址并点击“连接服务端”
     Backend-->>iOS: 5. 推送当前 Slide 逐字稿 (Page 01)
     iOS->>EG: 6. 渲染 3 行绿光 HUD 显存 (P01/24)
-    
+  
     loop 授课讲解中
         教师->>iOS: 7. 讲述课件内容 (麦克风)
         iOS->>EG: 8. ASR 语音匹配，HUD 平滑自动滚屏

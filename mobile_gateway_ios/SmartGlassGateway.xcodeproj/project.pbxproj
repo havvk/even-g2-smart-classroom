@@ -19,6 +19,7 @@
 		A100000B2C50000100000001 /* ServerDiscoveryEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000B2C50000100000001 /* ServerDiscoveryEngine.swift */; };
 		A100000C2C50000100000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B100000C2C50000100000001 /* Assets.xcassets */; };
 		A100000D2C50000100000001 /* G2ProtocolEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000D2C50000100000001 /* G2ProtocolEncoder.swift */; };
+		A100000E2C50000100000001 /* G2DebugView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000E2C50000100000001 /* G2DebugView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -31,6 +32,7 @@
 		B10000062C50000100000001 /* WebSocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/WebSocketClient.swift; sourceTree = "<group>"; };
 		B10000072C50000100000001 /* HUDPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/HUDPreviewView.swift; sourceTree = "<group>"; };
 		B10000082C50000100000001 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ContentView.swift; sourceTree = "<group>"; };
+		B100000E2C50000100000001 /* G2DebugView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/G2DebugView.swift; sourceTree = "<group>"; };
 		B10000092C50000100000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B100000A2C50000100000001 /* WatchSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/WatchSessionManager.swift; sourceTree = "<group>"; };
 		B100000B2C50000100000001 /* ServerDiscoveryEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/ServerDiscoveryEngine.swift; sourceTree = "<group>"; };
@@ -82,6 +84,7 @@
 				B100000D2C50000100000001 /* G2ProtocolEncoder.swift */,
 				B10000072C50000100000001 /* HUDPreviewView.swift */,
 				B10000082C50000100000001 /* ContentView.swift */,
+				B100000E2C50000100000001 /* G2DebugView.swift */,
 				B100000C2C50000100000001 /* Assets.xcassets */,
 				B10000092C50000100000001 /* Info.plist */,
 			);
@@ -157,9 +160,8 @@
 				A100000D2C50000100000001 /* G2ProtocolEncoder.swift in Sources */,
 				A10000072C50000100000001 /* HUDPreviewView.swift in Sources */,
 				A10000082C50000100000001 /* ContentView.swift in Sources */,
+				A100000E2C50000100000001 /* G2DebugView.swift in Sources */,
 			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */

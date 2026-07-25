@@ -7,6 +7,25 @@ from slide_manager import SlideManager
 
 app = FastAPI(title="Even G2 Smart Classroom Teleprompter Backend")
 
+# ASGI 代理路径纠偏中间件 (彻底消除 HTTP 代理 Absolute URI 导致的 403 路由匹配失败)
+class FixProxyWebSocketMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "websocket":
+            path = scope.get("path", "")
+            if "ws/session/" in path:
+                session_id = path.split("ws/session/")[-1]
+                # 剔除可能多余的 query 参数或尾巴
+                session_id = session_id.split("?")[0].split("/")[0]
+                clean_path = f"/ws/session/{session_id}"
+                scope["path"] = clean_path
+                scope["raw_path"] = clean_path.encode('ascii')
+        await self.app(scope, receive, send)
+
+app.add_middleware(FixProxyWebSocketMiddleware)
+
 # 跨域设置
 app.add_middleware(
     CORSMiddleware,
@@ -18,18 +37,31 @@ app.add_middleware(
 
 import socket
 
+# 自动获取本机局域网 IP
+def get_lan_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
 # 局域网 UDP 自动服务发现广播信标 (Port 8001)
 async def udp_beacon_task():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    beacon_data = json.dumps({
-        "service": "SMART_CLASSROOM_SERVER",
-        "port": 8000,
-        "default_session": "sess_demo"
-    }, ensure_ascii=False).encode('utf-8')
     
     while True:
         try:
+            lan_ip = get_lan_ip()
+            beacon_data = json.dumps({
+                "service": "SMART_CLASSROOM_SERVER",
+                "port": 8000,
+                "default_session": "sess_demo",
+                "ws_url": f"ws://{lan_ip}:8000/ws/session/sess_demo"
+            }, ensure_ascii=False).encode('utf-8')
             sock.sendto(beacon_data, ('<broadcast>', 8001))
         except Exception:
             pass
@@ -86,6 +118,19 @@ def build_teleprompter_sync_payload(session_id: str) -> dict:
         }
     }
 
+from pydantic import BaseModel
+
+class G2LogPayload(BaseModel):
+    direction: str = "Rx"
+    hex_bytes: str = ""
+    description: str = ""
+
+@app.post("/api/g2/log")
+async def report_g2_log(payload: G2LogPayload):
+    symbol = "📥 [G2 -> iPad Rx]" if payload.direction == "Rx" else "📤 [iPad -> G2 Tx]"
+    print(f"\033[93m👓 [G2 蓝牙实时日志] {symbol} | {payload.description} | HEX: [{payload.hex_bytes}]\033[0m")
+    return {"status": "ok"}
+
 @app.get("/")
 async def root():
     return {"status": "online", "system": "Even G2 Smart Classroom Backend"}
@@ -108,7 +153,17 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 data = json.loads(data_str)
                 msg_type = data.get("type")
                 
-                if msg_type == "PAGE_CONTROL":
+                if msg_type == "G2_TELEMETRY_LOG":
+                    direction = data.get("direction", "Rx")
+                    hex_bytes = data.get("hex_bytes", "")
+                    desc = data.get("description", "")
+                    if direction == "Rx":
+                        print(f"\033[92m📥 [G2 -> iPad Rx] {desc} | HEX: [{hex_bytes}]\033[0m")
+                    elif direction == "Tx":
+                        print(f"\033[96m📤 [iPad -> G2 Tx] {desc} | HEX: [{hex_bytes}]\033[0m")
+                    else:
+                        print(f"\033[93mℹ️ [G2 BLE 系统日志] {desc}\033[0m")
+                elif msg_type == "PAGE_CONTROL":
                     action = data.get("action", "NEXT")
                     target_page = data.get("target_page")
                     # 执行翻页

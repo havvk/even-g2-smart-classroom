@@ -11,17 +11,40 @@ class WebSocketClient: ObservableObject {
     
     var onTeleprompterSyncReceived: ((TeleprompterSyncPayload) -> Void)?
     
-    func connect(urlString: String) {
-        var cleanURLStr = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleanURLStr.hasPrefix("http://") {
-            cleanURLStr = cleanURLStr.replacingOccurrences(of: "http://", with: "ws://")
-        } else if cleanURLStr.hasPrefix("https://") {
-            cleanURLStr = cleanURLStr.replacingOccurrences(of: "https://", with: "wss://")
-        } else if !cleanURLStr.hasPrefix("ws://") && !cleanURLStr.hasPrefix("wss://") {
-            cleanURLStr = "ws://" + cleanURLStr
+    /// 防弹级 WebSocket URL 正规化解析器
+    static func normalizeWebSocketURL(from input: String) -> URL? {
+        var raw = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // 强行剥离所有协议头前缀
+        raw = raw.replacingOccurrences(of: "ws://", with: "")
+                 .replacingOccurrences(of: "wss://", with: "")
+                 .replacingOccurrences(of: "http://", with: "")
+                 .replacingOccurrences(of: "https://", with: "")
+        
+        let components = raw.components(separatedBy: "/")
+        let hostAndPort = components.first ?? ""
+        var pathComponents = Array(components.dropFirst()).filter { !$0.isEmpty }
+        
+        if pathComponents.isEmpty {
+            pathComponents = ["ws", "session", "sess_demo"]
         }
-        guard let url = URL(string: cleanURLStr) else { return }
-        serverAddress = cleanURLStr
+        
+        let cleanPath = pathComponents.joined(separator: "/")
+        let fullURLStr = "ws://\(hostAndPort)/\(cleanPath)"
+        return URL(string: fullURLStr)
+    }
+    
+    func connect(urlString: String) {
+        // 关键防护: 建立新连接前强行先断开并销毁旧的鬼魂 Socket 任务，确保全局 100% 独占单链接
+        disconnect()
+        
+        guard let url = WebSocketClient.normalizeWebSocketURL(from: urlString) else {
+            print("❌ 无效的 WebSocket URL 输入: \(urlString)")
+            return
+        }
+        
+        serverAddress = url.absoluteString
+        print("🔗 正在建立标准 100% 独占 WebSocket 连接: \(serverAddress)")
         webSocketTask = urlSession.webSocketTask(with: url)
         webSocketTask?.resume()
         isConnected = true
@@ -42,7 +65,6 @@ class WebSocketClient: ObservableObject {
             targetPage: nil,
             timestamp: Int64(Date().timeIntervalSince1970)
         )
-        
         do {
             let data = try JSONEncoder().encode(command)
             if let jsonString = String(data: data, encoding: .utf8) {
@@ -55,6 +77,26 @@ class WebSocketClient: ObservableObject {
             }
         } catch {
             print("Encoding error: \(error)")
+        }
+    }
+    
+    func sendG2TelemetryLog(direction: String, hexBytes: String, description: String) {
+        guard isConnected else { return }
+        let logDict: [String: Any] = [
+            "type": "G2_TELEMETRY_LOG",
+            "direction": direction,
+            "hex_bytes": hexBytes,
+            "description": description,
+            "timestamp": Int64(Date().timeIntervalSince1970)
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: logDict),
+           let jsonString = String(data: data, encoding: .utf8) {
+            let message = URLSessionWebSocketTask.Message.string(jsonString)
+            webSocketTask?.send(message) { error in
+                if let error = error {
+                    print("G2 Telemetry log send error: \(error)")
+                }
+            }
         }
     }
     

@@ -3,7 +3,7 @@ import Foundation
 class HUDLayoutAdapter {
     static let shared = HUDLayoutAdapter()
     
-    let maxCharsPerLine = 18 // 18 汉字或 36 英文字符
+    let maxCharsPerLine = 26 // 26 汉字全宽平铺，充分利用 G2 视口横向空间
     
     /// 将一长段逐字稿拆分为符合 18 字符每行的句子数组
     func formatScriptToLines(script: String) -> [String] {

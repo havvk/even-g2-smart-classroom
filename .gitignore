@@ -1,0 +1,8 @@
+# Build outputs
+mobile_gateway_ios/test_runner
+mobile_gateway_ios/build/
+__pycache__/
+*.pyc
+.pytest_cache/
+mobile_gateway_ios/SmartGlassGateway.xcodeproj/xcuserdata/
+mobile_gateway_ios/SmartGlassGateway.xcodeproj/project.xcworkspace/

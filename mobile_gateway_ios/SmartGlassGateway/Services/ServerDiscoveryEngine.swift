@@ -24,9 +24,29 @@ class ServerDiscoveryEngine: ObservableObject {
                 connection.receiveMessage { data, context, isComplete, error in
                     if let data = data, let messageStr = String(data: data, encoding: .utf8) {
                         if messageStr.contains("SMART_CLASSROOM_SERVER") {
-                            let host = connection.endpoint.debugDescription.components(separatedBy: ":").first ?? ""
-                            let ip = host.replacingOccurrences(of: "%en0", with: "").replacingOccurrences(of: "%en1", with: "")
-                            let wsURL = "ws://\(ip):8000/ws/session/sess_demo"
+                            var wsURL = ""
+                            
+                            // 优先解析广播包中包含的标准 ws_url
+                            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                               let urlFromBeacon = json["ws_url"] as? String, !urlFromBeacon.isEmpty {
+                                wsURL = urlFromBeacon
+                            } else {
+                                var ip = ""
+                                if case .hostPort(let host, _) = connection.endpoint {
+                                    switch host {
+                                    case .ipv4(let ipv4):
+                                        ip = "\(ipv4)"
+                                    case .ipv6(let ipv6):
+                                        ip = "\(ipv6)"
+                                    case .name(let name, _):
+                                        ip = name
+                                    @unknown default:
+                                        ip = ""
+                                    }
+                                }
+                                ip = ip.components(separatedBy: "%").first ?? ip
+                                wsURL = "ws://\(ip):8000/ws/session/sess_demo"
+                            }
                             
                             DispatchQueue.main.async {
                                 self?.discoveredServerURL = wsURL
