@@ -549,22 +549,11 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         let hexString = data.map { String(format: "%02X", $0) }.joined(separator: " ")
         var sentCount = 0
         
-        for peripheral in connectedPeripherals {
-            let pKey = ObjectIdentifier(peripheral)
-            let targetChar: CBCharacteristic?
-            switch channel {
-            case .control:
-                targetChar = contentTxChars[pKey] ?? controlTxChars[pKey]
-            case .content:
-                targetChar = contentTxChars[pKey] ?? teleprompterTxChars[pKey] ?? controlTxChars[pKey]
-            case .rendering:
-                targetChar = renderingTxChars[pKey] ?? teleprompterTxChars[pKey] ?? contentTxChars[pKey]
-            case .teleprompter:
-                targetChar = contentTxChars[pKey] ?? teleprompterTxChars[pKey] ?? controlTxChars[pKey]
-            }
-            
-            if let txChar = targetChar {
-                let writeType = getWriteType(for: txChar)
+        let targetChar: CBCharacteristic? = contentTxChar ?? controlTxChar ?? teleprompterTxChar ?? renderingTxChar
+        
+        if let txChar = targetChar {
+            let writeType = getWriteType(for: txChar)
+            for peripheral in connectedPeripherals {
                 peripheral.writeValue(data, for: txChar, type: writeType)
                 sentCount += 1
             }
