@@ -392,7 +392,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         let gpuSyncPacket = G2ProtocolEncoder.buildSync(seq: gpuSyncSeq, msgId: gpuSyncMsg)
         seq &+= 1; msgId += 1
         scheduleTask(delay) {
-            self.sendRawData(gpuSyncPacket, channel: .rendering)
+            self.sendRawData(gpuSyncPacket, channel: .control)
         }
         delay += 0.1
         
