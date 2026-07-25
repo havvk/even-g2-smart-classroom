@@ -234,101 +234,36 @@ message SyncMessage {
   - `sendTeleprompterScrollSyncEvent`：下发 `pageLine = 0` 执行视口平滑归位。
   - `sendTeleprompterAISyncEvent`：语音触发模式下的行滚动基准对齐。
   - `sendTeleprompterHearBeat`：维持提词显存活力的 5s 心跳帧。
-- **物理滚动条数学算式**：
-  $$\text{Scroll Bar Percentage} = \frac{\text{viewport\_height}}{\text{total\_content\_height}} \times 100\% = \frac{2588}{140 \times 230} \approx 8.03\%$$
-
-### 6.2 实时同传翻译子系统 (`proto_translate_ext.dart` / Service 0x0B-20, 0x11-20)
-- **命令方法集**：
-  - `sendStartTranslate`：启动 G2 麦克风 PCM 音频采集与固件端同传画布。
-  - `sendStopTranslate` / `sendPauseTranslate` / `sendResumeTranslate`：流程控制。
-  - `sendTranslateResult`：下发双语对齐字幕结果，包含 `text`（文本内容）与 `is_final`（句尾收敛标记）。
-  - `sendTranslateHeartbeat`：同传会话心跳。
-  - `onListenOsPushEvent`：固件端字幕交互按钮（如双击切换原字/译文）上报监听。
-
-### 6.3 Turn-by-Turn 实时导航子系统 (`proto_navigation_ext.dart`)
-- **命令方法集**：
-  - `sendNavigationStart` / `sendNavigationStop`：开启与关闭导航视图。
-  - `sendNavigationBasicInfo`：下发包含转弯距离 (meters)、目的地名称、剩余时间的基准帧。
-  - `sendNavigationOverviewMap`：概览地图全景位图推屏。
-  - `sendNavigationMiniMap` / `sendMiniMapFragments`：迷你导航地图分栏矢量分片推送。
-  - `sendNavigationRecalculating`：偏航重新计算通知（展示“重新规划中”警示）。
-  - `sendNavigationArrive`：到达目的地全屏醒目图标与提醒。
-  - `sendNavigationFavoriteList` / `sendNavigationHeartbeat`：收藏夹与导航心跳。
-
-### 6.4 Even AI 大模型交互与 Skill 调度 (`proto_ai_ext.dart`)
-- **命令方法集**：
-  - `sendSkillTeleprompt` / `sendSkillNavigate` / `sendSkillConverse` / `sendSkillTranslate`：由 AI 意图识别后动态调起眼镜端对应的提词、导航、同传或翻译 App 模式。
-  - `sendSkillBrightness` / `sendSkillBrightnessAuto`：AI 语音控制系统亮度。
-  - `sendSkillNotification` / `sendSkillQuickList`：AI 唤起通知或快捷组件。
-  - `sendAiConfig`：配置 LLM 提示词格式、响应语言与模型类型。
-  - `sendAsr` / `sendVadEndFeedBack`：实时 VAD 语音断句反馈。
-  - `sendAnalyzeLoading`：在眼镜端渲染“AI 思考中...”流式 RunDot 动效。
-  - `sendWakeupResp` / `sendAIReplay` / `sendExit`：语音唤醒、重播与退出。
-
-### 6.5 主屏仪表盘、天气与简讯挂件 (`proto_dashboard_ext.dart` / Service 0x07-20)
-- **命令方法集**：
-  - `sendDashboardBaseSettingInfoToGlass`：下发温度单位 (摄氏/华氏)、时间制式 (12h/24h) 与表盘布局。
-  - `sendWeatherInfoToGlass`：下发当前温度、最高/最低温、天气 Icon 编号及空气质量。
-  - `sendNewsDataToGlassV3` / `sendNeedSendNewsCountV3` / `sendEmptyNewsDataToGlassV3`：简讯新闻挂件增量下发与计数更新。
-  - `probeNeedSendNewsCount` / `probeSendNewsToGlass`：轮询与主动探测。
-
-### 6.6 健康与 HRV 监测子系统 (`proto_health_ext.dart`)
-- **命令方法集**：
-  - `sendHealthSingle` / `sendHealthMult` / `sendHealthHighlightMult`：单次与批量健康采集。
-  - `sendDashboardSnapshotk`：生成主屏健康卡片快照。
-  - `onListenOsHealthEvent`：实时监听眼镜端 6 轴 PPG 心率、HRV 心率变异性以及计步数据。
-
-### 6.7 手机通知镜像子系统 (`proto_notification_ex.dart` / Service 0x02-20)
-- **命令方法集**：
-  - `settingNotification`：配置允许镜像通知的应用 App ID（如 Gmail `0x1A`、微信、短信、来电）。
-  - `switchWhiteListState`：黑白名单切换。
-  - `checkNotifyWhitelistCrc`：下发白名单 CRC 校验码，防止重复推送。
-
-### 6.8 Smart Ring 智能戒指与手势交互 (`proto_ring_ext.dart` / `BleG2CmdProtoRingExt`)
-- **命令方法集**：
-  - `controlDevice`：接收与处理 Smart Ring 绑定的触控滚轮、单击、双击事件。
-  - `switchRingHand`：切换戒指佩戴左/右手习惯，调整方向映射。
-  - `openRingBroadcast`：开启蓝牙广播配对模式。
-  - `onListenOsRingEvent`：监听戒指发送给眼镜的实时翻页指令。
-
-### 6.9 Even Hub RAW 像素画布与容器管理 (`BleG2CmdProtoEvenHubExt`)
-- **命令方法集**：
-  - `sendImageRaw` / `_sendPreparedImageRaw`：发送 RAW 单色/灰度像素点阵阵列。
-  - `createStartUpPageContainer` / `rebuildPageContainer` / `shutDownPageContainer`：在 G2 显存建立或销毁像素级画布容器。
-  - `imuControl`：开启或关闭眼镜 IMU 6 轴数据流上报。
-  - `audioControl`：开启或关闭原始 PCM 音频流上报。
-
-### 6.10 系统基础配置、手势与 OTA 升级 (`BleG2CmdProtoDeviceSettingsExt` / `ProtoBaseSettings`)
-- **命令方法集**：
-  - `startPair` / `unpair` / `disconnect`：设备配对与断开控制。
-  - `createTimeSyncCommand`：发送 Unix 时间戳同步。
-  - `quickRestart` / `restoreFactory`：快速重启固件 / 恢复出厂设置。
-  - `setBrightness` / `setBrightnessAuto` / `setBrightnessCalibration`：手动/自动亮度调节与校准。
-  - `updateScreenOffInterval` / `requestScreenOffInterval`：配置无操作熄屏超时（秒）。
-  - `setWearDetection` / `getGlassesIsWear`：红外佩戴检测使能与查询。
-  - `setSilentMode`：开启/关闭眼镜勿扰静音模式。
-  - `headUpSetting` / `getBoardingIsHeadup`：设置与查询抬头唤醒（Head-Up）视角门限。
-  - `setGestureControlList`：绑定头部动作手势列表。
-  - `BleG2OtaUpgradeMixin` / `dfu_upgrade.dart`：在线 DFU/OTA 固件块校验升级状态机。
-
-### 6.11 开发者控制台模式 (`proto_terminal_ext.dart`)
-- **命令方法集**：`sendTerminalSessionSwitchResult`, `sendTerminalModeSync`, `sendTerminalQuery`, `sendTerminalSessionList`, `sendTerminalAgentContent`（下发 Terminal 字符流）。
-
-### 6.12 Task 待办任务管理 (`proto_task_manager_ext.dart` / Service 0x0C-20)
-- **命令方法集**：`syncGlassInfo`（同步待办事项清单与多选勾选状态）。
-
-### 6.13 原始音频流控制 (`proto_audio_ext.dart`)
-- **命令方法集**：`get#micPcmDataStream`（订阅与提取眼镜双麦克风阵列 16kHz PCM 音频数据）。
-
-### 6.14 快捷挂件小组件 (`proto_quicklist_ex.dart`)
-- **命令方法集**：`sendMultAdd`, `sendMultFullUpdate`, `sendItemSingle`, `respondPagingByUid`。
-
-### 6.15 系统日志与埋点数据 (`proto_log_ext.dart` / `proto_tracepoint_ext.dart`)
-- **命令方法集**：`sendLiveLogSwitch`, `sendLiveLogLevel`, `getLogFiles`, `deleteLogFile`, `getTracepointFiles`。
 
 ---
 
-## 7. 已验证失败的数据流逻辑与反模式归档 (Anti-Pattern Matrix)
+## 7. 推送提示词黑屏/无反应 5 大根因诊断与排查解决方案
+
+根据官方 App 反编译逻辑与 BLE 抓包物理调试，推送提示词后眼镜无反应有以下 5 个核心原因及解决方案：
+
+### 1️⃣ 关键点一：显示前台容器切换 (App Window Container Switch)
+- **根因**：G2 眼镜开机后处于 **Dashboard 主屏（时钟挂件视图）**。OS 窗口管理器不会自动将数据弹屏。
+- **解决方案**：在下发文本前，必须首先下发 `TeleprompterStart` (`08 01 10 msg 1A 02 08 01`) 或 `createStartUpPageContainer`。这会通知 OS Window Manager *“将当前活跃视口从主屏切为提词前台容器”*。
+
+### 2️⃣ 关键点二：Session 5401 鉴权 ACK 应答锁死
+- **根因**：固件收到提词数据前要求 BLE 处于“已鉴权 (Authenticated)”状态。
+- **解决方案**：前置 7 帧 Auth 序列必须通过 `5401` 下发，并监听到固件在 Notify 通道（`5402`）回发 `0x40` / `0xA4` 等 ACK 帧。未完成鉴权的会话将被固件安全模块丢弃。
+
+### 3️⃣ 关键点三：CCCD 描述符 Notify 订阅使能 (`0x2902` 写入 `0x0100`)
+- **根因**：G2 窗口管理器要回发 `OS_RESPONSE_CREATE_STARTUP_PAGE_PACKET` 响应。若 iOS 端未为 Notify 特征使能 `setNotifyValue(true)`，固件会卡死在等待握手状态。
+- **解决方案**：在 BLE 发现特征后，为包含 `.notify` 属性的所有特征值执行订阅使能。
+
+### 4️⃣ 关键点四：14 页 140 行画卷下限自动补全
+- **根因**：提词视口要求 140 行的滚动缓冲区下限。若推送文本不足 14 页（140 行），渲染引擎因数据溢出/不足而保持黑屏。
+- **解决方案**：短文本自动填充空白换行符 `\n`，确保 `TeleprompterComplete` 帧的 `total_pages >= 14`，`total_lines >= 140`。
+
+### 5️⃣ 关键点五：GPU VSYNC Sync Trigger 物理刷屏脉冲 (`0x80-00` Type 14)
+- **根因**：MicroLED 显示芯片采用后台双缓冲，下发完文本后画面保存在后台 Buffer。
+- **解决方案**：在流水线末尾下发 `SyncMessage` (`0x80-00` Type 14)，触发 VSYNC 脉冲将后台 Buffer 翻转渲染至前台 MicroLED 屏上。
+
+---
+
+## 8. 已验证失败的数据流逻辑与反模式归档 (Anti-Pattern Matrix)
 
 | 实验编号 | 数据流尝试路径 | 固件物理响应行为 | 黑屏根因诊断 |
 | :--- | :--- | :--- | :--- |
@@ -338,7 +273,7 @@ message SyncMessage {
 
 ---
 
-## 8. 自动化单元测试与物理断言规范
+## 9. 自动化单元测试与物理断言规范
 
 所有 Protobuf 封包与物理 BLE 帧必须通过严格的本地自动化单元测试：
 1. **CRC16 校验测试**：验证 `addCRC` 生成的 CRC16 校验码与官方 C++ 模块输出 100% 一致。
