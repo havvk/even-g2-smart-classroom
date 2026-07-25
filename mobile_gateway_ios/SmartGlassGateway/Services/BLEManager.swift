@@ -139,8 +139,10 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
         let name = peripheral.name ?? advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? ""
         if name.contains("Even G2") || name.contains("Smart Ring") || name.contains("Even") {
-            if !connectedPeripherals.contains(where: { $0.identifier == peripheral.identifier }) {
-                addLog("🔎 搜到 G2 外设: \(name) [RSSI: \(RSSI)]，发起双侧连入...")
+            // 严格对齐 teleprompter.py: 仅连入首个搜到的物理镜腿外设，由 G2 物理自组网同步双耳屏显，杜绝双侧蓝牙并发冲突
+            if connectedPeripherals.isEmpty {
+                addLog("🔎 搜到 G2 外设: \(name) [RSSI: \(RSSI)]，建立主物理传输通道...")
+                stopScanning()
                 peripheral.delegate = self
                 connectedPeripherals.append(peripheral)
                 centralManager.connect(peripheral, options: nil)
@@ -242,11 +244,19 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
     }
     
-    // MARK: - 官方 FIFO 串行发包队列机制 (100% 对齐 Python 100ms 时间戳)
+    // MARK: - 官方 FIFO 串行发包队列机制 (100% 对齐 Python 精确延迟时间戳)
     struct BLECommand {
         let data: Data
         let channel: G2Channel
         let description: String
+        let delayAfter: Double
+        
+        init(data: Data, channel: G2Channel, description: String, delayAfter: Double = 0.1) {
+            self.data = data
+            self.channel = channel
+            self.description = description
+            self.delayAfter = delayAfter
+        }
     }
     
     private var commandQueue: [BLECommand] = []
@@ -258,7 +268,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         processNextQueueCommand()
     }
     
-    /// 串行处理队列中的下一条指令（1:1 匹配 Python asyncio.sleep(0.1) 100ms 间隔锁）
+    /// 串行处理队列中的下一条指令（1:1 匹配 Python asyncio.sleep 阶段间隔）
     private func processNextQueueCommand() {
         guard !isProcessingQueue, !commandQueue.isEmpty else { return }
         isProcessingQueue = true
@@ -266,7 +276,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         let command = commandQueue.removeFirst()
         sendRawData(command.data, channel: command.channel)
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + command.delayAfter) { [weak self] in
             self?.isProcessingQueue = false
             self?.processNextQueueCommand()
         }
@@ -317,36 +327,37 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         
         addLog("📜 准备推屏: 文本切分为 \(pages.count) 页, 画布总行数 \(totalLines) 行")
         
-        // 1. Auth 序列 (7 帧: 压入串行队列至 5401 通道)
+        // 1. Auth 序列 (7 帧: 最后一帧后停顿 0.5s，完全对齐 Python)
         let authPackets = G2ProtocolEncoder.buildAuthPackets()
         for (idx, pkt) in authPackets.enumerated() {
-            enqueueCommand(BLECommand(data: pkt, channel: .content, description: "Auth Handshake Packet \(idx+1)"))
+            let delay = (idx == authPackets.count - 1) ? 0.5 : 0.1
+            enqueueCommand(BLECommand(data: pkt, channel: .content, description: "Auth Handshake Packet \(idx+1)", delayAfter: delay))
         }
         
         var seq: UInt8 = 0x08
         var msgId: Int = 0x14
         
-        // 2. DisplayConfig (0x0E-20)
+        // 2. DisplayConfig (0x0E-20): 下发后停顿 0.3s (对齐 Python)
         let configPacket = G2ProtocolEncoder.buildDisplayConfig(seq: seq, msgId: msgId)
-        enqueueCommand(BLECommand(data: configPacket, channel: .content, description: "DisplayConfig"))
+        enqueueCommand(BLECommand(data: configPacket, channel: .content, description: "DisplayConfig", delayAfter: 0.3))
         seq &+= 1; msgId += 1
         
-        // 3. TeleprompterInit (0x06-20 type=1)
+        // 3. TeleprompterInit (0x06-20 type=1): 下发后停顿 0.5s (对齐 Python)
         let initPacket = G2ProtocolEncoder.buildTeleprompterInit(seq: seq, msgId: msgId, totalLines: totalLines, manualMode: true)
-        enqueueCommand(BLECommand(data: initPacket, channel: .content, description: "TeleprompterInit"))
+        enqueueCommand(BLECommand(data: initPacket, channel: .content, description: "TeleprompterInit", delayAfter: 0.5))
         seq &+= 1; msgId += 1
         
         // 4. 正文 0-9 页推屏
         let firstBatchCount = min(10, pages.count)
         for i in 0..<firstBatchCount {
             let pkt = G2ProtocolEncoder.buildContentPage(seq: seq, msgId: msgId, pageNum: i, text: pages[i])
-            enqueueCommand(BLECommand(data: pkt, channel: .content, description: "Content Page \(i)"))
+            enqueueCommand(BLECommand(data: pkt, channel: .content, description: "Content Page \(i)", delayAfter: 0.1))
             seq &+= 1; msgId += 1
         }
         
         // 5. Type 255 Mid-Stream Marker 流控标记帧
         let markerPacket = G2ProtocolEncoder.buildMarker(seq: seq, msgId: msgId)
-        enqueueCommand(BLECommand(data: markerPacket, channel: .content, description: "Mid-Stream Marker"))
+        enqueueCommand(BLECommand(data: markerPacket, channel: .content, description: "Mid-Stream Marker", delayAfter: 0.1))
         seq &+= 1; msgId += 1
         
         // 6. 正文 10-11 页推屏
@@ -354,21 +365,21 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             let secondBatchCount = min(12, pages.count)
             for i in 10..<secondBatchCount {
                 let pkt = G2ProtocolEncoder.buildContentPage(seq: seq, msgId: msgId, pageNum: i, text: pages[i])
-                enqueueCommand(BLECommand(data: pkt, channel: .content, description: "Content Page \(i)"))
+                enqueueCommand(BLECommand(data: pkt, channel: .content, description: "Content Page \(i)", delayAfter: 0.1))
                 seq &+= 1; msgId += 1
             }
         }
         
         // 7. GPU VSYNC Sync Trigger (0x80-00 type=14 on 5401)
         let syncPacket = G2ProtocolEncoder.buildSync(seq: seq, msgId: msgId)
-        enqueueCommand(BLECommand(data: syncPacket, channel: .content, description: "GPU VSYNC Sync Trigger"))
+        enqueueCommand(BLECommand(data: syncPacket, channel: .content, description: "GPU VSYNC Sync Trigger", delayAfter: 0.1))
         seq &+= 1; msgId += 1
         
         // 8. 剩余 12..13 页推屏
         if pages.count > 12 {
             for i in 12..<pages.count {
                 let pkt = G2ProtocolEncoder.buildContentPage(seq: seq, msgId: msgId, pageNum: i, text: pages[i])
-                enqueueCommand(BLECommand(data: pkt, channel: .content, description: "Content Page \(i)"))
+                enqueueCommand(BLECommand(data: pkt, channel: .content, description: "Content Page \(i)", delayAfter: 0.1))
                 seq &+= 1; msgId += 1
             }
         }
