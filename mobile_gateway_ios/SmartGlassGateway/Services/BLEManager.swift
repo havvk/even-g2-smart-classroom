@@ -78,13 +78,28 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
     }
     
+    // MARK: - 双耳双 BLE 外设管理结构
+    @Published var connectedPeripherals: [CBPeripheral] = []
+    private var controlTxChars: [ObjectIdentifier: CBCharacteristic] = [:]
+    private var contentTxChars: [ObjectIdentifier: CBCharacteristic] = [:]
+    private var renderingTxChars: [ObjectIdentifier: CBCharacteristic] = [:]
+    private var teleprompterTxChars: [ObjectIdentifier: CBCharacteristic] = [:]
+    
     func startScanning() {
         guard centralManager.state == .poweredOn else { return }
         isManualDisconnect = false
         hasHandshakeExecuted = false
         isScanning = true
-        lastBLEStatusMessage = "正在扫描附近的 Even G2 眼镜..."
+        lastBLEStatusMessage = "正在扫描附近的 Even G2 左右双耳眼镜..."
         centralManager.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+        
+        // 扫描 5 秒确保搜齐左右双耳 (_L_ 和 _R_) 避免只连单侧
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+            guard let self = self, self.isScanning else { return }
+            if !self.connectedPeripherals.isEmpty {
+                self.stopScanning()
+            }
+        }
     }
     
     func stopScanning() {
@@ -95,15 +110,17 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     func disconnect() {
         isManualDisconnect = true
         hasHandshakeExecuted = false
-        if let peripheral = targetPeripheral {
+        for peripheral in connectedPeripherals {
             centralManager.cancelPeripheralConnection(peripheral)
         }
+        connectedPeripherals.removeAll()
+        controlTxChars.removeAll()
+        contentTxChars.removeAll()
+        renderingTxChars.removeAll()
+        teleprompterTxChars.removeAll()
+        
         isConnected = false
         connectedPeripheralName = nil
-        controlTxChar = nil
-        contentTxChar = nil
-        renderingTxChar = nil
-        teleprompterTxChar = nil
         lastBLEStatusMessage = "已手动断开蓝牙"
     }
     
@@ -122,93 +139,99 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
         let name = peripheral.name ?? advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? ""
         if name.contains("Even G2") || name.contains("Smart Ring") || name.contains("Even") {
-            targetPeripheral = peripheral
-            targetPeripheral?.delegate = self
-            stopScanning()
-            centralManager.connect(peripheral, options: nil)
+            if !connectedPeripherals.contains(where: { $0.identifier == peripheral.identifier }) {
+                addLog("🔎 搜到 G2 外设: \(name) [RSSI: \(RSSI)]，发起双侧连入...")
+                peripheral.delegate = self
+                connectedPeripherals.append(peripheral)
+                centralManager.connect(peripheral, options: nil)
+            }
         }
     }
     
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         isConnected = true
         hasHandshakeExecuted = false
-        connectedPeripheralName = peripheral.name ?? "Even G2 Smart Glass"
-        lastBLEStatusMessage = "🟢 蓝牙已连接设备: \(connectedPeripheralName ?? "")"
+        let name = peripheral.name ?? "Even G2 Smart Glass"
+        connectedPeripheralName = connectedPeripherals.map { $0.name ?? "G2" }.joined(separator: " + ")
+        lastBLEStatusMessage = "🟢 已连入双耳设备: \(connectedPeripheralName ?? "")"
+        addLog("🤝 成功连接物理镜腿外设: \(name)")
         peripheral.discoverServices(nil)
     }
     
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        isConnected = false
-        hasHandshakeExecuted = false
-        isTeleprompterSessionActive = false
-        connectedPeripheralName = nil
-        controlTxChar = nil
-        contentTxChar = nil
-        renderingTxChar = nil
-        teleprompterTxChar = nil
-        if !isManualDisconnect {
-            startScanning()
+        let id = peripheral.identifier
+        connectedPeripherals.removeAll(where: { $0.identifier == id })
+        let key = ObjectIdentifier(peripheral)
+        controlTxChars.removeValue(forKey: key)
+        contentTxChars.removeValue(forKey: key)
+        renderingTxChars.removeValue(forKey: key)
+        teleprompterTxChars.removeValue(forKey: key)
+        
+        if connectedPeripherals.isEmpty {
+            isConnected = false
+            hasHandshakeExecuted = false
+            isTeleprompterSessionActive = false
+            connectedPeripheralName = nil
+            if !isManualDisconnect {
+                startScanning()
+            } else {
+                lastBLEStatusMessage = "已断开蓝牙，点击按钮可重新扫描"
+            }
         } else {
-            lastBLEStatusMessage = "已断开蓝牙，点击按钮可重新扫描"
+            connectedPeripheralName = connectedPeripherals.map { $0.name ?? "G2" }.joined(separator: " + ")
+            lastBLEStatusMessage = "🟢 维护单侧/双侧通道: \(connectedPeripheralName ?? "")"
         }
     }
     
     // MARK: - CBPeripheralDelegate
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         if let error = error {
-            addLog("❌ 发现服务异常: \(error.localizedDescription)")
+            addLog("❌ 发现服务异常 (\(peripheral.name ?? "")): \(error.localizedDescription)")
             return
         }
         guard let services = peripheral.services else { return }
         for service in services {
-            addLog("🔎 发现 GATT 服务: \(service.uuid.uuidString)")
             peripheral.discoverCharacteristics(nil, for: service)
         }
     }
     
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         if let error = error {
-            addLog("❌ 发现特征异常: \(error.localizedDescription)")
+            addLog("❌ 发现特征异常 (\(peripheral.name ?? "")): \(error.localizedDescription)")
             return
         }
         guard let characteristics = service.characteristics else { return }
+        let pKey = ObjectIdentifier(peripheral)
+        
         for characteristic in characteristics {
             let uuidStr = characteristic.uuid.uuidString.uppercased()
             let props = characteristic.properties
             
             let canNotify = props.contains(.notify) || props.contains(.indicate)
             let canWrite = props.contains(.write) || props.contains(.writeWithoutResponse)
-            addLog("🔍 特征值: \(uuidStr) [Notify/Ind:\(canNotify), Write:\(canWrite)]")
             
-            // 开启 Notify 接收通道
             if canNotify {
                 peripheral.setNotifyValue(true, for: characteristic)
-                addLog("🔔 已开启 Notify/Indicate 接收通道: \(uuidStr)")
+                addLog("🔔 已开启 Notify (\(peripheral.name ?? "")): \(uuidStr)")
             }
             
-            // 按 UUID 结尾绑定 G2 专属 Channel 特征通道 (排除 6E40 串口)
             if canWrite {
                 if uuidStr.contains("0001") {
-                    controlTxChar = characteristic
-                    addLog("✍️ 绑定 [0001 控制通道] 写特征: \(uuidStr)")
+                    controlTxChars[pKey] = characteristic
+                    addLog("✍️ 绑定 [0001 控制通道] (\(peripheral.name ?? "")): \(uuidStr)")
                 } else if uuidStr.contains("5401") {
-                    contentTxChar = characteristic
-                    addLog("✍️ 绑定 [5401 内容通道] 写特征: \(uuidStr)")
+                    contentTxChars[pKey] = characteristic
+                    addLog("✍️ 绑定 [5401 内容通道] (\(peripheral.name ?? "")): \(uuidStr)")
                 } else if uuidStr.contains("6401") {
-                    renderingTxChar = characteristic
-                    addLog("✍️ 绑定 [6401 渲染通道] 写特征: \(uuidStr)")
+                    renderingTxChars[pKey] = characteristic
+                    addLog("✍️ 绑定 [6401 渲染通道] (\(peripheral.name ?? "")): \(uuidStr)")
                 } else if uuidStr.contains("7401") {
-                    teleprompterTxChar = characteristic
-                    addLog("✍️ 绑定 [7401 提词器通道] 写特征: \(uuidStr)")
+                    teleprompterTxChars[pKey] = characteristic
+                    addLog("✍️ 绑定 [7401 提词通道] (\(peripheral.name ?? "")): \(uuidStr)")
                 }
             }
         }
-        
-        // 当获取到了任意有效 G2 写特征且尚未执行握手时，预留通道
-        let hasAnyTxChar = controlTxChar != nil || contentTxChar != nil || teleprompterTxChar != nil
-        if hasAnyTxChar {
-            addLog("✍️ 已成功识别并绑定 G2 物理写特征通道")
-        }
+        addLog("✍️ 镜腿外设 [\(peripheral.name ?? "G2")] 写通道准备就绪")
     }
     
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
@@ -552,38 +575,42 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     }
 
     private func sendRawData(_ data: Data, channel: G2Channel = .teleprompter) {
-        guard isConnected else {
-            addLog("⚠️ 发送失败: 蓝牙未连接")
+        guard isConnected, !connectedPeripherals.isEmpty else {
+            addLog("⚠️ 发送失败: 蓝牙双侧外设均未连接")
             return
         }
-        guard let peripheral = targetPeripheral else { return }
-        
-        let targetChar: CBCharacteristic?
-        switch channel {
-        case .control:
-            // 鉴权与 Session 时间同步必须由 5401 通道承载并获取固件 ACK
-            targetChar = contentTxChar ?? controlTxChar
-        case .content:
-            targetChar = contentTxChar ?? teleprompterTxChar ?? controlTxChar
-        case .rendering:
-            targetChar = renderingTxChar ?? teleprompterTxChar ?? contentTxChar
-        case .teleprompter:
-            targetChar = teleprompterTxChar ?? contentTxChar ?? controlTxChar
-        }
-        
-        guard let txChar = targetChar else {
-            addLog("⚠️ 发送失败: 无法找到通道 [\(channel)] 对应的 TX 特征值")
-            return
-        }
-        
-        let writeType = getWriteType(for: txChar)
-        peripheral.writeValue(data, for: txChar, type: writeType)
         
         let hexString = data.map { String(format: "%02X", $0) }.joined(separator: " ")
-        let typeStr = writeType == .withResponse ? "withResponse" : "withoutResponse"
-        let uuidSuffix = String(txChar.uuid.uuidString.suffix(4))
-        addLog("📤 Tx -> [\(uuidSuffix)] [\(typeStr)]: [\(hexString)]")
-        onG2TelemetryLog?("Tx", hexString, "下发 G2 帧 [\(uuidSuffix)] [\(typeStr)]")
+        var sentCount = 0
+        
+        for peripheral in connectedPeripherals {
+            let pKey = ObjectIdentifier(peripheral)
+            let targetChar: CBCharacteristic?
+            switch channel {
+            case .control:
+                targetChar = contentTxChars[pKey] ?? controlTxChars[pKey]
+            case .content:
+                targetChar = contentTxChars[pKey] ?? teleprompterTxChars[pKey] ?? controlTxChars[pKey]
+            case .rendering:
+                targetChar = renderingTxChars[pKey] ?? teleprompterTxChars[pKey] ?? contentTxChars[pKey]
+            case .teleprompter:
+                targetChar = contentTxChars[pKey] ?? teleprompterTxChars[pKey] ?? controlTxChars[pKey]
+            }
+            
+            if let txChar = targetChar {
+                let writeType = getWriteType(for: txChar)
+                peripheral.writeValue(data, for: txChar, type: writeType)
+                sentCount += 1
+            }
+        }
+        
+        guard sentCount > 0 else {
+            addLog("⚠️ 发送失败: 无法在连入通道中获取目标物理 TX 特征值")
+            return
+        }
+        
+        addLog("📤 Tx (\(sentCount)耳) -> [\(channel)]: [\(hexString)]")
+        onG2TelemetryLog?("Tx", hexString, "下发 G2 帧 (\(sentCount)耳) [\(channel)]")
     }
     
     func commitRender() {
