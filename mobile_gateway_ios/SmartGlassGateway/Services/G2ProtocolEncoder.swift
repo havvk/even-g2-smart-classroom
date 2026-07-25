@@ -183,32 +183,12 @@ class G2ProtocolEncoder {
         return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
-    /// 配置 G2 提词器手势滚动模式 (0x00: 手动触    // MARK: - 2. Display Config (Service 0x0E-20)
+    // MARK: - 2. Display Config (Service 0x0E-20)
     
-    static func buildDisplayConfig(seq: UInt8, msgId: Int, targetWidthChars: Int = 11) -> Data {
-        let regionWidth = Float(targetWidthChars * 23)
-        var widthBytes = withUnsafeBytes(of: regionWidth) { Data($0) }
-        if widthBytes.count < 4 { widthBytes = Data([0x00, 0xE0, 0x94, 0x44]) }
-        
-        let regionHeight: Float = 200.0 // 200.0px 官方标准 MicroLED 物理视口高度
-        var heightBytes = withUnsafeBytes(of: regionHeight) { Data($0) }
-        if heightBytes.count < 4 { heightBytes = Data([0x00, 0x00, 0xC8, 0x43]) }
-        
+    static func buildDisplayConfig(seq: UInt8, msgId: Int) -> Data {
+        let configHex = "08011213080210904E1D00E0944425000000002800300012130803100D0F1D00408D442500000000280030001212080410001D000088422500000000280030001212080510001D00009242250000A242280030001212080610001D0000C642250000C442280030001800"
         var configBytes = Data()
-        // 注入 Region 1 & Region 2 动态宽度与 400.0f 画布高度
-        configBytes.append(Data([0x08, 0x01, 0x12, 0x13, 0x08, 0x01, 0x10, 0x90, 0x4E, 0x1D]))
-        configBytes.append(widthBytes) // Region 1 动态宽度
-        configBytes.append(Data([0x25]))
-        configBytes.append(heightBytes) // Region 1 400.0f 动态高度
-        configBytes.append(Data([0x28, 0x00, 0x30, 0x00, 0x12, 0x13, 0x08, 0x02, 0x10, 0x90, 0x4E, 0x1D]))
-        configBytes.append(widthBytes) // Region 2 动态宽度
-        configBytes.append(Data([0x25]))
-        configBytes.append(heightBytes) // Region 2 400.0f 动态高度
-        configBytes.append(Data([0x28, 0x00, 0x30, 0x00]))
-        
-        // Region 3, 4, 5 Remaining Configs
-        let remainHex = "12130803100D0F1D00408D442500000000280030001212080410001D000088422500000000280030001212080510001D00009242250000A242280030001212080610001D0000C642250000C442280030001800"
-        var hexStr = remainHex
+        var hexStr = configHex
         while !hexStr.isEmpty {
             let subHex = hexStr.prefix(2)
             hexStr = String(hexStr.dropFirst(2))
@@ -219,59 +199,21 @@ class G2ProtocolEncoder {
         
         var payload = Data([0x08, 0x02, 0x10])
         payload.append(encodeVarint(msgId))
-        payload.append(Data([0x22]))
-        payload.append(encodeVarint(configBytes.count))
+        payload.append(Data([0x22, 0x6A]))
         payload.append(configBytes)
         
         return buildPacket(seq: seq, serviceHi: 0x0E, serviceLo: 0x20, payload: payload)
     }
     
-    // MARK: - 3. Teleprompter List (Service 0x06-20 type=2)
+    // MARK: - 3. Teleprompter Init (Service 0x06-20 type=1)
     
-    /// 注册讲稿元数据列表 (官方必须下发 Type 2 才能在 G2 显存建立全量滚动画卷)
-    static func buildTeleprompterList(seq: UInt8, msgId: Int, scriptId: String = "script_01", title: String = "SmartClassroom") -> Data {
-        let scriptIdBytes = Data(scriptId.utf8)
-        let titleBytes = Data(title.utf8)
+    static func buildTeleprompterInit(seq: UInt8, msgId: Int, totalLines: Int = 10, manualMode: Bool = true) -> Data {
+        let mode: UInt8 = manualMode ? 0x00 : 0x01
+        let contentHeight = max(1, (totalLines * 2665) / 140)
         
-        var scriptMsg = Data([0x0A])
-        scriptMsg.append(encodeVarint(scriptIdBytes.count))
-        scriptMsg.append(scriptIdBytes)
-        scriptMsg.append(Data([0x12]))
-        scriptMsg.append(encodeVarint(titleBytes.count))
-        scriptMsg.append(titleBytes)
-        
-        var listMsg = Data([0x0A])
-        listMsg.append(encodeVarint(scriptMsg.count))
-        listMsg.append(scriptMsg)
-        
-        var payload = Data([0x08, 0x02, 0x10])
-        payload.append(encodeVarint(msgId))
-        payload.append(Data([0x22]))
-        payload.append(encodeVarint(listMsg.count))
-        payload.append(listMsg)
-        
-        return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
-    }
-    
-    // MARK: - 4. Teleprompter Init (Service 0x06-20 type=1)
-    
-    static func buildTeleprompterInit(seq: UInt8, msgId: Int, totalLines: Int = 70, manualMode: Bool = true, targetWidthChars: Int = 11, fontSize: Int = 5) -> Data {
-        let lineHeight = 230 // 23.0px 官方标准行高
-        let contentHeight = max(1, totalLines * lineHeight) // 精确匹配实际下发的总行高
-        let displayWidth = targetWidthChars * 23 // 动态计算物理画布视口宽度 (例如 28 字 = 644px)
-        
-        let modeByte: UInt8 = manualMode ? 0x00 : 0x01
-        let fontByte: UInt8 = UInt8(fontSize & 0xFF)
-        
-        var display = Data([0x08, 0x01, 0x10, 0x00, 0x18, 0x00, 0x20])
-        display.append(encodeVarint(displayWidth))
-        display.append(0x28)
+        var display = Data([0x08, 0x01, 0x10, 0x00, 0x18, 0x00, 0x20, 0x8B, 0x02, 0x28])
         display.append(encodeVarint(contentHeight))
-        display.append(Data([0x30]))
-        display.append(encodeVarint(lineHeight)) // Line height = 230
-        display.append(Data([0x38])) // Tag 7: Viewport Height
-        display.append(encodeVarint(2588)) // 2588 = 258.8px (100% 官方全屏 9 行物理高度)
-        display.append(Data([0x40, fontByte, 0x48, modeByte])) // Font size + mode
+        display.append(Data([0x30, 0xE6, 0x01, 0x38, 0x8E, 0x0A, 0x40, 0x05, 0x48, mode]))
         
         var settings = Data([0x08, 0x01, 0x12])
         settings.append(encodeVarint(display.count))
@@ -288,18 +230,16 @@ class G2ProtocolEncoder {
     
     // MARK: - 4. Content Page (Service 0x06-20 type=3)
     
-    /// 生成单页提词数据包 (lineCount 固定设为 10 开启全屏大视口，单包 Payload 锁定在 150 字节内保证零溢出亮屏)
-    static func buildContentPagePackets(seq: inout UInt8, msgId: Int, pageNum: Int, text: String, lineCount: Int = 10) -> [Data] {
-        let textBytes = Data(text.utf8)
+    static func buildContentPage(seq: UInt8, msgId: Int, pageNum: Int, text: String) -> Data {
+        let formattedText = "\n" + text
+        let textBytes = Data(formattedText.utf8)
         
         var inner = Data([0x08])
         inner.append(encodeVarint(pageNum))
-        inner.append(Data([0x10]))
-        inner.append(encodeVarint(lineCount)) // 动态注入页面实际行数 (5~10 行)
-        inner.append(Data([0x1A]))
+        inner.append(Data([0x10, 0x0A, 0x1A]))
         inner.append(encodeVarint(textBytes.count))
         inner.append(textBytes)
-
+        
         var content = Data([0x2A])
         content.append(encodeVarint(inner.count))
         content.append(inner)
@@ -308,37 +248,10 @@ class G2ProtocolEncoder {
         payload.append(encodeVarint(msgId))
         payload.append(content)
         
-        let pkts = buildPackets(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
-        return pkts
-    }
-    
-    static func buildContentPage(seq: UInt8, msgId: Int, pageNum: Int, text: String, lineCount: Int = 10) -> Data {
-        var dummySeq = seq
-        let pkts = buildContentPagePackets(seq: &dummySeq, msgId: msgId, pageNum: pageNum, text: text, lineCount: lineCount)
-        return pkts.first ?? Data()
-    }
-    
-    // MARK: - 5. Teleprompter Complete / Commit Render Trigger (Service 0x06-20 type=4)
-    
-    /// 生成 TeleprompterComplete (Type 4) 帧: 告诉 G2 固件显存 "正文数据传输完毕，立即 Commit 并点亮 MicroLED 屏幕"
-    static func buildTeleprompterComplete(seq: UInt8, msgId: Int, startPage: Int = 0, totalPages: Int = 1, totalLines: Int = 9) -> Data {
-        var inner = Data([0x08])
-        inner.append(encodeVarint(startPage))
-        inner.append(Data([0x10]))
-        inner.append(encodeVarint(totalPages))
-        inner.append(Data([0x18]))
-        inner.append(encodeVarint(totalLines))
-        
-        var payload = Data([0x08, 0x04, 0x10])
-        payload.append(encodeVarint(msgId))
-        payload.append(Data([0x32]))
-        payload.append(encodeVarint(inner.count))
-        payload.append(inner)
-        
         return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
-    // MARK: - 6. Mid-Stream Marker (Service 0x06-20 type=255)
+    // MARK: - Mid-Stream Marker (Service 0x06-20 type=255)
     
     static func buildMarker(seq: UInt8, msgId: Int) -> Data {
         var payload = Data([0x08, 0xFF, 0x01, 0x10])
@@ -347,7 +260,7 @@ class G2ProtocolEncoder {
         return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
-    // MARK: - 6. Sync Trigger (Service 0x80-00 type=14)
+    // MARK: - 5. Sync Trigger (Service 0x80-00 type=14)
     
     static func buildSync(seq: UInt8, msgId: Int) -> Data {
         var payload = Data([0x08, 0x0E, 0x10])
@@ -356,7 +269,7 @@ class G2ProtocolEncoder {
         return buildPacket(seq: seq, serviceHi: 0x80, serviceLo: 0x00, payload: payload)
     }
     
-    // MARK: - 7. Render Commit Trigger (Service 0x64-02: 0x80 0x00)
+    // MARK: - 6. Render Commit Trigger (Service 0x64-02: 0x80 0x00)
     
     static func buildRenderCommitPacket(seq: UInt8) -> Data {
         let payload = Data([0x80, 0x00])
@@ -369,23 +282,7 @@ class G2ProtocolEncoder {
         return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
-    /// 传输完成指令 (Service 0x06-20 Type 4 Content Complete)
-    static func buildContentCompletePacket(seq: UInt8, msgId: Int, totalPages: Int = 14, totalLines: Int = 140) -> Data {
-        var inner = Data([0x08, 0x00]) // start_page = 0
-        inner.append(Data([0x10]))
-        inner.append(encodeVarint(totalPages))
-        inner.append(Data([0x18]))
-        inner.append(encodeVarint(totalLines))
-        
-        var payload = Data([0x08, 0x04, 0x10])
-        payload.append(encodeVarint(msgId))
-        payload.append(Data([0x32, UInt8(inner.count & 0xFF)]))
-        payload.append(inner)
-        
-        return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
-    }
-    
-    // MARK: - 8. Scroll Sync Event (Service 0x06-20 type=2)
+    // MARK: - 7. Scroll Sync Event (Service 0x06-20 type=2)
     
     /// 生成官方 ProtoTeleprompterExt|sendTeleprompterScrollSyncEvent 滚动同步报文
     static func buildScrollSync(seq: UInt8, msgId: Int, pageLine: Int) -> Data {
@@ -403,56 +300,61 @@ class G2ProtocolEncoder {
         return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
-    // MARK: - Text Formatter (Auto-Wrap & Dynamic Multi-Page Padding)
+    // MARK: - Text Formatter (1:1 Match with Python teleprompter.py)
     
-    /// 根据设定的单行汉字字数 targetWidthChars (10..28) 动态自动切行与单包满屏切页 (linesPerPage 默认 9 行全屏)
-    static func formatTextToPages(_ rawText: String, targetWidthChars: Int = 11, linesPerPage: Int = 9) -> (pages: [String], wrappedLines: [String], linesPerPage: Int) {
-        let maxBytesPerLine = targetWidthChars * 3
-        
+    /// 将讲稿文本按照单行 25 字符、单页 10 行切分，并强制补齐至至少 14 页画卷
+    static func formatTextToPages(_ rawText: String, charsPerLine: Int = 25, linesPerPage: Int = 10) -> (pages: [String], totalLines: Int) {
         let text = rawText.replacingOccurrences(of: "\\n", with: "\n")
-        var wrappedLines = [String]()
+        var wrapped = [String]()
         
         let rawLines = text.components(separatedBy: "\n")
         for line in rawLines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty {
-                wrappedLines.append(" ")
+                wrapped.append("")
                 continue
             }
             
-            var currentLine = ""
-            for char in trimmed {
-                let testLine = currentLine + String(char)
-                if testLine.utf8.count > maxBytesPerLine {
-                    if !currentLine.isEmpty {
-                        wrappedLines.append(currentLine)
+            let words = trimmed.components(separatedBy: .whitespaces)
+            var current = ""
+            for word in words {
+                if current.count + word.count + 1 > charsPerLine {
+                    if !current.isEmpty {
+                        wrapped.append(current.trimmingCharacters(in: .whitespaces))
                     }
-                    currentLine = String(char)
+                    current = word + " "
                 } else {
-                    currentLine = testLine
+                    current += word + " "
                 }
             }
-            if !currentLine.isEmpty {
-                wrappedLines.append(currentLine)
+            if !current.trimmingCharacters(in: .whitespaces).isEmpty {
+                wrapped.append(current.trimmingCharacters(in: .whitespaces))
             }
         }
         
-        if wrappedLines.isEmpty {
-            wrappedLines = [" "]
+        if wrapped.isEmpty {
+            wrapped = [text]
+        }
+        
+        while wrapped.count < linesPerPage {
+            wrapped.append(" ")
         }
         
         var pages = [String]()
-        for i in stride(from: 0, to: wrappedLines.count, by: linesPerPage) {
-            let chunk = Array(wrappedLines[i..<min(i + linesPerPage, wrappedLines.count)])
-            let pageText = chunk.joined(separator: "\n") + "\n"
-            pages.append(pageText)
+        for i in stride(from: 0, to: wrapped.count, by: linesPerPage) {
+            var pageLines = Array(wrapped[i..<min(i + linesPerPage, wrapped.count)])
+            while pageLines.count < linesPerPage {
+                pageLines.append(" ")
+            }
+            pages.append(pageLines.joined(separator: "\n") + " \n")
         }
         
-        // 关键固件防护 (对齐 teleprompter.md 逆向规范): 少于 14 页的短文本必须强制用空白页补满至 14 页，否则 G2 滚动引擎除以零崩溃黑屏！
         while pages.count < 14 {
-            pages.append(" \n")
+            let emptyPage = Array(repeating: " ", count: linesPerPage).joined(separator: "\n") + " \n"
+            pages.append(emptyPage)
         }
         
-        return (pages, wrappedLines, linesPerPage)
+        let totalLines = rawLines.count
+        return (pages, totalLines)
     }
 }

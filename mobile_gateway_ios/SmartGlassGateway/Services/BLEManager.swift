@@ -197,11 +197,10 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         if let error = error {
-            addLog("❌ 发现特征异常 (\(peripheral.name ?? "")): \(error.localizedDescription)")
+            addLog("❌ 发现特征异常: \(error.localizedDescription)")
             return
         }
         guard let characteristics = service.characteristics else { return }
-        let pKey = ObjectIdentifier(peripheral)
         
         for characteristic in characteristics {
             let uuidStr = characteristic.uuid.uuidString.uppercased()
@@ -210,28 +209,28 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             let canNotify = props.contains(.notify) || props.contains(.indicate)
             let canWrite = props.contains(.write) || props.contains(.writeWithoutResponse)
             
-            if canNotify {
+            // 严格对齐 teleprompter.py: 只为 5402 通道开启 Notify 接收应答 ACK
+            if canNotify && uuidStr.contains("5402") {
                 peripheral.setNotifyValue(true, for: characteristic)
-                addLog("🔔 已开启 Notify (\(peripheral.name ?? "")): \(uuidStr)")
+                addLog("🔔 已开启 5402 专属 Notify 接收通道: \(uuidStr)")
             }
             
             if canWrite {
                 if uuidStr.contains("0001") {
-                    controlTxChars[pKey] = characteristic
-                    addLog("✍️ 绑定 [0001 控制通道] (\(peripheral.name ?? "")): \(uuidStr)")
+                    controlTxChar = characteristic
                 } else if uuidStr.contains("5401") {
-                    contentTxChars[pKey] = characteristic
-                    addLog("✍️ 绑定 [5401 内容通道] (\(peripheral.name ?? "")): \(uuidStr)")
+                    contentTxChar = characteristic
+                    addLog("✍️ 绑定 [5401 提词核心写特征]: \(uuidStr)")
                 } else if uuidStr.contains("6401") {
-                    renderingTxChars[pKey] = characteristic
-                    addLog("✍️ 绑定 [6401 渲染通道] (\(peripheral.name ?? "")): \(uuidStr)")
+                    renderingTxChar = characteristic
                 } else if uuidStr.contains("7401") {
-                    teleprompterTxChars[pKey] = characteristic
-                    addLog("✍️ 绑定 [7401 提词通道] (\(peripheral.name ?? "")): \(uuidStr)")
+                    teleprompterTxChar = characteristic
                 }
             }
         }
-        addLog("✍️ 镜腿外设 [\(peripheral.name ?? "G2")] 写通道准备就绪")
+        if contentTxChar != nil {
+            addLog("✍️ G2 [5401 提词核心通道] 绑定完成，物理传输准备就绪！")
+        }
     }
     
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
@@ -243,7 +242,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
     }
     
-    // MARK: - 官方 FIFO 串行发包队列机制 (Official FIFO Command Queue)
+    // MARK: - 官方 FIFO 串行发包队列机制 (100% 对齐 Python 100ms 时间戳)
     struct BLECommand {
         let data: Data
         let channel: G2Channel
@@ -259,7 +258,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         processNextQueueCommand()
     }
     
-    /// 串行处理队列中的下一条指令（由 didWriteValueFor 回调或间隔锁安全出列）
+    /// 串行处理队列中的下一条指令（1:1 匹配 Python asyncio.sleep(0.1) 100ms 间隔锁）
     private func processNextQueueCommand() {
         guard !isProcessingQueue, !commandQueue.isEmpty else { return }
         isProcessingQueue = true
@@ -267,8 +266,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         let command = commandQueue.removeFirst()
         sendRawData(command.data, channel: command.channel)
         
-        // 双物理外设 40ms 平稳连接间隔锁：确保 iOS 蓝牙栈同时向左右双耳完成数据交替
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             self?.isProcessingQueue = false
             self?.processNextQueueCommand()
         }
@@ -306,31 +304,18 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         enqueueCommand(BLECommand(data: packet, channel: .content, description: "ScrollSync Line \(pageLine)"))
     }
     
-    /// 完整推送提词文本到 G2 智能眼镜 (100% 官方串行队列流水线)
-    func sendTeleprompterText(_ text: String, force: Bool = false, targetWidthChars: Int = 28) {
+    /// 完整推送提词文本到 G2 智能眼镜 (1:1 匹配验证成功的 Python teleprompter.py 发包全流程)
+    func sendTeleprompterText(_ text: String, force: Bool = false) {
         let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanText.isEmpty else { return }
-        
-        // 防抖控制：同文本且未强推则忽略
-        if !force && cleanText == lastSentTeleprompterText && isTeleprompterSessionActive {
-            return
-        }
         
         cancelPendingTeleprompterTasks()
         lastSentTeleprompterText = cleanText
         isTeleprompterSessionActive = true
         
-        // 自动断句并切分为 14 页 140 行全量画卷 (单页 9 行全屏)
-        let linesPerPage = 9
-        let (pages, wrappedLines, _) = G2ProtocolEncoder.formatTextToPages(cleanText, targetWidthChars: targetWidthChars, linesPerPage: linesPerPage)
-        let totalLines = max(140, pages.count * linesPerPage)
+        let (pages, totalLines) = G2ProtocolEncoder.formatTextToPages(cleanText, charsPerLine: 25, linesPerPage: 10)
         
-        DispatchQueue.main.async {
-            self.currentWrappedLines = wrappedLines
-            self.currentFocusPageLine = 0
-        }
-        
-        addLog("📜 准备推屏: 文本切分为 \(pages.count) 页 (\(linesPerPage)行/页, 幅宽\(targetWidthChars)字), 画布总行数 \(totalLines) 行")
+        addLog("📜 准备推屏: 文本切分为 \(pages.count) 页, 画布总行数 \(totalLines) 行")
         
         // 1. Auth 序列 (7 帧: 压入串行队列至 5401 通道)
         let authPackets = G2ProtocolEncoder.buildAuthPackets()
@@ -341,90 +326,52 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         var seq: UInt8 = 0x08
         var msgId: Int = 0x14
         
-        // 2. TeleprompterStart (0x06-20) - 强切 G2 Window Manager 视口至提词器前台 (5401)
-        let enterModePacket = G2ProtocolEncoder.buildEnterTeleprompterModePacket(seq: seq, msgId: msgId)
-        enqueueCommand(BLECommand(data: enterModePacket, channel: .content, description: "TeleprompterStart"))
-        seq &+= 1; msgId += 1
-        
-        // 3. DisplayWake (0x04-20) - 物理点亮 MicroLED 电源 (5401)
-        let wakePacket = G2ProtocolEncoder.buildWakePacket(seq: seq, msgId: msgId)
-        enqueueCommand(BLECommand(data: wakePacket, channel: .content, description: "DisplayWake"))
-        seq &+= 1; msgId += 1
-        
-        // 4. DisplayConfig (0x0E-20) - 配置 Region 2 幅宽 (5401)
-        let configPacket = G2ProtocolEncoder.buildDisplayConfig(seq: seq, msgId: msgId, targetWidthChars: targetWidthChars)
+        // 2. DisplayConfig (0x0E-20)
+        let configPacket = G2ProtocolEncoder.buildDisplayConfig(seq: seq, msgId: msgId)
         enqueueCommand(BLECommand(data: configPacket, channel: .content, description: "DisplayConfig"))
         seq &+= 1; msgId += 1
         
-        // 5. TeleprompterInit (0x06-20) - 画布视口初始化 (5401)
-        let initPacket = G2ProtocolEncoder.buildTeleprompterInit(seq: seq, msgId: msgId, totalLines: totalLines, manualMode: true, targetWidthChars: targetWidthChars)
+        // 3. TeleprompterInit (0x06-20 type=1)
+        let initPacket = G2ProtocolEncoder.buildTeleprompterInit(seq: seq, msgId: msgId, totalLines: totalLines, manualMode: true)
         enqueueCommand(BLECommand(data: initPacket, channel: .content, description: "TeleprompterInit"))
         seq &+= 1; msgId += 1
         
-        // 6. TeleprompterList (0x06-20) - 下发讲稿元数据 (5401)
-        let listPacket = G2ProtocolEncoder.buildTeleprompterList(seq: seq, msgId: msgId)
-        enqueueCommand(BLECommand(data: listPacket, channel: .content, description: "TeleprompterList"))
-        seq &+= 1; msgId += 1
-        
-        // 7. 正文前 10 页 (0..9) 推屏 (5401)
+        // 4. 正文 0-9 页推屏
         let firstBatchCount = min(10, pages.count)
         for i in 0..<firstBatchCount {
-            let pageMsg = msgId
-            let pageText = pages[i]
-            let packets = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: pageMsg, pageNum: i, text: pageText, lineCount: linesPerPage)
-            msgId += 1
-            for pkt in packets {
-                enqueueCommand(BLECommand(data: pkt, channel: .content, description: "Content Page \(i)"))
-            }
+            let pkt = G2ProtocolEncoder.buildContentPage(seq: seq, msgId: msgId, pageNum: i, text: pages[i])
+            enqueueCommand(BLECommand(data: pkt, channel: .content, description: "Content Page \(i)"))
+            seq &+= 1; msgId += 1
         }
         
-        // 8. Type 255 Mid-Stream Marker 流控标记帧 (5401)
+        // 5. Type 255 Mid-Stream Marker 流控标记帧
         let markerPacket = G2ProtocolEncoder.buildMarker(seq: seq, msgId: msgId)
         enqueueCommand(BLECommand(data: markerPacket, channel: .content, description: "Mid-Stream Marker"))
         seq &+= 1; msgId += 1
         
-        // 9. 剩余正文页推屏 (5401)
+        // 6. 正文 10-11 页推屏
         if pages.count > 10 {
-            for i in 10..<pages.count {
-                let pageMsg = msgId
-                let pageText = pages[i]
-                let packets = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: pageMsg, pageNum: i, text: pageText, lineCount: linesPerPage)
-                msgId += 1
-                for pkt in packets {
-                    enqueueCommand(BLECommand(data: pkt, channel: .content, description: "Content Page \(i)"))
-                }
+            let secondBatchCount = min(12, pages.count)
+            for i in 10..<secondBatchCount {
+                let pkt = G2ProtocolEncoder.buildContentPage(seq: seq, msgId: msgId, pageNum: i, text: pages[i])
+                enqueueCommand(BLECommand(data: pkt, channel: .content, description: "Content Page \(i)"))
+                seq &+= 1; msgId += 1
             }
         }
         
-        // 10. TeleprompterComplete (0x06-20) - Commit 物理渲染提交 (5401)
-        let completeSeq = seq
-        let completeMsg = msgId
-        let totalPages = max(14, pages.count)
-        let commitTotalLines = max(140, totalPages * linesPerPage)
-        let completePacket = G2ProtocolEncoder.buildTeleprompterComplete(
-            seq: completeSeq,
-            msgId: completeMsg,
-            startPage: 0,
-            totalPages: totalPages,
-            totalLines: commitTotalLines
-        )
-        enqueueCommand(BLECommand(data: completePacket, channel: .content, description: "TeleprompterComplete"))
+        // 7. GPU VSYNC Sync Trigger (0x80-00 type=14 on 5401)
+        let syncPacket = G2ProtocolEncoder.buildSync(seq: seq, msgId: msgId)
+        enqueueCommand(BLECommand(data: syncPacket, channel: .content, description: "GPU VSYNC Sync Trigger"))
         seq &+= 1; msgId += 1
         
-        // 11. ScrollSync (0x06-20) - 视口归位 (5401)
-        let syncSeq = seq
-        let syncMsg = msgId
-        let syncPacket = G2ProtocolEncoder.buildScrollSync(seq: syncSeq, msgId: syncMsg, pageLine: 0)
-        enqueueCommand(BLECommand(data: syncPacket, channel: .teleprompter, description: "ScrollSync"))
-        seq &+= 1; msgId += 1
-        
-        // 10. GPU VSYNC Sync Trigger (Service 0x80-00 type=14 on 5401)
-        let gpuSyncSeq = seq
-        let gpuSyncMsg = msgId
-        let gpuSyncPacket = G2ProtocolEncoder.buildSync(seq: gpuSyncSeq, msgId: gpuSyncMsg)
-        enqueueCommand(BLECommand(data: gpuSyncPacket, channel: .control, description: "GPU VSYNC Sync Trigger"))
-        // 11. 完成推屏任务闭环标记
-        enqueueCommand(BLECommand(data: Data(), channel: .control, description: "Session Complete Marker"))
+        // 8. 剩余 12..13 页推屏
+        if pages.count > 12 {
+            for i in 12..<pages.count {
+                let pkt = G2ProtocolEncoder.buildContentPage(seq: seq, msgId: msgId, pageNum: i, text: pages[i])
+                enqueueCommand(BLECommand(data: pkt, channel: .content, description: "Content Page \(i)"))
+                seq &+= 1; msgId += 1
+            }
+        }
     }
     
     /// 推送全屏满屏提词文本 (10行/页 28字/行 满屏全宽滚动模式)
