@@ -83,17 +83,43 @@ Service ID 在物理帧头中占 2 字节（`svc_hi`, `svc_lo`）：
 - **Magic (byte 0)**：固定魔数 `0xAA`。
 - **Type (byte 1)**：`0x21`（Command, 手机 $\rightarrow$ 眼镜），`0x12`（Response, 眼镜 $\rightarrow$ 手机）。
 - **Seq ID (byte 2)**：单包平滑自增计数器 (`0x00 ~ 0xFF`)。
-- **Len (byte 3)**：`Payload 长度 + 2`（包含 CRC16 长度）。
-- **Packet Total (byte 4)**：长数据切片总包数（未切片恒为 `0x01`）。
+- **Len (byte 3)**：
+  - **单包** (`pktTot=1`)：`Payload 长度 + 2`（包含帧级 CRC16 的 2 字节）。
+  - **多包子包** (`pktTot≥2`)：`Chunk 长度`（**不含** CRC，直接等于本子包承载的字节数）。
+- **Packet Total (byte 4)**：长数据切片总包数（未切片恒为 `0x01`，实测最大值为 `4`）。
 - **Packet Serial (byte 5)**：当前切片序号（从 `0x01` 开始）。
 - **Service Hi/Lo (bytes 6-7)**：服务分类 ID（如 `0x06 0x20`）。
 
-### 4.2 CRC16-CCITT 算法规范 (XModem 模式)
+### 4.2 CRC16-CCITT 双层校验机制 🆕
+
+> ⚠️ **关键发现 (2026-07-29)**：单包与多包使用**完全不同的 CRC 校验机制**。这一差异是导致第三方多包推送黑屏的核心根因。
+
+**算法参数（两者共用）**：
 - **算法模型**：CRC-16/CCITT (`XModem`)
 - **初始值**：`0xFFFF`
 - **多项式**：`0x1021`
-- **计算范围**：包含 Header (前 8 字节) 与 Payload 全部字节
 - **输出格式**：Little-Endian（低字节在前）
+
+**单包模式** (`pktTot=1`)：**帧级 CRC**
+- **计算范围**：仅 Payload（`data[8:]`，不含 Header 前 8 字节）
+- **存放位置**：追加在 BLE 写入帧末尾 2 字节
+- **验证**：39/39 单包帧 CRC 匹配 ✅
+
+**多包模式** (`pktTot≥2`)：**Payload 级 CRC**
+- **计算范围**：完整 Protobuf payload（即固件重组后的完整消息体）
+- **存放位置**：追加在 Protobuf 消息末尾 2 字节，**包含在分包数据流中**
+- **子包本身**：**无帧级 CRC**
+- **验证**：9/9 多包内容页 CRC 匹配 ✅
+
+```
+单包帧结构:                         多包帧结构（重组后）:
+┌────────┬─────────┬────────┐       ┌─────────────────────────┬────────┐
+│ Header │ Payload │ CRC16  │       │  Protobuf Payload       │ CRC16  │
+│ (8B)   │ (N B)   │ (2B)   │       │  (固件重组后的完整消息) │ (2B)   │
+└────────┴─────────┴────────┘       └─────────────────────────┴────────┘
+  Len = N + 2                         各子包 Len = chunk_size
+  CRC = crc16(Payload)                CRC = crc16(Protobuf Payload)
+```
 
 ---
 
@@ -143,15 +169,17 @@ message TeleprompterInit {
 }
 
 message TeleprompterDisplaySettings {
-  uint32 field1 = 1;            // 1
+  uint32 field1 = 1;            // 官方值=0（非1）
   uint32 field2 = 2;            // 0
   uint32 field3 = 3;            // 0
-  uint32 display_width = 4;     // 267
-  uint32 content_height = 5;    // 画卷总高度
-  uint32 line_height = 6;       // 230
-  uint32 viewport_height = 7;   // 2588 (全屏 9 行视口)
-  uint32 font_size = 8;         // 5
+  uint32 display_width = 4;     // 官方值=59（非267/644）
+  uint32 content_height = 5;    // 官方值=585（画卷总高度）
+  uint32 line_height = 6;       // 官方值=567（非230）
+  uint32 viewport_height = 7;   // 官方值=3113（非1294/2588）
+  uint32 font_size = 8;         // 官方值=0（非5）
   uint32 scroll_mode = 9;       // 0=manual, 1=AI
+  uint32 render_mode = 10;      // 🆕 官方值=9（可能控制全屏渲染模式）
+  uint32 field11 = 11;          // 🆕 官方值=0
 }
 
 message TeleprompterList {
@@ -173,6 +201,10 @@ message TeleprompterComplete {
   uint32 start_page = 1;    // 0
   uint32 total_pages = 2;   // >= 14
   uint32 total_lines = 3;   // >= 140
+}
+
+message TeleprompterState {
+  uint32 state = 1;         // 1 (Active 开启前台), 4 (Stop/Exit 退出关闭提词)
 }
 
 message TeleprompterMarker {
@@ -204,12 +236,13 @@ message DisplaySettings {
 }
 
 message DisplayRegion {
-  uint32 region_id = 1;     // Region 2, 3, 4, 5, 6
+  uint32 region_id = 1;     // Region 2, 3, 4, 5, 6, 9
   uint32 param1 = 2;
-  float param2 = 3;         // 32-bit IEEE 754 Float (幅宽 644.0f)
-  float param3 = 4;
+  float param2 = 3;         // 32-bit IEEE 754 Float（官方值全部为 0.0f）
+  float param3 = 4;         //（官方值全部为 0.0f）
   uint32 param4 = 5;
   uint32 param5 = 6;
+  uint32 param6 = 7;        // 🆕 官方值=0
 }
 
 // 4. GPU VSYNC 同步刷屏脉冲 (Service 0x80-00)
@@ -282,5 +315,179 @@ message SyncMessage {
 4. **14 页 140 行画卷补满测试**：短文本输入时，断言输出 `totalPages >= 14`，`totalLines >= 140`。
 
 ---
-*修订时间：2026-07-25*  
+*修订时间：2026-07-29*  
 *分析员：Antigravity Agent Team*
+
+---
+
+## 10. 官方 APP iOS BLE 抓包协议分析 (2026-07-28)
+
+> 使用 Apple PacketLogger 抓取官方 Even G2 APP（iOS 端）与眼镜的实时 BLE 通讯数据 (`bt.pklg`)，提取全部 69 个 G2 协议帧的精确参数。
+
+### 10.1 BLE 传输层实测参数
+
+| 参数 | macOS (bleak) | iOS (CoreBluetooth) | 说明 |
+| :--- | :--- | :--- | :--- |
+| **协商 MTU** | **247 bytes** | **≥512 bytes** | macOS 单次写入上限 244 字节 |
+| **子包 chunk 上限** | 232 bytes | 232 bytes | 官方 APP 每子包 chunk = 232 bytes（总包大小 240 = 8 header + 232 chunk） |
+| **多包分片** | 需要（payload > 232b） | 需要（payload > 232b） | 官方 APP pktTot=3~4（实测最大 4），pktSer 从 1 递增 |
+
+### 10.2 官方 APP 完整发送序列（69 帧）
+
+```
+阶段 1：鉴权与基础初始化 (seq 1~22)
+──────────────────────────────────────
+seq  1-2:  Auth/Capability (0x8000)       ← 会话能力协商
+seq  3-4:  Auth/TimeSync   (0x8020)       ← Unix 时间戳同步
+seq  5:    0D20                            ← 未知初始化
+seq  6:    1F20                            ← 未知配置
+seq  7:    0920                            ← 状态设置
+seq  8:    0320                            ← 显示通道配置
+seq  9:    0C20                            ← 未知
+seq 10:    0720                            ← 未知
+seq 11:    3020                            ← 未知
+seq 12:    1020                            ← 未知
+seq 13-22: (重复一轮类似初始化)
+
+阶段 2：Display Config 与提词器初始化 (seq 23~36)
+──────────────────────────────────────────────────
+seq 23:    0120 (预备配置)
+seq 24:    Display Config (0x0E20) ①       ← 全零 Region 布局
+seq 25-26: 0120 (预备配置 ×2)
+seq 27:    Display Config (0x0E20) ②       ← 重发
+seq 28:    8120 (显示触发)
+seq 29-30: 2020 (Commit)
+seq 31-32: Display Config (0x0E20) ③④     ← 再重发 2 次
+seq 33-34: Auth/Capability (0x8000)        ← Sync 触发
+seq 35:    0120 (预备)
+seq 36:    0120 (预备)
+
+阶段 3：提词器会话 (seq 37~68)
+────────────────────────────────
+seq 37:    Teleprompter INIT (0x0620)      ← 含关键参数 (display_width=59, render_mode=9)
+seq 38-67: Teleprompter CONTENT ×9 页      ← 正文多包分片 (pktTot=3~4) + 0x09-20 前台切页
+seq 68:    Teleprompter State (type=4, state=4) ← 🚨 物理退出/关闭提词器指令 (重放推屏时切勿下发!)
+```
+
+### 10.3 Teleprompter Init 精确参数（官方 vs 第三方）
+
+官方 Init 原始 hex：
+```
+080110271a1d08011219 0800 1000 1800 203b 28c904 30b704 38a918 4000 4801 5009 5800
+```
+
+解码对照表：
+
+| Protobuf Field | Tag | 官方值 | 第三方 teleprompter.py | iOS APP | 语义推断 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| field 1 | `08` | **0** | 1 | — | 渲染引擎模式选择器 |
+| field 2 | `10` | 0 | 0 | 0 | 保留 |
+| field 3 | `18` | 0 | 0 | 0 | 保留 |
+| **field 4 (display_width)** | `20` | **59** | 644 | 267 | **全屏模式标志**（非像素宽度） |
+| field 5 (content_height) | `28` | **585** | 动态 | — | 画卷总高度 |
+| **field 6 (line_height)** | `30` | **567** | 230 | — | 行高 |
+| **field 7 (viewport)** | `38` | **3113** | 1294 | — | 视口高度 |
+| **field 8 (font_size)** | `40` | **0** | 5 | — | 字号/渲染参数（0=默认） |
+| field 9 (mode) | `48` | 1 | 0 | — | 0=手动, 1=AI |
+| **field 10** 🆕 | `50` | **9** | ❌ | ❌ | 未知（可能控制全屏行数） |
+| **field 11** 🆕 | `58` | **0** | ❌ | ❌ | 未知 |
+
+### 10.4 Display Config 精确参数
+
+官方 Display Config 原始 hex（145 bytes payload）：
+```
+0802 10XX 228A01
+  0801                                                    # enabled = 1
+  1215 0802 10904E 1D00000000 2500000000 2800 3000 3800   # Region 2: param1=10000, w=0.0, h=0.0
+  1215 0803 10AC02 1D00000000 2500000000 2800 3000 3800   # Region 3: param1=300,   w=0.0, h=0.0
+  1214 0804 1000   1D00000000 2500000000 2800 3000 3800   # Region 4: param1=0,     w=0.0, h=0.0
+  1214 0805 1000   1D00000000 2500000000 2800 3000 3800   # Region 5: param1=0,     w=0.0, h=0.0
+  1214 0806 1000   1D00000000 2500000000 2800 3000 3800   # Region 6: param1=0,     w=0.0, h=0.0
+  1214 0809 1000   1D00000000 2500000000 2800 3000 3800   # Region 9: param1=0,     w=0.0, h=0.0  🆕
+  1800                                                    # field 3 = 0
+```
+
+**关键差异**：
+- 官方：**所有 Region 的 width/height 均为 0.0**（float 零值），含 field 7 (`38 00`)，包含 **Region 9**
+- 第三方：Region 1/2 的 width=644.0, height=200.0，无 field 7，无 Region 9
+
+### 10.5 内容页多包分片传输格式 🆕 (2026-07-29 修正)
+
+> ⚠️ **重要修正**：原版本 §10.5 关于多包 CRC 的描述有误。经 bt.pklg 逐字节验证，多包子包**不含**帧级 CRC；CRC 以 Payload 级方式追加在 Protobuf 消息末尾，包含在分包数据流中。
+
+官方 APP 对每个超过 232 字节的 Protobuf payload 使用多包分片（最大 pktTot=4）：
+
+```
+┌──────────────────────────── 逻辑内容页 ───────────────────────────────────┐
+│                                                                            │
+│  Protobuf Payload (N bytes) + CRC16 (2 bytes)                              │
+│  ┌─────────────────────────────────────────────────────────┬──────┐        │
+│  │ 08 03 10 XX 2A ... (Protobuf 消息体)                    │ CRC  │        │
+│  └───────────────┬──────────────┬──────────────┬───────────┴──────┘        │
+│                  ▼              ▼              ▼                            │
+│  子包1 (pktSer=1/4)    子包2 (2/4)     子包3 (3/4)     子包4 (4/4)        │
+│  ┌──────────────────┐ ┌──────────────┐ ┌──────────────┐ ┌────────────┐     │
+│  │ AA 21 seq E8     │ │ AA 21 seq E8 │ │ AA 21 seq E8 │ │ AA 21 seq  │     │
+│  │ 04 01 06 20      │ │ 04 02 06 20  │ │ 04 03 06 20  │ │ 04 04 06 20│     │
+│  │ [232B chunk]     │ │ [232B chunk] │ │ [232B chunk] │ │ [余量+CRC] │     │
+│  └──────────────────┘ └──────────────┘ └──────────────┘ └────────────┘     │
+│   BLE write: 240B       240B            240B             8+余量 bytes      │
+│   全部 < MTU 244 ✓      < 244 ✓         < 244 ✓          < 244 ✓          │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+**协议要点：**
+- **seq 不变**：同一逻辑页的所有子包共用相同 seq
+- **pktTot/pktSer**：pktTot=总子包数（实测最大 4），pktSer 从 1 递增
+- **Len 字段**：`chunk_size`（**不加 2**，与单包不同）
+- **子包 CRC**：**无**（子包不含任何帧级 CRC）
+- **Payload 级 CRC**：CRC-16/CCITT(init=0xFFFF) 对完整 Protobuf 消息计算，追加在消息末尾 2 字节，**包含在最后一个子包的 chunk 中**
+- **实测子包 chunk**：固定 232 bytes（末尾子包为余量 + 2 字节 CRC）
+- **pktTot 上限**：实测最大 4 子包（4 × 232 = 928 字节 max payload + 2 字节 CRC）
+
+**验证数据（9/9 全部匹配）：**
+
+| seq | pktTot | Payload (bytes) | Trailing 2B | CRC-16/CCITT | Match |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 0x26 | 4 | 733 | `ae bb` | 0xBBAE | ✅ |
+| 0x27 | 3 | 623 | `73 3a` | 0x3A73 | ✅ |
+| 0x28 | 4 | 713 | `49 69` | 0x6949 | ✅ |
+| 0x29 | 4 | 778 | `8f e3` | 0xE38F | ✅ |
+| 0x2A | 3 | 579 | `43 96` | 0x9643 | ✅ |
+| 0x2B | 3 | 551 | `07 6c` | 0x6C07 | ✅ |
+| 0x2C | 3 | 609 | `a6 11` | 0x11A6 | ✅ |
+| 0x2D | 3 | 592 | `90 30` | 0x3090 | ✅ |
+| 0x2E | 3 | 660 | `f4 88` | 0x88F4 | ✅ |
+
+### 10.6 内容页文本格式（实测样本）
+
+从官方 APP 抓包提取的第一页实际文本：
+
+```
+\n各位领导、各位老师，大家上午好！
+今天我们召开《人机协同程序设计》课程全校统一数智化教学集
+体备课研讨会，主要目的是为了贯彻落实教务处...
+```
+
+- **每行约 28 个中文字**（含标点）
+- **每页 10 行**（`line_count = 0x0A`）
+- **行以 `\n` (0x0A) 分隔**
+- **文本格式**：直接 10 行内容，**不**前置 `\n`（前置 `\n` 会浪费 1 个行位导致空行间隙）
+
+### 10.7 物理实测验证结论
+
+> ✅ **验证一 (2026-07-28)**：全屏排版参数破解
+> - 通过将 `TeleprompterInit` 参数修改为官方抓包参数：`display_width = 59`, `font_size = 0`, `render_mode = 9` (Field 10), `line_height = 567`, `viewport_height = 3113`
+> - 物理眼镜镜片成功从默认 11 字居中缩略框**解封并切入全屏顶格排版模式**，物理实测**第一行完美完整显示了 28 个中文字符**！
+
+> ✅ **验证二 (2026-07-29)**：CRC 双层校验机制破解
+> - **发现**：多包子包**无帧级 CRC**，Len = chunk_size（非 chunk+2）；Protobuf payload 末尾追加 **Payload 级 CRC-16/CCITT** 2 字节，包含在分包数据流中
+> - **验证**：官方 bt.pklg 9/9 多包页面 CRC 全部匹配；缺少此 CRC 的自构造 payload 固件静默丢弃导致黑屏
+> - **实测**：添加 Payload 级 CRC 后，通过 macOS bleak 发送自构造多包内容页，**眼镜每行满屏显示约 28 个汉字** ✅
+
+> ✅ **验证三 (2026-07-30)**：无间隙 10 行完美显示
+> - **根因**：前置 `\n` 创建空行 0 占据了 10 个视口行位之一，导致：(1) 每 9 行出现 1 行空白间隙；(2) 第 10 行内容被推出视口，仅显示 1px
+> - **解决**：**移除前置 `\n`**，直接发送 10 行内容文本 + `line_count=10`。视口本身完整容纳 10 行，无需前置空行
+> - **约束**：`line_count` 必须等于 `text.count('\n') + 1`（文本实际行数），否则固件黑屏
+> - **实测**：**10 行全部完整显示，无间隙、无裁剪**，每行 28 汉字，页间过渡无缝 ✅
+

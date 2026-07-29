@@ -1,8 +1,13 @@
+import os
+import sys
 import json
 import asyncio
 from typing import Dict, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+
+# 挂载同级目录以支持模块导入
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from slide_manager import SlideManager
 
 app = FastAPI(title="Even G2 Smart Classroom Teleprompter Backend")
@@ -158,9 +163,10 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     hex_bytes = data.get("hex_bytes", "")
                     desc = data.get("description", "")
                     if direction == "Rx":
-                        print(f"\033[92m📥 [G2 -> iPad Rx] {desc} | HEX: [{hex_bytes}]\033[0m")
+                        # 静默过滤眼镜固件高频 IMU 姿态/ACK 采样上报
+                        pass
                     elif direction == "Tx":
-                        print(f"\033[96m📤 [iPad -> G2 Tx] {desc} | HEX: [{hex_bytes}]\033[0m")
+                        print(f"\033[96m📤 [手机下发指令 (Tx)] {desc} | HEX: [{hex_bytes}]\033[0m")
                     else:
                         print(f"\033[93mℹ️ [G2 BLE 系统日志] {desc}\033[0m")
                 elif msg_type == "PAGE_CONTROL":
