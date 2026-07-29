@@ -115,7 +115,7 @@ struct TeleprompterListView: View {
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
-                        .background(Color.white)
+                        .background(Color(UIColor.secondarySystemGroupedBackground))
                         .foregroundColor(.primary)
                         .cornerRadius(12)
                         .shadow(color: Color.black.opacity(0.06), radius: 6, x: 0, y: 3)
@@ -131,7 +131,7 @@ struct TeleprompterListView: View {
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
-                        .background(Color.white)
+                        .background(Color(UIColor.secondarySystemGroupedBackground))
                         .foregroundColor(.primary)
                         .cornerRadius(12)
                         .shadow(color: Color.black.opacity(0.06), radius: 6, x: 0, y: 3)
@@ -139,7 +139,7 @@ struct TeleprompterListView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
-                .background(Color(UIColor.secondarySystemBackground).edgesIgnoringSafeArea(.bottom))
+                .background(Color(UIColor.systemGroupedBackground).edgesIgnoringSafeArea(.bottom))
             }
             .background(Color(UIColor.systemGroupedBackground))
             .navigationTitle("提词")
@@ -186,7 +186,7 @@ struct TeleprompterListView: View {
     }
 }
 
-/// 单张讲稿卡片组件
+/// 单张讲稿卡片组件 (适配浅色与深色模式)
 struct ScriptRowCard: View {
     let script: ScriptItem
     
@@ -207,7 +207,7 @@ struct ScriptRowCard: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 16)
-        .background(Color.white)
+        .background(Color(UIColor.secondarySystemGroupedBackground))
         .cornerRadius(12)
         .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
     }
