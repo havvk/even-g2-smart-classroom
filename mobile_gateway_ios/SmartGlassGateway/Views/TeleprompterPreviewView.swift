@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 讲稿预览与控制台视图 (1:1 还原官方界面架构)
+/// 讲稿预览与控制台视图 (1:1 官方同款：滑块控制每行字数，滑动手势实时同步眼镜内容)
 struct TeleprompterPreviewView: View {
     @EnvironmentObject var bleManager: BLEManager
     @ObservedObject var storage = ScriptStorage.shared
@@ -11,9 +11,38 @@ struct TeleprompterPreviewView: View {
     @State private var showingEditor: Bool = false
     @State private var isPushing: Bool = false
     
-    // 讲稿切分为自然行
-    var scriptLines: [String] {
-        let lines = script.content.replacingOccurrences(of: "\\n", with: "\n").components(separatedBy: "\n")
+    // 每行字数 (通过底部滑块调节，范围 10 ~ 28 汉字)
+    @State private var widthChars: Double = 28.0
+    
+    // 动态根据每行字数重折行后的行数组
+    var wrappedLines: [String] {
+        let maxLineWidth = Int(widthChars) * 2 // 1个汉字 = 2字节宽度
+        let cleanText = script.content.replacingOccurrences(of: "\\n", with: "\n")
+        var lines = [String]()
+        
+        let paragraphs = cleanText.components(separatedBy: "\n")
+        for para in paragraphs {
+            if para.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                lines.append("")
+                continue
+            }
+            var currentLine = ""
+            var currentWidth = 0
+            for char in para {
+                let w = G2ProtocolEncoder.getCharWidth(char)
+                if currentWidth + w > maxLineWidth {
+                    lines.append(currentLine)
+                    currentLine = String(char)
+                    currentWidth = w
+                } else {
+                    currentLine.append(char)
+                    currentWidth += w
+                }
+            }
+            if !currentLine.isEmpty {
+                lines.append(currentLine)
+            }
+        }
         return lines.isEmpty ? [script.content] : lines
     }
     
@@ -29,9 +58,15 @@ struct TeleprompterPreviewView: View {
                             .foregroundColor(.primary)
                             .lineLimit(2)
                         
-                        Text(script.formattedDateString)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        HStack(spacing: 12) {
+                            Text(script.formattedDateString)
+                            Text("•")
+                            Text("每行 \(Int(widthChars)) 字")
+                                .foregroundColor(.purple)
+                                .fontWeight(.semibold)
+                        }
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                     }
                     
                     Spacer()
@@ -64,84 +99,103 @@ struct TeleprompterPreviewView: View {
                 }
             }
             .padding()
-            .background(Color(UIColor.secondarySystemBackground))
+            .background(Color(UIColor.secondarySystemGroupedBackground))
             .cornerRadius(16)
             .padding(.horizontal)
             .padding(.top, 8)
             
-            // MARK: - 可视化视口与焦点高亮区 (1:1 模拟 Glasses 成像)
+            // MARK: - 可视化视口与焦点高亮区 (支持滑动手势 + 实时眼镜同步)
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(spacing: 16) {
+                    VStack(spacing: 12) {
                         Spacer(minLength: 120)
                         
-                        ForEach(Array(scriptLines.enumerated()), id: \.offset) { index, lineText in
+                        ForEach(Array(wrappedLines.enumerated()), id: \.offset) { index, lineText in
                             let isActive = (index == activeLineIndex)
                             
                             HStack {
                                 Text(lineText.isEmpty ? " " : lineText)
                                     .font(.system(size: isActive ? 18 : 15, weight: isActive ? .medium : .regular))
-                                    .foregroundColor(isActive ? .primary : .secondary.opacity(0.4))
+                                    .foregroundColor(isActive ? .primary : .secondary.opacity(0.35))
                                     .multilineTextAlignment(.leading)
                                     .lineSpacing(6)
                                 Spacer()
                             }
                             .padding(.horizontal, 20)
-                            .padding(.vertical, isActive ? 16 : 8)
+                            .padding(.vertical, isActive ? 14 : 8)
                             .background(
                                 RoundedRectangle(cornerRadius: 12)
-                                    .fill(isActive ? Color(UIColor.systemBackground) : Color.clear)
-                                    .shadow(color: isActive ? Color.black.opacity(0.08) : Color.clear, radius: 8, x: 0, y: 4)
+                                    .fill(isActive ? Color(UIColor.secondarySystemGroupedBackground) : Color.clear)
+                                    .shadow(color: isActive ? Color.black.opacity(0.06) : Color.clear, radius: 6, x: 0, y: 3)
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12)
-                                    .stroke(isActive ? Color.gray.opacity(0.15) : Color.clear, lineWidth: 1)
+                                    .stroke(isActive ? Color.gray.opacity(0.12) : Color.clear, lineWidth: 1)
                             )
                             .id(index)
                             .onTapGesture {
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                    activeLineIndex = index
-                                    proxy.scrollTo(index, anchor: .center)
-                                }
+                                updateFocusLine(index: index, scrollProxy: proxy)
                             }
                         }
                         
                         Spacer(minLength: 180)
                     }
                 }
-                .onChange(of: activeLineIndex) { newIndex in
-                    withAnimation {
-                        proxy.scrollTo(newIndex, anchor: .center)
+                .simultaneousGesture(
+                    DragGesture().onChanged { value in
+                        // 手指在屏幕滑动时，根据偏移量计算并动态跟进当前焦点行
+                        let deltaLines = Int(-value.translation.height / 36.0)
+                        let newIndex = min(max(0, activeLineIndex + deltaLines), wrappedLines.count - 1)
+                        if newIndex != activeLineIndex {
+                            activeLineIndex = newIndex
+                            // 实时向眼镜下发行位置同步
+                            syncLineToGlasses(lineIndex: newIndex)
+                        }
                     }
-                }
+                )
             }
             
-            // MARK: - 控制条与进度 Handle 滑块
+            // MARK: - 底部控制条 (滑块控制每行字数 10~28)
             VStack(spacing: 12) {
-                HStack(spacing: 16) {
+                HStack(spacing: 14) {
                     // 首页复位按钮 (>||<)
                     Button(action: {
-                        withAnimation {
-                            activeLineIndex = 0
-                        }
+                        activeLineIndex = 0
+                        syncLineToGlasses(lineIndex: 0)
                     }) {
                         Image(systemName: "arrow.left.to.line.compact")
                             .font(.title3)
                             .foregroundColor(.primary)
                     }
                     
-                    // 打点进度条 Slider
+                    Text("10字")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    
+                    // 控制每行文字数量的滑块 (10 ~ 28 汉字)
                     Slider(
-                        value: Binding(
-                            get: { Double(activeLineIndex) },
-                            set: { newValue in activeLineIndex = Int(newValue) }
-                        ),
-                        in: 0...Double(max(0, scriptLines.count - 1)),
+                        value: $widthChars,
+                        in: 10...28,
                         step: 1
-                    )
+                    ) {
+                        Text("每行字数")
+                    } onEditingChanged: { isEditing in
+                        if !isEditing {
+                            script.targetWidthChars = Int(widthChars)
+                            storage.updateScript(script)
+                            // 字数重新排版后重新下发推屏
+                            if bleManager.isConnected {
+                                triggerPushToGlasses()
+                            }
+                        }
+                    }
                     .accentColor(.purple)
                     
-                    // 视口间距 / 边界调节图标 (|-><-|)
+                    Text("28字")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    
+                    // 视口边界调节图标 (|-><-|)
                     Button(action: {}) {
                         Image(systemName: "arrow.left.and.right.righttriangle.left.righttriangle.right")
                             .font(.title3)
@@ -161,10 +215,10 @@ struct TeleprompterPreviewView: View {
                         }
                         .font(.headline)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(Color(UIColor.secondarySystemBackground))
+                        .padding(.vertical, 14)
+                        .background(Color(UIColor.secondarySystemGroupedBackground))
                         .foregroundColor(.primary)
-                        .cornerRadius(14)
+                        .cornerRadius(12)
                     }
                     
                     Button(action: {
@@ -182,10 +236,10 @@ struct TeleprompterPreviewView: View {
                         .font(.headline)
                         .fontWeight(.bold)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(bleManager.isConnected ? Color.black : Color.gray)
-                        .foregroundColor(.white)
-                        .cornerRadius(14)
+                        .padding(.vertical, 14)
+                        .background(bleManager.isConnected ? Color.primary : Color.gray)
+                        .foregroundColor(Color(UIColor.systemBackground))
+                        .cornerRadius(12)
                     }
                     .disabled(!bleManager.isConnected || isPushing)
                 }
@@ -193,7 +247,7 @@ struct TeleprompterPreviewView: View {
                 .padding(.bottom, 12)
             }
             .padding(.top, 8)
-            .background(Color(UIColor.systemBackground).edgesIgnoringSafeArea(.bottom))
+            .background(Color(UIColor.systemGroupedBackground).edgesIgnoringSafeArea(.bottom))
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -202,14 +256,33 @@ struct TeleprompterPreviewView: View {
                     .font(.headline)
             }
         }
+        .onAppear {
+            widthChars = Double(script.targetWidthChars)
+        }
         .sheet(isPresented: $showingEditor) {
             ScriptEditorView(scriptToEdit: script)
         }
     }
     
+    /// 点击更新焦点行，并同步给眼镜
+    private func updateFocusLine(index: Int, scrollProxy: ScrollViewProxy) {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            activeLineIndex = index
+            scrollProxy.scrollTo(index, anchor: .center)
+        }
+        syncLineToGlasses(lineIndex: index)
+    }
+    
+    /// 下发行号实时同步到 G2 眼镜
+    private func syncLineToGlasses(lineIndex: Int) {
+        guard bleManager.isConnected else { return }
+        bleManager.sendScrollSync(pageLine: lineIndex)
+    }
+    
+    /// 按当前设置的每行字数重新推屏下发
     private func triggerPushToGlasses() {
         isPushing = true
-        bleManager.sendTeleprompterText(script.content, targetWidthChars: 28)
+        bleManager.sendTeleprompterText(script.content, targetWidthChars: Int(widthChars))
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
             isPushing = false
