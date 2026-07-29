@@ -326,14 +326,16 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     private var syncSeq: UInt8 = 0x2A
     private var syncMsgId: Int = 0x50
     
-    /// 发送双向滚动同步报文 (App 向 Glasses 下发焦点行号)
-    func sendScrollSync(pageLine: Int) {
+    /// 发送双向滚动同步报文 (App 向 Glasses 下发全局焦点行号)
+    func sendScrollSync(globalLineIndex: Int) {
         guard isConnected else { return }
-        self.currentFocusPageLine = pageLine
-        let packet = G2ProtocolEncoder.buildScrollSync(seq: syncSeq, msgId: syncMsgId, pageLine: pageLine)
+        self.currentFocusPageLine = globalLineIndex
+        let pageNum = globalLineIndex / 10
+        let lineNum = globalLineIndex % 10
+        let packet = G2ProtocolEncoder.buildScrollSync(seq: syncSeq, msgId: syncMsgId, pageNum: pageNum, lineNum: lineNum)
         syncSeq &+= 1
         syncMsgId += 1
-        sendRawData(packet, channel: .content, logDesc: "ScrollSync 行号: \(pageLine)")
+        sendRawData(packet, channel: .content, logDesc: "ScrollSync [页\(pageNum):行\(lineNum)] (总第\(globalLineIndex)行)")
     }
     
     // 自动补发队列

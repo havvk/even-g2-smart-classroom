@@ -265,12 +265,20 @@ class G2ProtocolEncoder {
     
     // MARK: - Legacy / UI Control Helpers
     
-    static func buildScrollSync(seq: UInt8 = 0x2A, msgId: Int = 0x50, pageLine: Int) -> Data {
-        var payload = Data([0x08, 0x01, 0x10])
+    /// 生成 0x06-20 Type 5 双向位置同步报文 (Field 1 = page_num, Field 2 = line_num_in_page)
+    static func buildScrollSync(seq: UInt8 = 0x2A, msgId: Int = 0x50, pageNum: Int, lineNum: Int) -> Data {
+        var inner = Data([0x08])
+        inner.append(encodeVarint(pageNum))  // Field 1: page_num (0..13)
+        inner.append(Data([0x10]))
+        inner.append(encodeVarint(lineNum))  // Field 2: line_num within page (0..9)
+        inner.append(Data([0x18, 0x00]))     // Field 3: 0
+        
+        var payload = Data([0x08, 0x05, 0x10]) // Type 5: Teleprompter Scroll Sync Event
         payload.append(encodeVarint(msgId))
-        payload.append(Data([0x72, 0x06, 0x08]))
-        payload.append(encodeVarint(pageLine))
-        payload.append(Data([0x10, 0x00, 0x18, 0x00]))
+        payload.append(Data([0x2A]))
+        payload.append(encodeVarint(inner.count))
+        payload.append(inner)
+        
         return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
@@ -300,6 +308,14 @@ class G2ProtocolEncoder {
     
     static func buildTeleprompterModeConfigPacket(seq: UInt8 = 0x0A, mode: UInt8 = 0x00) -> Data {
         var payload = Data([0x08, 0x01, 0x10, 0x16, 0x48, mode])
+        return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
+    }
+    
+    /// 查询眼镜当前提词器模式与运行状态 (Service 0x06-20 Type 2 Status Query)
+    static func buildQueryTeleprompterStatePacket(seq: UInt8 = 0x0A, msgId: Int = 0x20) -> Data {
+        var payload = Data([0x08, 0x02, 0x10])
+        payload.append(encodeVarint(msgId))
+        payload.append(Data([0x22, 0x02, 0x08, 0x01]))
         return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 讲稿预览与控制台视图 (1:1 官方同款：滑块控制每行字数，滑动手势实时同步眼镜内容)
+/// 讲稿预览与控制台视图 (1:1 官方同款：10行紧凑视口全显、亮白高对比度、双向同步)
 struct TeleprompterPreviewView: View {
     @EnvironmentObject var bleManager: BLEManager
     @ObservedObject var storage = ScriptStorage.shared
@@ -13,6 +13,9 @@ struct TeleprompterPreviewView: View {
     
     // 每行字数 (通过底部滑块调节，范围 10 ~ 28 汉字)
     @State private var widthChars: Double = 28.0
+    
+    // 固件标准视口容纳行数 (10 行)
+    let viewportLineCount = 10
     
     // 动态根据每行字数重折行后的行数组
     var wrappedLines: [String] {
@@ -61,7 +64,7 @@ struct TeleprompterPreviewView: View {
                         HStack(spacing: 12) {
                             Text(script.formattedDateString)
                             Text("•")
-                            Text("每行 \(Int(widthChars)) 字")
+                            Text("每行 \(Int(widthChars)) 字 / 视口 10 行")
                                 .foregroundColor(.purple)
                                 .fontWeight(.semibold)
                         }
@@ -104,33 +107,49 @@ struct TeleprompterPreviewView: View {
             .padding(.horizontal)
             .padding(.top, 8)
             
-            // MARK: - 可视化视口与焦点高亮区 (支持滑动手势 + 实时眼镜同步)
+            // MARK: - 官方同款 10 行全显 HUD 视口 (紧凑行距 + 亮白字体 + 双向同步)
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(spacing: 12) {
-                        Spacer(minLength: 120)
+                    VStack(spacing: 4) {
+                        Spacer(minLength: 20)
                         
                         ForEach(Array(wrappedLines.enumerated()), id: \.offset) { index, lineText in
-                            let isActive = (index == activeLineIndex)
+                            let isInViewport = (index >= activeLineIndex && index < activeLineIndex + viewportLineCount)
+                            let isViewportTop = (index == activeLineIndex)
                             
-                            HStack {
+                            HStack(alignment: .center, spacing: 8) {
+                                Text(String(format: "%02d", index + 1))
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundColor(isInViewport ? Color.purple : Color.gray.opacity(0.3))
+                                    .frame(width: 22, alignment: .trailing)
+                                
                                 Text(lineText.isEmpty ? " " : lineText)
-                                    .font(.system(size: isActive ? 18 : 15, weight: isActive ? .medium : .regular))
-                                    .foregroundColor(isActive ? .primary : .secondary.opacity(0.35))
-                                    .multilineTextAlignment(.leading)
-                                    .lineSpacing(6)
+                                    .font(.system(size: isInViewport ? 15 : 13.5, weight: isInViewport ? .medium : .regular))
+                                    // 官方风格: 视口 10 行内部文字保持亮白高对比度显示，视口外深灰透明
+                                    .foregroundColor(isInViewport ? Color.primary : Color.secondary.opacity(0.3))
+                                    .lineLimit(1)
+                                
                                 Spacer()
                             }
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, isActive ? 14 : 8)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 4) // 极简紧凑内边距，确保 10 行完美平铺在屏幕内
                             .background(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .fill(isActive ? Color(UIColor.secondarySystemGroupedBackground) : Color.clear)
-                                    .shadow(color: isActive ? Color.black.opacity(0.06) : Color.clear, radius: 6, x: 0, y: 3)
+                                Group {
+                                    if isInViewport {
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(isViewportTop ? Color.purple.opacity(0.12) : Color.purple.opacity(0.04))
+                                    } else {
+                                        Color.clear
+                                    }
+                                }
                             )
                             .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(isActive ? Color.gray.opacity(0.12) : Color.clear, lineWidth: 1)
+                                Group {
+                                    if isViewportTop {
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .stroke(Color.purple.opacity(0.4), lineWidth: 1)
+                                    }
+                                }
                             )
                             .id(index)
                             .onTapGesture {
@@ -138,24 +157,33 @@ struct TeleprompterPreviewView: View {
                             }
                         }
                         
-                        Spacer(minLength: 180)
+                        Spacer(minLength: 80)
                     }
+                    .padding(.vertical, 8)
                 }
                 .simultaneousGesture(
-                    DragGesture().onChanged { value in
-                        // 手指在屏幕滑动时，根据偏移量计算并动态跟进当前焦点行
-                        let deltaLines = Int(-value.translation.height / 36.0)
-                        let newIndex = min(max(0, activeLineIndex + deltaLines), wrappedLines.count - 1)
+                    DragGesture().onEnded { value in
+                        // 手指上下滑动拖拽松开时，自动根据偏移计算最新聚焦行并同步给 Glasses
+                        let delta = Int(-value.translation.height / 28.0)
+                        let newIndex = min(max(0, activeLineIndex + delta), max(0, wrappedLines.count - 1))
                         if newIndex != activeLineIndex {
-                            activeLineIndex = newIndex
-                            // 实时向眼镜下发行位置同步
-                            syncLineToGlasses(lineIndex: newIndex)
+                            updateFocusLine(index: newIndex, scrollProxy: proxy)
                         }
                     }
                 )
+                // 监听眼镜发回的触控/按键通知 (眼镜端控制 App 界面滚动)
+                .onReceive(bleManager.$currentFocusPageLine) { newGlassesLine in
+                    if newGlassesLine != activeLineIndex && newGlassesLine >= 0 && newGlassesLine < wrappedLines.count {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            self.activeLineIndex = newGlassesLine
+                            proxy.scrollTo(newGlassesLine, anchor: .top)
+                        }
+                    }
+                }
             }
+            .background(Color(UIColor.systemGroupedBackground))
             
-            // MARK: - 底部控制条 (滑块控制每行字数 10~28)
+            // MARK: - 底部控制条 (滑块调节每行字数 10~28)
             VStack(spacing: 12) {
                 HStack(spacing: 14) {
                     // 首页复位按钮 (>||<)
@@ -183,7 +211,7 @@ struct TeleprompterPreviewView: View {
                         if !isEditing {
                             script.targetWidthChars = Int(widthChars)
                             storage.updateScript(script)
-                            // 字数重新排版后重新下发推屏
+                            // 字数重新排版后下发推屏
                             if bleManager.isConnected {
                                 triggerPushToGlasses()
                             }
@@ -268,15 +296,15 @@ struct TeleprompterPreviewView: View {
     private func updateFocusLine(index: Int, scrollProxy: ScrollViewProxy) {
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
             activeLineIndex = index
-            scrollProxy.scrollTo(index, anchor: .center)
+            scrollProxy.scrollTo(index, anchor: .top)
         }
         syncLineToGlasses(lineIndex: index)
     }
     
-    /// 下发行号实时同步到 G2 眼镜
+    /// 下发行号真实双向位置同步到 G2 眼镜 (Service 0x06-20 Type=5)
     private func syncLineToGlasses(lineIndex: Int) {
         guard bleManager.isConnected else { return }
-        bleManager.sendScrollSync(pageLine: lineIndex)
+        bleManager.sendScrollSync(globalLineIndex: lineIndex)
     }
     
     /// 按当前设置的每行字数重新推屏下发
