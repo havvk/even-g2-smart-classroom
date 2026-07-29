@@ -219,10 +219,10 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             addLog("🔍 特征值: \(uuidStr) [Notify/Ind:\(canNotify), Write:\(canWrite)]")
             
             let uuidSuffix = String(uuidStr.suffix(4))
-            // 官方精准订阅: 仅允许 5402 (内容) 与 0002 (控制) 通道，使用 hasSuffix 排除 Base UUID 前缀误匹配
-            if canNotify && (uuidStr.hasSuffix("5402") || uuidStr.hasSuffix("0002")) {
+            // 订阅所有支持 Notify/Indicate 的特征通道 (确保不错过手势触控 6E40 或 0002 数据)
+            if canNotify {
                 peripheral.setNotifyValue(true, for: characteristic)
-                addLog("🔔 正在开启 \(uuidSuffix) 通道 Notify 接收...")
+                addLog("🔔 正在开启 [\(uuidSuffix)] 通道 Notify 接收...")
             }
             
             // 按 UUID 结尾绑定 G2 专属 Channel 特征通道 (排除 6E40 串口)
@@ -432,24 +432,24 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         delay += 0.2
         
-        // 关键物理规则: 先下发 0x06-20 State=4 强行复位固件提词器显存状态机 (彻底解决首次推屏黑屏问题)
-        let exitData = Data([0x08, 0x01, 0x10, 0x32, 0x1A, 0x02, 0x08, 0x04])
-        let pktResetState = G2ProtocolEncoder.buildPacket(seq: 0x08, serviceHi: 0x06, serviceLo: 0x20, payload: exitData)
-        let itemReset = DispatchWorkItem {
-            self.sendRawData(pktResetState, channel: .content, logDesc: "Reset Teleprompter State (State=4)")
-        }
-        self.teleprompterWorkItems.append(itemReset)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemReset)
-        delay += 0.15
-        
-        // 物理屏显唤醒: 确保黑屏/未进入 App 状态下点亮 MicroLED
-        let pktWake = G2ProtocolEncoder.buildWakePacket(seq: 0x09, msgId: 0x13)
+        // 物理屏显唤醒: 首位发送 0x0420，确保黑屏/休眠状态下点亮 MicroLED 屏显硬件
+        let pktWake = G2ProtocolEncoder.buildWakePacket(seq: 0x08, msgId: 0x13)
         let itemWake = DispatchWorkItem {
             self.sendRawData(pktWake, channel: .content, logDesc: "Screen Wake (0x0420)")
         }
         self.teleprompterWorkItems.append(itemWake)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemWake)
-        delay += 0.2
+        delay += 0.5 // 预留 0.5s 给固件 MicroLED 屏幕上电
+        
+        // 关键物理规则: 唤醒后再下发 0x06-20 State=4 强行复位固件提词器显存状态机
+        let exitData = Data([0x08, 0x01, 0x10, 0x32, 0x1A, 0x02, 0x08, 0x04])
+        let pktResetState = G2ProtocolEncoder.buildPacket(seq: 0x09, serviceHi: 0x06, serviceLo: 0x20, payload: exitData)
+        let itemReset = DispatchWorkItem {
+            self.sendRawData(pktResetState, channel: .content, logDesc: "Reset Teleprompter State (State=4)")
+        }
+        self.teleprompterWorkItems.append(itemReset)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemReset)
+        delay += 0.25
         
         seq = 0x0A
         msgId = 0x14
