@@ -323,12 +323,17 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     @Published var currentFocusPageLine: Int = 0
     @Published var currentWrappedLines: [String] = []
     
+    private var syncSeq: UInt8 = 0x2A
+    private var syncMsgId: Int = 0x50
+    
     /// 发送双向滚动同步报文 (App 向 Glasses 下发焦点行号)
     func sendScrollSync(pageLine: Int) {
         guard isConnected else { return }
         self.currentFocusPageLine = pageLine
-        let packet = G2ProtocolEncoder.buildScrollSync(seq: 0x2A, msgId: 0x50, pageLine: pageLine)
-        sendRawData(packet, channel: .content)
+        let packet = G2ProtocolEncoder.buildScrollSync(seq: syncSeq, msgId: syncMsgId, pageLine: pageLine)
+        syncSeq &+= 1
+        syncMsgId += 1
+        sendRawData(packet, channel: .content, logDesc: "ScrollSync 行号: \(pageLine)")
     }
     
     // 自动补发队列
@@ -425,8 +430,18 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         delay += 0.2
         
+        // 关键物理规则: 先下发 0x06-20 State=4 强行复位固件提词器显存状态机 (彻底解决首次推屏黑屏问题)
+        let exitData = Data([0x08, 0x01, 0x10, 0x32, 0x1A, 0x02, 0x08, 0x04])
+        let pktResetState = G2ProtocolEncoder.buildPacket(seq: 0x08, serviceHi: 0x06, serviceLo: 0x20, payload: exitData)
+        let itemReset = DispatchWorkItem {
+            self.sendRawData(pktResetState, channel: .content, logDesc: "Reset Teleprompter State (State=4)")
+        }
+        self.teleprompterWorkItems.append(itemReset)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemReset)
+        delay += 0.15
+        
         // 物理屏显唤醒: 确保黑屏/未进入 App 状态下点亮 MicroLED
-        let pktWake = G2ProtocolEncoder.buildWakePacket(seq: 0x08, msgId: 0x13)
+        let pktWake = G2ProtocolEncoder.buildWakePacket(seq: 0x09, msgId: 0x13)
         let itemWake = DispatchWorkItem {
             self.sendRawData(pktWake, channel: .content, logDesc: "Screen Wake (0x0420)")
         }
@@ -434,7 +449,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemWake)
         delay += 0.2
         
-        seq = 0x09
+        seq = 0x0A
         msgId = 0x14
         
         // Phase 2: Display Config
@@ -560,18 +575,27 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             cmdDesc = "镜腿手势: 向下滑动 (NEXT)"
             isGesture = true
             onPageControlTriggered?("NEXT")
+            DispatchQueue.main.async {
+                self.currentFocusPageLine += 1
+            }
             addLog("👉 收到镜腿手势: 向下滑动 (NEXT)")
         } else if rawByte == 0x02 {
             lastGestureReceived = "Swipe Up / Prev"
             cmdDesc = "镜腿手势: 向上滑动 (PREV)"
             isGesture = true
             onPageControlTriggered?("PREV")
+            DispatchQueue.main.async {
+                self.currentFocusPageLine = max(0, self.currentFocusPageLine - 1)
+            }
             addLog("👈 收到镜腿手势: 向上滑动 (PREV)")
         } else if rawByte == 0x03 {
             lastGestureReceived = "Ring Click / Next"
             cmdDesc = "戒指按键: 单击 (NEXT)"
             isGesture = true
             onPageControlTriggered?("NEXT")
+            DispatchQueue.main.async {
+                self.currentFocusPageLine += 1
+            }
             addLog("💍 收到戒指按键: 点击 (NEXT)")
         } else {
             cmdDesc = "G2 通知数据 [\(data.count) 字节]"
