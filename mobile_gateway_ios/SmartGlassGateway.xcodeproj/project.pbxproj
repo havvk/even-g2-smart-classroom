@@ -21,6 +21,11 @@
 		A100000C2C50000100000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B100000C2C50000100000001 /* Assets.xcassets */; };
 		A100000D2C50000100000001 /* G2ProtocolEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000D2C50000100000001 /* G2ProtocolEncoder.swift */; };
 		A100000E2C50000100000001 /* G2DebugView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000E2C50000100000001 /* G2DebugView.swift */; };
+		A100000F2C50000100000001 /* ScriptItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000F2C50000100000001 /* ScriptItem.swift */; };
+		A10000102C50000100000001 /* ScriptStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000102C50000100000001 /* ScriptStorage.swift */; };
+		A10000112C50000100000001 /* ScriptEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000112C50000100000001 /* ScriptEditorView.swift */; };
+		A10000122C50000100000001 /* TeleprompterPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000122C50000100000001 /* TeleprompterPreviewView.swift */; };
+		A10000132C50000100000001 /* TeleprompterListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000132C50000100000001 /* TeleprompterListView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -35,6 +40,11 @@
 		B10000072C50000100000001 /* HUDPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/HUDPreviewView.swift; sourceTree = "<group>"; };
 		B10000082C50000100000001 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ContentView.swift; sourceTree = "<group>"; };
 		B100000E2C50000100000001 /* G2DebugView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/G2DebugView.swift; sourceTree = "<group>"; };
+		B100000F2C50000100000001 /* ScriptItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGateway/Models/ScriptItem.swift; sourceTree = "<group>"; };
+		B10000102C50000100000001 /* ScriptStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGateway/Services/ScriptStorage.swift; sourceTree = "<group>"; };
+		B10000112C50000100000001 /* ScriptEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGateway/Views/ScriptEditorView.swift; sourceTree = "<group>"; };
+		B10000122C50000100000001 /* TeleprompterPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGateway/Views/TeleprompterPreviewView.swift; sourceTree = "<group>"; };
+		B10000132C50000100000001 /* TeleprompterListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGateway/Views/TeleprompterListView.swift; sourceTree = "<group>"; };
 		B10000092C50000100000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B100000A2C50000100000001 /* WatchSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/WatchSessionManager.swift; sourceTree = "<group>"; };
 		B100000B2C50000100000001 /* ServerDiscoveryEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/ServerDiscoveryEngine.swift; sourceTree = "<group>"; };
@@ -165,6 +175,11 @@
 				A10000072C50000100000001 /* HUDPreviewView.swift in Sources */,
 				A10000082C50000100000001 /* ContentView.swift in Sources */,
 				A100000E2C50000100000001 /* G2DebugView.swift in Sources */,
+				A100000F2C50000100000001 /* ScriptItem.swift in Sources */,
+				A10000102C50000100000001 /* ScriptStorage.swift in Sources */,
+				A10000112C50000100000001 /* ScriptEditorView.swift in Sources */,
+				A10000122C50000100000001 /* TeleprompterPreviewView.swift in Sources */,
+				A10000132C50000100000001 /* TeleprompterListView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -423,8 +423,18 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
             delay += 0.08
         }
-        delay += 0.3
-        seq = 0x08
+        delay += 0.2
+        
+        // 物理屏显唤醒: 确保黑屏/未进入 App 状态下点亮 MicroLED
+        let pktWake = G2ProtocolEncoder.buildWakePacket(seq: 0x08, msgId: 0x13)
+        let itemWake = DispatchWorkItem {
+            self.sendRawData(pktWake, channel: .content, logDesc: "Screen Wake (0x0420)")
+        }
+        self.teleprompterWorkItems.append(itemWake)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemWake)
+        delay += 0.2
+        
+        seq = 0x09
         msgId = 0x14
         
         // Phase 2: Display Config
