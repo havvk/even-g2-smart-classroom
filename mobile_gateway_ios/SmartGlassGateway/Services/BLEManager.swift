@@ -388,9 +388,103 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
     }
     
-    /// 100% 零加工 1:1 原装 bt.pklg 抓包 70 包纯物理重发 (一个 Byte 都不改)
-    func sendTeleprompterText(_ rawText: String, targetWidthChars: Int = 14) {
-        sendHardcodedOfficialPklg()
+    /// 动态编码并推送讲稿文本到 G2 眼镜 (100% 对齐 Python teleprompter.py 逆向全流程)
+    func sendTeleprompterText(_ rawText: String, targetWidthChars: Int = 28) {
+        guard isConnected else {
+            addLog("⚠️ 蓝牙未连接，请先连接 G2 眼镜")
+            return
+        }
+        guard contentTxChar != nil else {
+            addLog("⚠️ 5401 通道未绑定")
+            return
+        }
+        
+        // 重置旧的发送任务
+        resetTeleprompterSession()
+        
+        let pages = G2ProtocolEncoder.formatTextToPages(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: 10, targetPageCount: 14)
+        addLog("🚀 [动态文本编码] 成功格式化为 \(pages.count) 页，准备顺序下发蓝牙分包...")
+        
+        var delay: Double = 0.05
+        var seq: UInt8 = 0x01
+        var msgId: Int = 0x0C
+        
+        // Phase 1: Auth (7 包)
+        let authPackets = G2ProtocolEncoder.buildAuthPackets()
+        for (i, pkt) in authPackets.enumerated() {
+            let item = DispatchWorkItem {
+                self.sendRawData(pkt, channel: .content, logDesc: "Auth [\(i+1)/7]")
+            }
+            self.teleprompterWorkItems.append(item)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+            delay += 0.08
+        }
+        delay += 0.3
+        seq = 0x08
+        msgId = 0x14
+        
+        // Phase 2: Display Config
+        let pktDisplayConfig = G2ProtocolEncoder.buildDisplayConfig(seq: seq, msgId: msgId)
+        seq &+= 1
+        msgId += 1
+        let itemCfg = DispatchWorkItem {
+            self.sendRawData(pktDisplayConfig, channel: .content, logDesc: "DisplayConfig")
+        }
+        self.teleprompterWorkItems.append(itemCfg)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemCfg)
+        delay += 0.3
+        
+        // Phase 3: Teleprompter Init
+        let initPackets = G2ProtocolEncoder.buildTeleprompterInit(seq: seq, msgId: msgId, scrollModeAI: true)
+        seq &+= 1
+        msgId += 1
+        for pkt in initPackets {
+            let itemInit = DispatchWorkItem {
+                self.sendRawData(pkt, channel: .content, logDesc: "TeleprompterInit")
+            }
+            self.teleprompterWorkItems.append(itemInit)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemInit)
+            delay += 0.05
+        }
+        delay += 0.5
+        
+        // Phase 4: Send 14 Content Pages
+        for (pageIdx, pageText) in pages.enumerated() {
+            let pagePackets = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: msgId, pageNum: pageIdx, text: pageText)
+            msgId += 1
+            for pkt in pagePackets {
+                let itemPkt = DispatchWorkItem {
+                    self.sendRawData(pkt, channel: .content, logDesc: "Page \(pageIdx) [\(pkt.count)b]")
+                }
+                self.teleprompterWorkItems.append(itemPkt)
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemPkt)
+                delay += 0.05
+            }
+            delay += 0.05
+        }
+        delay += 0.2
+        
+        // Phase 5: Sync & UI Route Switch
+        let pktSync = G2ProtocolEncoder.buildSyncPacket(seq: seq, msgId: msgId)
+        seq &+= 1
+        msgId += 1
+        let itemSync = DispatchWorkItem {
+            self.sendRawData(pktSync, channel: .content, logDesc: "Sync")
+        }
+        self.teleprompterWorkItems.append(itemSync)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemSync)
+        delay += 0.1
+        
+        let pktRoute = G2ProtocolEncoder.buildRouteSwitchPacket(seq: seq, msgId: msgId)
+        let itemRoute = DispatchWorkItem {
+            self.sendRawData(pktRoute, channel: .content, logDesc: "RouteSwitch Teleprompter")
+        }
+        self.teleprompterWorkItems.append(itemRoute)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemRoute)
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.1) {
+            self.addLog("🎉 动态讲稿全流程下发完成！G2 屏幕应已显示文本。")
+        }
     }
     
     /// 手动发送退出提词器模式报文 (Service 0x06-20 type=4 state=4)
@@ -402,9 +496,8 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         addLog("🛑 已下发 0x06-20 state=4 退出提词器模式指令")
     }
     
-    /// 推送全屏满屏提词文本 (11字/行 契合 G2 光学屏宽自然折行模式)
-    func sendFullScreenTeleprompterText(_ text: String, targetWidthChars: Int = 11) {
-        resetTeleprompterSession()
+    /// 推送全屏满屏提词文本 (28字/行 x 10行/页)
+    func sendFullScreenTeleprompterText(_ text: String, targetWidthChars: Int = 28) {
         sendTeleprompterText(text, targetWidthChars: targetWidthChars)
     }
     
