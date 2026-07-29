@@ -292,9 +292,12 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         teleprompterWorkItems.removeAll()
     }
     
-    /// 重置提词器会话状态并清空历史文本防抖
-    func resetTeleprompterSession() {
+    /// 重置提词器会话状态并清空历史文本防抖 (若 clearHardwareState 为 true 则同步向眼镜下发物理退出/清屏指令)
+    func resetTeleprompterSession(clearHardwareState: Bool = true) {
         cancelPendingTeleprompterTasks()
+        if clearHardwareState && isConnected && contentTxChar != nil && isTeleprompterSessionActive {
+            sendExitTeleprompterMode()
+        }
         lastSentTeleprompterText = ""
         isTeleprompterSessionActive = false
     }
@@ -401,6 +404,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         
         // 重置旧的发送任务
         resetTeleprompterSession()
+        isTeleprompterSessionActive = true
         
         let pages = G2ProtocolEncoder.formatTextToPages(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: 10, targetPageCount: 14)
         addLog("🚀 [动态文本编码] 成功格式化为 \(pages.count) 页，准备顺序下发蓝牙分包...")
@@ -434,7 +438,17 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemCfg)
         delay += 0.3
         
-        // Phase 3: Teleprompter Init
+        // Phase 3: Teleprompter Mode Activation & Init (0x06-20 State=1 & Init)
+        let pktEnterMode = G2ProtocolEncoder.buildEnterTeleprompterModePacket(seq: seq, msgId: msgId)
+        seq &+= 1
+        msgId += 1
+        let itemEnter = DispatchWorkItem {
+            self.sendRawData(pktEnterMode, channel: .content, logDesc: "EnterTeleprompterMode (State=1)")
+        }
+        self.teleprompterWorkItems.append(itemEnter)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemEnter)
+        delay += 0.05
+        
         let initPackets = G2ProtocolEncoder.buildTeleprompterInit(seq: seq, msgId: msgId, scrollModeAI: true)
         seq &+= 1
         msgId += 1
@@ -460,9 +474,10 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemPkt)
                 delay += 0.05
             }
-            delay += 0.05
+            // 每页下发完毕后，预留 0.15 秒给固件底层 RAM 进行分包重组与 CRC 校验
+            delay += 0.15
         }
-        delay += 0.2
+        delay += 0.3
         
         // Phase 5: Sync & UI Route Switch
         let pktSync = G2ProtocolEncoder.buildSyncPacket(seq: seq, msgId: msgId)

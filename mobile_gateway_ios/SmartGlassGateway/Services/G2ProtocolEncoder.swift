@@ -214,7 +214,7 @@ class G2ProtocolEncoder {
     /// 生成单个 Content 页面分包列表 (无前导 \n, 严格等于实际行数)
     static func buildContentPagePackets(seq: inout UInt8, msgId: Int, pageNum: Int, text: String) -> [Data] {
         guard let textBytes = text.data(using: .utf8) else { return [] }
-        let lineCount = text.components(separatedBy: "\n").count
+        let lineCount = text.filter({ $0 == "\n" }).count + 1
         
         var inner = Data([0x08])
         inner.append(encodeVarint(pageNum))
@@ -261,6 +261,46 @@ class G2ProtocolEncoder {
         payload.append(encodeVarint(routeBytes.count))
         payload.append(routeBytes)
         return buildPacket(seq: seq, serviceHi: 0x09, serviceLo: 0x20, payload: payload)
+    }
+    
+    // MARK: - Legacy / UI Control Helpers
+    
+    static func buildScrollSync(seq: UInt8 = 0x2A, msgId: Int = 0x50, pageLine: Int) -> Data {
+        var payload = Data([0x08, 0x01, 0x10])
+        payload.append(encodeVarint(msgId))
+        payload.append(Data([0x72, 0x06, 0x08]))
+        payload.append(encodeVarint(pageLine))
+        payload.append(Data([0x10, 0x00, 0x18, 0x00]))
+        return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
+    }
+    
+    static func buildWakePacket(seq: UInt8 = 0x05, msgId: Int = 0x05) -> Data {
+        var payload = Data([0x08, 0x01, 0x10])
+        payload.append(encodeVarint(msgId))
+        payload.append(Data([0x1A, 0x08, 0x08, 0x01, 0x10, 0x01, 0x18, 0x05, 0x28, 0x01]))
+        return buildPacket(seq: seq, serviceHi: 0x04, serviceLo: 0x20, payload: payload)
+    }
+    
+    static func buildSleepPacket(seq: UInt8 = 0x06, msgId: Int = 0x06) -> Data {
+        var payload = Data([0x08, 0x01, 0x10])
+        payload.append(encodeVarint(msgId))
+        payload.append(Data([0x1A, 0x08, 0x08, 0x01, 0x10, 0x00, 0x18, 0x05, 0x28, 0x00]))
+        return buildPacket(seq: seq, serviceHi: 0x04, serviceLo: 0x20, payload: payload)
+    }
+    
+    static func buildEnterTeleprompterModePacket(seq: UInt8 = 0x09, msgId: Int = 0x15) -> Data {
+        let stateMsg = Data([0x08, 0x01])
+        var payload = Data([0x08, 0x01, 0x10])
+        payload.append(encodeVarint(msgId))
+        payload.append(Data([0x1A]))
+        payload.append(encodeVarint(stateMsg.count))
+        payload.append(stateMsg)
+        return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
+    }
+    
+    static func buildTeleprompterModeConfigPacket(seq: UInt8 = 0x0A, mode: UInt8 = 0x00) -> Data {
+        var payload = Data([0x08, 0x01, 0x10, 0x16, 0x48, mode])
+        return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
     // MARK: - Text Formatting Helper
