@@ -322,6 +322,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     /// 实时当前滚动的焦点行号回调 (用于 9 行所见即所得 View 高亮卡片)
     @Published var currentFocusPageLine: Int = 0
     @Published var currentWrappedLines: [String] = []
+    @Published var currentGlassesState: UInt8 = 0
     
     private var syncSeq: UInt8 = 0x2A
     private var syncMsgId: Int = 0x50
@@ -414,80 +415,98 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         isTeleprompterSessionActive = true
         
         let pages = G2ProtocolEncoder.formatTextToPages(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: 10, targetPageCount: 14)
-        addLog("🚀 [动态文本编码] 成功格式化为 \(pages.count) 页，准备顺序下发蓝牙分包...")
+        addLog("🚀 [动态文本编码] 成功格式化为 \(pages.count) 页，准备检查眼镜当前模式...")
         
         var delay: Double = 0.05
         var seq: UInt8 = 0x01
         var msgId: Int = 0x0C
         
-        // Phase 1: Auth (7 包)
-        let authPackets = G2ProtocolEncoder.buildAuthPackets()
-        for (i, pkt) in authPackets.enumerated() {
-            let item = DispatchWorkItem {
-                self.sendRawData(pkt, channel: .content, logDesc: "Auth [\(i+1)/7]")
+        // MARK: - 步骤 1: 先查询眼镜当前提词模式与前台状态
+        let pktQuery = G2ProtocolEncoder.buildQueryTeleprompterStatePacket(seq: 0x07, msgId: 0x12)
+        let itemQuery = DispatchWorkItem {
+            self.sendRawData(pktQuery, channel: .content, logDesc: "Query Status (0x0620 Type=2)")
+        }
+        self.teleprompterWorkItems.append(itemQuery)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemQuery)
+        delay += 0.15
+        
+        // 步骤 2: 判定眼镜当前状态
+        if self.currentGlassesState == 1 {
+            addLog("⚡️ 探测到眼镜已处于提词器前台模式 (State=1)，跳过重置与唤醒，直接秒级下发内容...")
+            seq = 0x10
+            msgId = 0x20
+        } else {
+            addLog("🌙 眼镜处于休眠/主菜单状态，准备执行【唤醒 0x0420 -> 重置 State=4 -> 初始化 State=1】激活序列...")
+            
+            // Phase 1: Auth (7 包)
+            let authPackets = G2ProtocolEncoder.buildAuthPackets()
+            for (i, pkt) in authPackets.enumerated() {
+                let item = DispatchWorkItem {
+                    self.sendRawData(pkt, channel: .content, logDesc: "Auth [\(i+1)/7]")
+                }
+                self.teleprompterWorkItems.append(item)
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+                delay += 0.08
             }
-            self.teleprompterWorkItems.append(item)
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
-            delay += 0.08
-        }
-        delay += 0.2
-        
-        // 物理屏显唤醒: 首位发送 0x0420，确保黑屏/休眠状态下点亮 MicroLED 屏显硬件
-        let pktWake = G2ProtocolEncoder.buildWakePacket(seq: 0x08, msgId: 0x13)
-        let itemWake = DispatchWorkItem {
-            self.sendRawData(pktWake, channel: .content, logDesc: "Screen Wake (0x0420)")
-        }
-        self.teleprompterWorkItems.append(itemWake)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemWake)
-        delay += 0.5 // 预留 0.5s 给固件 MicroLED 屏幕上电
-        
-        // 关键物理规则: 唤醒后再下发 0x06-20 State=4 强行复位固件提词器显存状态机
-        let exitData = Data([0x08, 0x01, 0x10, 0x32, 0x1A, 0x02, 0x08, 0x04])
-        let pktResetState = G2ProtocolEncoder.buildPacket(seq: 0x09, serviceHi: 0x06, serviceLo: 0x20, payload: exitData)
-        let itemReset = DispatchWorkItem {
-            self.sendRawData(pktResetState, channel: .content, logDesc: "Reset Teleprompter State (State=4)")
-        }
-        self.teleprompterWorkItems.append(itemReset)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemReset)
-        delay += 0.25
-        
-        seq = 0x0A
-        msgId = 0x14
-        
-        // Phase 2: Display Config
-        let pktDisplayConfig = G2ProtocolEncoder.buildDisplayConfig(seq: seq, msgId: msgId)
-        seq &+= 1
-        msgId += 1
-        let itemCfg = DispatchWorkItem {
-            self.sendRawData(pktDisplayConfig, channel: .content, logDesc: "DisplayConfig")
-        }
-        self.teleprompterWorkItems.append(itemCfg)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemCfg)
-        delay += 0.3
-        
-        // Phase 3: Teleprompter Mode Activation & Init (0x06-20 State=1 & Init)
-        let pktEnterMode = G2ProtocolEncoder.buildEnterTeleprompterModePacket(seq: seq, msgId: msgId)
-        seq &+= 1
-        msgId += 1
-        let itemEnter = DispatchWorkItem {
-            self.sendRawData(pktEnterMode, channel: .content, logDesc: "EnterTeleprompterMode (State=1)")
-        }
-        self.teleprompterWorkItems.append(itemEnter)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemEnter)
-        delay += 0.05
-        
-        let initPackets = G2ProtocolEncoder.buildTeleprompterInit(seq: seq, msgId: msgId, scrollModeAI: true)
-        seq &+= 1
-        msgId += 1
-        for pkt in initPackets {
-            let itemInit = DispatchWorkItem {
-                self.sendRawData(pkt, channel: .content, logDesc: "TeleprompterInit")
+            delay += 0.2
+            
+            // 物理屏显唤醒
+            let pktWake = G2ProtocolEncoder.buildWakePacket(seq: 0x08, msgId: 0x13)
+            let itemWake = DispatchWorkItem {
+                self.sendRawData(pktWake, channel: .content, logDesc: "Screen Wake (0x0420)")
             }
-            self.teleprompterWorkItems.append(itemInit)
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemInit)
+            self.teleprompterWorkItems.append(itemWake)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemWake)
+            delay += 0.4
+            
+            // 唤醒后再下发 State=4 强行复位
+            let exitData = Data([0x08, 0x01, 0x10, 0x32, 0x1A, 0x02, 0x08, 0x04])
+            let pktResetState = G2ProtocolEncoder.buildPacket(seq: 0x09, serviceHi: 0x06, serviceLo: 0x20, payload: exitData)
+            let itemReset = DispatchWorkItem {
+                self.sendRawData(pktResetState, channel: .content, logDesc: "Reset Teleprompter State (State=4)")
+            }
+            self.teleprompterWorkItems.append(itemReset)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemReset)
+            delay += 0.2
+            
+            seq = 0x0A
+            msgId = 0x14
+            
+            // Phase 2: Display Config
+            let pktDisplayConfig = G2ProtocolEncoder.buildDisplayConfig(seq: seq, msgId: msgId)
+            seq &+= 1
+            msgId += 1
+            let itemCfg = DispatchWorkItem {
+                self.sendRawData(pktDisplayConfig, channel: .content, logDesc: "DisplayConfig")
+            }
+            self.teleprompterWorkItems.append(itemCfg)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemCfg)
+            delay += 0.25
+            
+            // Phase 3: Teleprompter Mode Activation & Init (0x06-20 State=1 & Init)
+            let pktEnterMode = G2ProtocolEncoder.buildEnterTeleprompterModePacket(seq: seq, msgId: msgId)
+            seq &+= 1
+            msgId += 1
+            let itemEnter = DispatchWorkItem {
+                self.sendRawData(pktEnterMode, channel: .content, logDesc: "EnterTeleprompterMode (State=1)")
+            }
+            self.teleprompterWorkItems.append(itemEnter)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemEnter)
             delay += 0.05
+            
+            let initPackets = G2ProtocolEncoder.buildTeleprompterInit(seq: seq, msgId: msgId, scrollModeAI: true)
+            seq &+= 1
+            msgId += 1
+            for pkt in initPackets {
+                let itemInit = DispatchWorkItem {
+                    self.sendRawData(pkt, channel: .content, logDesc: "TeleprompterInit")
+                }
+                self.teleprompterWorkItems.append(itemInit)
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemInit)
+                delay += 0.05
+            }
+            delay += 0.4
         }
-        delay += 0.5
         
         // Phase 4: Send 14 Content Pages
         for (pageIdx, pageText) in pages.enumerated() {
