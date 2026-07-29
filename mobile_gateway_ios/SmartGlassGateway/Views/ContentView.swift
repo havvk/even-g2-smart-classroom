@@ -68,7 +68,7 @@ struct ContentView: View {
             } else {
                 VStack(spacing: 14) {
                     Button(action: {
-                        bleManager.sendTeleprompterText(testText, targetWidthChars: 14)
+                        bleManager.sendTeleprompterText(testText, targetWidthChars: 28)
                     }) {
                         HStack {
                             Image(systemName: "paperplane.fill")
