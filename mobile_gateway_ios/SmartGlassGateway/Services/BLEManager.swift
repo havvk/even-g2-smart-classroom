@@ -540,20 +540,26 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             let svcHi = data[6]
             let svcLo = data[7]
             if svcHi == 0x06 && svcLo == 0x20 {
-                cmdDesc = "G2 提词器手势通知 (0x0620)"
-                isGesture = true
+                cmdDesc = "G2 提词器通知 (0x0620)"
                 
                 let payload = data.subdata(in: 8..<(data.count - 2))
-                // 解析固件下发的滑屏/滚屏通知
-                DispatchQueue.main.async {
-                    // 如果包含向上滚动/Prev 标志
-                    if payload.contains(0x02) {
-                        self.currentFocusPageLine = max(0, self.currentFocusPageLine - 1)
-                        self.addLog("👈 收到 G2 固件 0x0620 向上滑屏通知 -> 视口上移 1 行 (第 \(self.currentFocusPageLine) 行)")
-                    } else {
-                        // 默认向下滑动/Next 步进 1 行
-                        self.currentFocusPageLine += 1
-                        self.addLog("👉 收到 G2 固件 0x0620 向下滑屏通知 -> 视口下移 1 行 (第 \(self.currentFocusPageLine) 行)")
+                // 精确解包 Protobuf Header: 0x08 [Type] 0x10 [MsgId]
+                if payload.count >= 2 && payload[0] == 0x08 {
+                    let msgType = payload[1]
+                    // 仅当 Type = 5 (Scroll Sync) 或 Type = 6 (AI Sync) 时，才代表真正的屏幕视口滑动通知
+                    if msgType == 5 || msgType == 6 {
+                        isGesture = true
+                        DispatchQueue.main.async {
+                            // 从 payload 中提取目标行号 (Field 1 varint)
+                            if payload.count > 4 {
+                                let lineVal = Int(payload[4])
+                                self.currentFocusPageLine = lineVal
+                                self.addLog("👀 [精准协议解包] 收到 G2 固件 Type=\(msgType) 视口滑动通知 -> 驱动 App 到第 \(lineVal) 行")
+                            } else {
+                                self.currentFocusPageLine += 1
+                                self.addLog("👉 收到 G2 固件 Type=\(msgType) 滑屏通知 -> App 步进 1 行")
+                            }
+                        }
                     }
                 }
             } else {
