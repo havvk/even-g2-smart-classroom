@@ -552,23 +552,6 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             if svcHi == 0x06 && svcLo == 0x20 {
                 cmdDesc = "G2 提词器通知 (0x0620)"
                 isGesture = true
-                
-                // 从 Protobuf 数据中尝试解析当前页码/行号
-                let payload = data.subdata(in: 8..<(data.count - 2))
-                if payload.count >= 2 {
-                    let type = payload[0]
-                    if type == 0x01 || type == 0x03 || type == 0x05 {
-                        // 提取内部 varint 页码
-                        if payload.count > 3 {
-                            let pageNum = Int(payload[3])
-                            let calculatedLine = pageNum * 10
-                            DispatchQueue.main.async {
-                                self.currentFocusPageLine = calculatedLine
-                                self.addLog("👀 眼镜端滑屏通知 -> 同步 App 视口到第 \(calculatedLine) 行 (Page \(pageNum))")
-                            }
-                        }
-                    }
-                }
             } else {
                 cmdDesc = "G2 固件应答包 (Cmd=0x\(String(format: "%02X", data.count > 4 ? data[4] : 0x00)))"
                 addLog("ℹ️ 解码 G2 固件帧: Header=0x\(String(format: "%02X", data.count > 1 ? data[1] : 0x00)))")
