@@ -186,7 +186,8 @@ struct TeleprompterPreviewView: View {
                             }
                         }
                         
-                        Spacer(minLength: 80)
+                        // 500px 巨型底边滚动缓冲区 (确保任何最后行均能物理 100% 置顶)
+                        Spacer(minLength: 500)
                     }
                     .padding(.vertical, 8)
                 }
