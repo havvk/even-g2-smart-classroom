@@ -539,28 +539,24 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         if rawByte == 0xAA && data.count >= 8 {
             let svcHi = data[6]
             let svcLo = data[7]
-            if svcHi == 0x06 && svcLo == 0x20 {
-                cmdDesc = "G2 提词器通知 (0x0620)"
+            
+            // 匹配提词器与手势通知服务 (0x0620, 0x0D01, 0x0901)
+            let isTeleprompterService = (svcHi == 0x06 && svcLo == 0x20) || (svcHi == 0x0D && svcLo == 0x01) || (svcHi == 0x09 && svcLo == 0x01)
+            
+            if isTeleprompterService {
+                cmdDesc = "G2 视口/手势通知 (0x\(String(format: "%02X%02X", svcHi, svcLo)))"
+                isGesture = true
                 
                 let payload = data.subdata(in: 8..<(data.count - 2))
-                // 精确解包 Protobuf Header: 0x08 [Type] 0x10 [MsgId]
-                if payload.count >= 2 && payload[0] == 0x08 {
-                    let msgType = payload[1]
-                    // 仅当 Type = 5 (Scroll Sync) 或 Type = 6 (AI Sync) 时，才代表真正的屏幕视口滑动通知
-                    if msgType == 5 || msgType == 6 {
-                        isGesture = true
-                        DispatchQueue.main.async {
-                            // 物理解析: payload 传输的是 page_number，换算为 App 绝对行号 = pageNum * 10
-                            if payload.count > 4 {
-                                let pageNum = Int(payload[4])
-                                let calculatedLine = pageNum * 10
-                                self.currentFocusPageLine = calculatedLine
-                                self.addLog("👀 [页码解包] 收到 G2 固件 Page=\(pageNum) -> 精准同步 App 视口到第 \(calculatedLine) 行")
-                            } else {
-                                self.currentFocusPageLine += 10
-                                self.addLog("👉 收到 G2 固件 Type=\(msgType) 滑屏通知 -> App 步进 1 页 (10 行)")
-                            }
-                        }
+                DispatchQueue.main.async {
+                    // 如果包含向上滑标志 (Prev)
+                    if payload.contains(0x02) {
+                        self.currentFocusPageLine = max(0, self.currentFocusPageLine - 10)
+                        self.addLog("👈 收到 G2 向上滑屏 -> App 视口向上翻 1 页 (-10 行 -> 第 \(self.currentFocusPageLine) 行)")
+                    } else {
+                        // 默认向下滑步 (Next): 每次跨越 10 行 (1 全页)
+                        self.currentFocusPageLine += 10
+                        self.addLog("👉 收到 G2 向下滑屏 -> App 视口向下翻 1 页 (+10 行 -> 第 \(self.currentFocusPageLine) 行)")
                     }
                 }
             } else {
