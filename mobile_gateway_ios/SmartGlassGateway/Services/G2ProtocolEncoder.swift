@@ -377,8 +377,17 @@ class G2ProtocolEncoder {
         var pages = [String]()
         for i in stride(from: 0, to: wrappedLines.count, by: linesPerPage) {
             let end = min(i + linesPerPage, wrappedLines.count)
-            let chunk = Array(wrappedLines[i..<end])
+            var chunk = Array(wrappedLines[i..<end])
+            while chunk.count < linesPerPage {
+                chunk.append("")
+            }
             pages.append(chunk.joined(separator: "\n"))
+        }
+        
+        // 固件显存 14 页 Buffer 强制硬性约束
+        while pages.count < targetPageCount {
+            let emptyPage = Array(repeating: "", count: linesPerPage).joined(separator: "\n")
+            pages.append(emptyPage)
         }
         
         return pages
