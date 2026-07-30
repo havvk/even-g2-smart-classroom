@@ -179,7 +179,7 @@ class G2ProtocolEncoder {
     // MARK: - 3. Teleprompter Init (Service 0x06-20 type=1)
     
     /// 物理屏显提词器初始化 (100% 对齐全屏 28 字 x 10 行参数: width=59, content_height=585, line_height=567, viewport=3113)
-    static func buildTeleprompterInit(seq: UInt8, msgId: Int, scrollModeAI: Bool = true) -> [Data] {
+    static func buildTeleprompterInit(seq: UInt8, msgId: Int, scrollModeAI: Bool = false) -> [Data] {
         let modeByte: UInt8 = scrollModeAI ? 0x01 : 0x00
         
         let display = Data([

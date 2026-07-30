@@ -332,11 +332,10 @@ struct TeleprompterPreviewView: View {
         bleManager.sendScrollSync(lineIndex: lineIndex)
     }
     
-    /// 按当前设置的每行字数与滚动模式重新推屏下发
+    /// 按当前设置的每行字数下发推屏 (强制开启手动触控手势 scrollModeAI = false)
     private func triggerPushToGlasses() {
         isPushing = true
-        let isAI = (script.scrollMode == .ai)
-        bleManager.sendTeleprompterText(script.content, targetWidthChars: Int(widthChars), scrollModeAI: isAI)
+        bleManager.sendTeleprompterText(script.content, targetWidthChars: Int(widthChars), scrollModeAI: false)
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
             isPushing = false
