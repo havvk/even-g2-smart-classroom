@@ -200,13 +200,13 @@ struct TeleprompterPreviewView: View {
                         }
                     }
                 )
-                // 监听眼镜端发来的触控/按键通知 (无门槛驱动 App 界面滚动)
+                // 监听眼镜端发来的触控/按键通知 (无门槛驱动 App 界面 1:1 屏顶对齐)
                 .onReceive(bleManager.$currentFocusPageLine) { newGlassesLine in
                     guard !wrappedLines.isEmpty else { return }
                     let clampedLine = max(0, min(wrappedLines.count - 1, newGlassesLine))
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
                         self.activeLineIndex = clampedLine
-                        proxy.scrollTo(clampedLine, anchor: .center)
+                        proxy.scrollTo(clampedLine, anchor: .top)
                     }
                 }
                 .onReceive(timer) { _ in
@@ -236,7 +236,7 @@ struct TeleprompterPreviewView: View {
                         isPlaying.toggle()
                     }) {
                         Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.title1)
+                            .font(.title)
                             .foregroundColor(.purple)
                     }
                     
