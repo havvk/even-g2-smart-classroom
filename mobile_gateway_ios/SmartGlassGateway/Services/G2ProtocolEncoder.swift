@@ -265,13 +265,11 @@ class G2ProtocolEncoder {
     
     // MARK: - Legacy / UI Control Helpers
     
-    /// 生成 0x06-20 Type 5 双向位置同步报文 (Field 1 = page_num, Field 2 = line_num_in_page)
-    static func buildScrollSync(seq: UInt8 = 0x2A, msgId: Int = 0x50, pageNum: Int, lineNum: Int) -> Data {
+    /// 生成 0x06-20 Type 5 双向位置同步报文 (100% 对齐 teleprompter.py build_scroll_sync)
+    static func buildScrollSync(seq: UInt8 = 0x2A, msgId: Int = 0x50, lineIndex: Int) -> Data {
         var inner = Data([0x08])
-        inner.append(encodeVarint(pageNum))  // Field 1: page_num (0..13)
-        inner.append(Data([0x10]))
-        inner.append(encodeVarint(lineNum))  // Field 2: line_num within page (0..9)
-        inner.append(Data([0x18, 0x00]))     // Field 3: 0
+        inner.append(encodeVarint(lineIndex))
+        inner.append(Data([0x10, 0x00, 0x18, 0x00]))
         
         var payload = Data([0x08, 0x05, 0x10]) // Type 5: Teleprompter Scroll Sync Event
         payload.append(encodeVarint(msgId))

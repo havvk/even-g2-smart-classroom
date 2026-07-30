@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 讲稿预览与控制台视图 (1:1 官方同款：10行紧凑视口全显、亮白高对比度、双向同步)
+/// 讲稿预览与控制台视图 (1:1 官方同款：10行紧凑视口全显、亮白高对比度、防抖滚动同步)
 struct TeleprompterPreviewView: View {
     @EnvironmentObject var bleManager: BLEManager
     @ObservedObject var storage = ScriptStorage.shared
@@ -107,7 +107,7 @@ struct TeleprompterPreviewView: View {
             .padding(.horizontal)
             .padding(.top, 8)
             
-            // MARK: - 官方同款 10 行全显 HUD 视口 (紧凑行距 + 亮白字体 + 双向同步)
+            // MARK: - 官方同款 10 行全显 Viewport (防抖无死循环 + 亮白字体 + 手势与Rx同步)
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 4) {
@@ -125,14 +125,13 @@ struct TeleprompterPreviewView: View {
                                 
                                 Text(lineText.isEmpty ? " " : lineText)
                                     .font(.system(size: isInViewport ? 15 : 13.5, weight: isInViewport ? .medium : .regular))
-                                    // 官方风格: 视口 10 行内部文字保持亮白高对比度显示，视口外深灰透明
                                     .foregroundColor(isInViewport ? Color.primary : Color.secondary.opacity(0.3))
                                     .lineLimit(1)
                                 
                                 Spacer()
                             }
                             .padding(.horizontal, 14)
-                            .padding(.vertical, 4) // 极简紧凑内边距，确保 10 行完美平铺在屏幕内
+                            .padding(.vertical, 4)
                             .background(
                                 Group {
                                     if isInViewport {
@@ -162,16 +161,16 @@ struct TeleprompterPreviewView: View {
                     .padding(.vertical, 8)
                 }
                 .simultaneousGesture(
-                    DragGesture().onEnded { value in
-                        // 手指上下滑动拖拽松开时，自动根据偏移计算最新聚焦行并同步给 Glasses
-                        let delta = Int(-value.translation.height / 28.0)
+                    DragGesture(minimumDistance: 15).onEnded { value in
+                        // 手势滑动停止后，精准计算最新焦点行并仅触发一次同步
+                        let delta = Int(-value.translation.height / 32.0)
                         let newIndex = min(max(0, activeLineIndex + delta), max(0, wrappedLines.count - 1))
                         if newIndex != activeLineIndex {
                             updateFocusLine(index: newIndex, scrollProxy: proxy)
                         }
                     }
                 )
-                // 监听眼镜发回的触控/按键通知 (眼镜端控制 App 界面滚动)
+                // 监听眼镜端发来的触控/按键通知 (眼镜端控制 App 界面滚动)
                 .onReceive(bleManager.$currentFocusPageLine) { newGlassesLine in
                     if newGlassesLine != activeLineIndex && newGlassesLine >= 0 && newGlassesLine < wrappedLines.count {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
@@ -301,10 +300,10 @@ struct TeleprompterPreviewView: View {
         syncLineToGlasses(lineIndex: index)
     }
     
-    /// 下发行号真实双向位置同步到 G2 眼镜 (Service 0x06-20 Type=5)
+    /// 下发行号真实双向位置同步到 G2 眼镜 (100% 对齐 teleprompter.py)
     private func syncLineToGlasses(lineIndex: Int) {
         guard bleManager.isConnected else { return }
-        bleManager.sendScrollSync(globalLineIndex: lineIndex)
+        bleManager.sendScrollSync(lineIndex: lineIndex)
     }
     
     /// 按当前设置的每行字数重新推屏下发
