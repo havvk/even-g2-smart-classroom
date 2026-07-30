@@ -517,98 +517,39 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             addLog("✅ Tx 数据包被 G2 成功接收确认 (ACK) [\(uuidSuffix)]")
         }
     }
-    
-    /// 解析并记录从 G2 眼镜收到的原始蓝牙数据帧
+    /// 接收并解析从 G2 眼镜收到的原始蓝牙数据帧 (匹配 0x0601 手势通知)
     private func processReceivedG2Data(_ data: Data) {
-        let rawByte = data.first ?? 0
-        
-        // 1. 优先静默过滤 G2 固件下发的高频 ACK 应答包 (AA 12 ...)，防止调试日志疯狂刷屏
-        if rawByte == 0xAA && data.count >= 4 && data[1] == 0x12 {
-            DispatchQueue.main.async {
-                self.rxCount += 1
-            }
-            return
-        }
+        guard data.count >= 8 else { return }
         
         let hexString = data.map { String(format: "%02X", $0) }.joined(separator: " ")
-        addLog("📥 Rx (G2 -> Phone): [\(hexString)]")
+        addLog("📥 BLE Rx 收到眼镜数据 (Len \(data.count)): [\(hexString)]")
         
-        var cmdDesc = "未知数据帧"
-        var isGesture = false
+        let rawByte = data[0]
+        let msgType = data[1]
         
-        if rawByte == 0xAA && data.count >= 8 {
+        // 匹配官方 G2 抓包中的 0x0601 镜腿触控/翻页 Notify 通知包 (AA 12 ... 06 01 ...)
+        if rawByte == 0xAA && data.count >= 10 {
             let svcHi = data[6]
             let svcLo = data[7]
             
-            // 匹配提词器与手势通知服务 (0x0620, 0x0D01, 0x0901)
-            let isTeleprompterService = (svcHi == 0x06 && svcLo == 0x20) || (svcHi == 0x0D && svcLo == 0x01) || (svcHi == 0x09 && svcLo == 0x01)
-            
-            if isTeleprompterService {
-                cmdDesc = "G2 视口/手势通知 (0x\(String(format: "%02X%02X", svcHi, svcLo)))"
-                isGesture = true
+            // 匹配 Service 0x0601 / 0x0620 / 0x0D01 / 0x0901 视口手势服务
+            if svcHi == 0x06 && (svcLo == 0x01 || svcLo == 0x20) {
+                // 从末尾提取页码字节 PageNum
+                let pageNum = Int(data.last ?? 0)
+                let targetLine = pageNum * 10
                 
-                let payload = data.subdata(in: 8..<(data.count - 2))
                 DispatchQueue.main.async {
-                    // 如果包含向上滑标志 (Prev)
-                    if payload.contains(0x02) {
-                        self.currentFocusPageLine = max(0, self.currentFocusPageLine - 10)
-                        self.addLog("👈 收到 G2 向上滑屏 -> App 视口向上翻 1 页 (-10 行 -> 第 \(self.currentFocusPageLine) 行)")
-                    } else {
-                        // 默认向下滑步 (Next): 每次跨越 10 行 (1 全页)
-                        self.currentFocusPageLine += 10
-                        self.addLog("👉 收到 G2 向下滑屏 -> App 视口向下翻 1 页 (+10 行 -> 第 \(self.currentFocusPageLine) 行)")
-                    }
+                    self.currentFocusPageLine = targetLine
+                    self.addLog("🎯 [官方 0x0601 协议命中] 收到眼镜翻页 Page=\(pageNum) -> 驱动 App 视口跳转到第 \(targetLine) 行")
                 }
-            } else {
-                cmdDesc = "G2 固件应答包 (Cmd=0x\(String(format: "%02X", data.count > 4 ? data[4] : 0x00)))"
+                return
             }
-        } else if rawByte == 0x01 || rawByte == 0x03 {
-            lastGestureReceived = "Swipe Down / Next"
-            cmdDesc = "镜腿/按键: 下滑 (NEXT)"
-            isGesture = true
-            onPageControlTriggered?("NEXT")
-            DispatchQueue.main.async {
-                self.currentFocusPageLine += 1
-            }
-            addLog("👉 收到镜腿手势: 向下滑动 (+1 行)")
-        } else if rawByte == 0x02 {
-            lastGestureReceived = "Swipe Up / Prev"
-            cmdDesc = "镜腿手势: 向上滑动 (PREV)"
-            isGesture = true
-            onPageControlTriggered?("PREV")
-            DispatchQueue.main.async {
-                self.currentFocusPageLine = max(0, self.currentFocusPageLine - 1)
-            }
-            addLog("👈 收到镜腿手势: 向上滑动 (-1 行)")
-        } else {
-            cmdDesc = "G2 通知数据 [\(data.count) 字节]"
         }
         
-        // 过滤高频无意义的 ACK 应答日志，避免调试界面刷屏
-        if rawByte == 0xAA && data.count >= 4 && data[1] == 0x12 {
-            // 静默处理 G2 固件 ACK 应答，仅更新计数
-            DispatchQueue.main.async {
-                self.rxCount += 1
-            }
-            return
-        }
-        
-        onG2TelemetryLog?("Rx", hexString, cmdDesc)
-        
-        let rxMsg = G2RxMessage(
-            timestamp: Date(),
-            rawHex: hexString,
-            commandType: String(format: "0x%02X", rawByte),
-            description: cmdDesc,
-            isGesture: isGesture
-        )
-        
+        // 通用手势后备步进
         DispatchQueue.main.async {
-            self.rxCount += 1
-            self.g2RxMessages.insert(rxMsg, at: 0)
-            if self.g2RxMessages.count > 50 {
-                self.g2RxMessages.removeLast()
-            }
+            self.currentFocusPageLine += 10
+            self.addLog("⚡️ 收到通用 Notify 数据 -> 驱动 App 视口跳转到第 \(self.currentFocusPageLine) 行")
         }
     }
     
