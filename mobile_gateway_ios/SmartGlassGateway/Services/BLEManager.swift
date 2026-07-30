@@ -413,74 +413,45 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         isTeleprompterSessionActive = true
         
         let pages = G2ProtocolEncoder.formatTextToPages(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: 10, targetPageCount: 14)
-        addLog("🚀 [动态文本编码] 成功格式化为 \(pages.count) 页，准备顺序下发全套推屏分包...")
+        addLog("🚀 [官方标准协议] 成功格式化为 \(pages.count) 页，开始下发 Phase 1~4...")
         
         var delay: Double = 0.05
         var seq: UInt8 = 0x01
         var msgId: Int = 0x0C
         
-        // 1. Phase 1: Auth (7 包)
+        // ── Phase 1: Auth (seq 1..7) ──
         let authPackets = G2ProtocolEncoder.buildAuthPackets()
         for (i, pkt) in authPackets.enumerated() {
             let item = DispatchWorkItem {
-                self.sendRawData(pkt, channel: .content, logDesc: "Auth [\(i+1)/7]")
+                self.sendRawData(pkt, channel: .content, logDesc: "Phase 1: Auth [\(i+1)/7]")
             }
             self.teleprompterWorkItems.append(item)
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
             delay += 0.08
         }
-        delay += 0.2
+        delay += 0.4
         
-        // 2. 物理屏显唤醒 0x0420 (点亮 MicroLED 屏显硬件)
-        let pktWake = G2ProtocolEncoder.buildWakePacket(seq: 0x08, msgId: 0x13)
-        let itemWake = DispatchWorkItem {
-            self.sendRawData(pktWake, channel: .content, logDesc: "Screen Wake (0x0420)")
-        }
-        self.teleprompterWorkItems.append(itemWake)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemWake)
-        delay += 0.5 // 预留 0.5s 给固件 MicroLED 屏幕上电
-        
-        // 3. 0x06-20 State=4 强行复位固件提词器旧显存
-        let exitData = Data([0x08, 0x01, 0x10, 0x32, 0x1A, 0x02, 0x08, 0x04])
-        let pktResetState = G2ProtocolEncoder.buildPacket(seq: 0x09, serviceHi: 0x06, serviceLo: 0x20, payload: exitData)
-        let itemReset = DispatchWorkItem {
-            self.sendRawData(pktResetState, channel: .content, logDesc: "Reset Teleprompter State (State=4)")
-        }
-        self.teleprompterWorkItems.append(itemReset)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemReset)
-        delay += 0.25
-        
-        seq = 0x0A
+        seq = 0x08
         msgId = 0x14
         
-        // 4. Phase 2: Display Config
+        // ── Phase 2: Display Config (0x0E-20) ──
         let pktDisplayConfig = G2ProtocolEncoder.buildDisplayConfig(seq: seq, msgId: msgId)
         seq &+= 1
         msgId += 1
         let itemCfg = DispatchWorkItem {
-            self.sendRawData(pktDisplayConfig, channel: .content, logDesc: "DisplayConfig")
+            self.sendRawData(pktDisplayConfig, channel: .content, logDesc: "Phase 2: DisplayConfig (0x0E-20)")
         }
         self.teleprompterWorkItems.append(itemCfg)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemCfg)
         delay += 0.3
         
-        // 5. Phase 3: Teleprompter Mode Activation & Init (0x06-20 State=1 & Init)
-        let pktEnterMode = G2ProtocolEncoder.buildEnterTeleprompterModePacket(seq: seq, msgId: msgId)
-        seq &+= 1
-        msgId += 1
-        let itemEnter = DispatchWorkItem {
-            self.sendRawData(pktEnterMode, channel: .content, logDesc: "EnterTeleprompterMode (State=1)")
-        }
-        self.teleprompterWorkItems.append(itemEnter)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemEnter)
-        delay += 0.05
-        
+        // ── Phase 3: Teleprompter Init (0x06-20) ──
         let initPackets = G2ProtocolEncoder.buildTeleprompterInit(seq: seq, msgId: msgId, scrollModeAI: true)
         seq &+= 1
         msgId += 1
         for pkt in initPackets {
             let itemInit = DispatchWorkItem {
-                self.sendRawData(pkt, channel: .content, logDesc: "TeleprompterInit")
+                self.sendRawData(pkt, channel: .content, logDesc: "Phase 3: TeleprompterInit (0x06-20)")
             }
             self.teleprompterWorkItems.append(itemInit)
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemInit)
@@ -488,43 +459,46 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         delay += 0.5
         
-        // 6. Phase 4: Send 14 Content Pages
-        for (pageIdx, pageText) in pages.enumerated() {
-            let pagePackets = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: msgId, pageNum: pageIdx, text: pageText)
+        // ── Phase 4: Content Pages (14 页) ──
+        for (i, pageText) in pages.enumerated() {
+            let pagePackets = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: msgId, pageNum: i, text: pageText)
             msgId += 1
             for pkt in pagePackets {
                 let itemPkt = DispatchWorkItem {
-                    self.sendRawData(pkt, channel: .content, logDesc: "Page \(pageIdx) [\(pkt.count)b]")
+                    self.sendRawData(pkt, channel: .content, logDesc: "Phase 4: Page \(i) [\(pkt.count)b]")
                 }
                 self.teleprompterWorkItems.append(itemPkt)
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemPkt)
                 delay += 0.05
             }
-            // 每页下发完毕后，预留 0.15 秒给固件底层 RAM 进行分包重组与 CRC 校验
-            delay += 0.15
+            delay += 0.1
         }
-        delay += 0.3
         
-        // Phase 5: Sync & UI Route Switch
-        let pktSync = G2ProtocolEncoder.buildSyncPacket(seq: seq, msgId: msgId)
+        // Sync trigger (0x80-00)
+        let syncPayload = Data([0x08, 0x0E, 0x10]) + G2ProtocolEncoder.encodeVarint(msgId) + Data([0x6A, 0x00])
+        let syncPkt = G2ProtocolEncoder.buildPacket(seq: seq, serviceHi: 0x80, serviceLo: 0x00, payload: syncPayload)
         seq &+= 1
         msgId += 1
         let itemSync = DispatchWorkItem {
-            self.sendRawData(pktSync, channel: .content, logDesc: "Sync")
+            self.sendRawData(syncPkt, channel: .content, logDesc: "Sync Trigger (0x80-00)")
         }
         self.teleprompterWorkItems.append(itemSync)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemSync)
         delay += 0.1
         
-        let pktRoute = G2ProtocolEncoder.buildRouteSwitchPacket(seq: seq, msgId: msgId)
+        // UI Route Switch (0x09-20)
+        let routeData = Data(hex: "080110") + G2ProtocolEncoder.encodeVarint(msgId) + Data(hex: "1a1a52180a060800100018000a060800100118000a06080010021800")
+        let routePkt = G2ProtocolEncoder.buildPacket(seq: seq, serviceHi: 0x09, serviceLo: 0x20, payload: routeData)
+        seq &+= 1
+        msgId += 1
         let itemRoute = DispatchWorkItem {
-            self.sendRawData(pktRoute, channel: .content, logDesc: "RouteSwitch Teleprompter")
+            self.sendRawData(routePkt, channel: .content, logDesc: "UI Route Switch (0x09-20)")
         }
         self.teleprompterWorkItems.append(itemRoute)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemRoute)
         
         DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.1) {
-            self.addLog("🎉 动态讲稿全流程下发完成！G2 屏幕应已显示文本。")
+            self.addLog("🎉 官方标准提词器全流程下发完成！G2 屏幕应已显示文本。")
         }
     }
     
