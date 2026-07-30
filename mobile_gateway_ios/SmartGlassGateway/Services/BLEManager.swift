@@ -268,14 +268,8 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             return
         }
         guard let data = characteristic.value, !data.isEmpty else { return }
-        let hexString = data.map { String(format: "%02X", $0) }.joined(separator: " ")
-        let uuidSuffix = String(characteristic.uuid.uuidString.suffix(4))
         
-        let logText = "📥 Rx (G2 -> Phone) [\(uuidSuffix)]: \(hexString)"
-        print(logText)
-        addLog(logText)
         processReceivedG2Data(data)
-        onG2TelemetryLog?("Rx", hexString, "收到 G2 Notify 节点包 [\(uuidSuffix)]")
     }
     
     // 独立握手已废弃，统一由 sendTeleprompterText 自包含串行下发 Auth 鉴权序列
@@ -404,7 +398,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     }
     
     /// 动态编码并推送讲稿文本到 G2 眼镜 (100% 对齐 Python teleprompter.py 逆向全流程)
-    func sendTeleprompterText(_ rawText: String, targetWidthChars: Int = 28, scrollModeAI: Bool = true) {
+    func sendTeleprompterText(_ rawText: String, targetWidthChars: Int = 28, scrollModeAI: Bool = false) {
         guard isConnected else {
             addLog("⚠️ 蓝牙未连接，请先连接 G2 眼镜")
             return
