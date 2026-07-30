@@ -132,7 +132,7 @@ class G2LogPayload(BaseModel):
 
 @app.post("/api/g2/log")
 async def report_g2_log(payload: G2LogPayload):
-    symbol = "📥 [G2 -> iPad Rx]" if payload.direction == "Rx" else "📤 [iPad -> G2 Tx]"
+    symbol = "📥 [G2 -> Phone Rx]" if payload.direction == "Rx" else "📤 [Phone -> G2 Tx]"
     print(f"\033[93m👓 [G2 蓝牙实时日志] {symbol} | {payload.description} | HEX: [{payload.hex_bytes}]\033[0m")
     return {"status": "ok"}
 
