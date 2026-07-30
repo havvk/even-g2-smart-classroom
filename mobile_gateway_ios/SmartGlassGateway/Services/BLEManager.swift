@@ -318,23 +318,25 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     @Published var currentWrappedLines: [String] = []
     @Published var currentGlassesState: UInt8 = 0
     
+    private var currentPages: [String] = []
     private var syncSeq: UInt8 = 0x2A
     private var syncMsgId: Int = 0x50
     
-    /// 发送双向滚动位置同步报文 (同时兼容 Type 5 手动与 Type 6 AI 跟随模式)
+    /// 发送双向滚动位置同步报文 (计算目标 pageIndex 并下发 0x06-20 Type=3 Content 视口页)
     func sendScrollSync(lineIndex: Int) {
         guard isConnected else { return }
         self.currentFocusPageLine = lineIndex
         
-        let packet5 = G2ProtocolEncoder.buildScrollSync(seq: syncSeq, msgId: syncMsgId, lineIndex: lineIndex)
-        syncSeq &+= 1
-        syncMsgId += 1
-        sendRawData(packet5, channel: .content, logDesc: "ScrollSync (Type 5) 行号: \(lineIndex)")
+        let targetPage = max(0, min(13, lineIndex / 10))
+        let pageText = targetPage < currentPages.count ? currentPages[targetPage] : ""
+        addLog("📍 [位置同步] 目标行号: \(lineIndex) -> 映射视口页码: Page \(targetPage)")
         
-        let packet6 = G2ProtocolEncoder.buildAISync(seq: syncSeq, msgId: syncMsgId, lineIndex: lineIndex)
-        syncSeq &+= 1
+        // 下发指定页码的 Content (type=3) 触发固件 UI 滚动至目标视口页
+        let pagePackets = G2ProtocolEncoder.buildContentPagePackets(seq: &syncSeq, msgId: syncMsgId, pageNum: targetPage, text: pageText)
         syncMsgId += 1
-        sendRawData(packet6, channel: .content, logDesc: "AISync (Type 6) 行号: \(lineIndex)")
+        for pkt in pagePackets {
+            sendRawData(pkt, channel: .content, logDesc: "Sync Scroll to Page \(targetPage)")
+        }
     }
     
     // 自动补发队列
@@ -413,6 +415,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         isTeleprompterSessionActive = true
         
         let pages = G2ProtocolEncoder.formatTextToPages(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: 10, targetPageCount: 14)
+        self.currentPages = pages
         addLog("🚀 [官方标准协议] 成功格式化为 \(pages.count) 页，开始下发 Phase 1~4...")
         
         var delay: Double = 0.05
