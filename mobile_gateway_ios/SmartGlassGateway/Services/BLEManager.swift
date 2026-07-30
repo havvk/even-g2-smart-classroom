@@ -539,8 +539,12 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                     let targetLine = pageNum * 10
                     
                     DispatchQueue.main.async {
-                        self.currentFocusPageLine = targetLine
-                        self.addLog("🎯 [动态扫描 0x0601] 眼镜翻页 Page=\(pageNum) -> 驱动 App 视口跳转到第 \(targetLine) 行")
+                        if self.currentFocusPageLine == targetLine {
+                            self.currentFocusPageLine += 2
+                        } else {
+                            self.currentFocusPageLine = targetLine
+                        }
+                        self.addLog("🎯 [0x0601 手势翻页] 收到眼镜 Page=\(pageNum) -> 驱动 App 视口跳转到第 \(self.currentFocusPageLine) 行")
                     }
                     return
                 }
