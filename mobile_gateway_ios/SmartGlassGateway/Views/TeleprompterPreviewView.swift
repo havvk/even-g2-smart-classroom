@@ -101,13 +101,39 @@ struct TeleprompterPreviewView: View {
                     }
                 }
             }
-            .padding()
             .background(Color(UIColor.secondarySystemGroupedBackground))
             .cornerRadius(16)
             .padding(.horizontal)
             .padding(.top, 8)
             
-            // MARK: - 官方同款 10 行全显 Viewport (防抖无死循环 + 亮白字体 + 手势与Rx同步)
+            // MARK: - 实时手势与视口调试胶囊 (直观排查滑动响应)
+            HStack(spacing: 12) {
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 8, height: 8)
+                    Text("行号: \(bleManager.currentFocusPageLine)")
+                        .font(.system(.caption, design: .monospaced))
+                        .fontWeight(.bold)
+                        .foregroundColor(.green)
+                }
+                
+                Divider().frame(height: 12)
+                
+                Text("最新手势: \(bleManager.lastGestureReceived.isEmpty ? "无" : bleManager.lastGestureReceived)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color(UIColor.secondarySystemGroupedBackground))
+            .cornerRadius(8)
+            .padding(.horizontal, 16)
+            .padding(.top, 4)
+            
+            // MARK: - 10行 HUD 视口预览区域 (中央高亮)
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 4) {
