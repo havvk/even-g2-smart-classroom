@@ -403,6 +403,9 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         // 重置旧的发送任务
         resetTeleprompterSession()
         isTeleprompterSessionActive = true
+        DispatchQueue.main.async {
+            self.currentFocusPageLine = 0
+        }
         
         let pages = G2ProtocolEncoder.formatTextToPages(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: 10, targetPageCount: 14)
         self.currentPages = pages
@@ -522,7 +525,6 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         guard data.count >= 8 else { return }
         
         let hexString = data.map { String(format: "%02X", $0) }.joined(separator: " ")
-        addLog("📥 BLE Rx 收到眼镜数据 (Len \(data.count)): [\(hexString)]")
         
         let rawByte = data[0]
         let msgType = data[1]
@@ -532,25 +534,22 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             let svcHi = data[6]
             let svcLo = data[7]
             
-            // 匹配 Service 0x0601 / 0x0620 / 0x0D01 / 0x0901 视口手势服务
-            if svcHi == 0x06 && (svcLo == 0x01 || svcLo == 0x20) {
-                // 从末尾提取页码字节 PageNum
+            // 仅匹配 Service 0x0601 视口手势服务 (排除普通 ACK)
+            if svcHi == 0x06 && svcLo == 0x01 {
+                // 从末尾提取页码字节 PageNum (0, 1, 2...)
                 let pageNum = Int(data.last ?? 0)
                 let targetLine = pageNum * 10
                 
                 DispatchQueue.main.async {
                     self.currentFocusPageLine = targetLine
-                    self.addLog("🎯 [官方 0x0601 协议命中] 收到眼镜翻页 Page=\(pageNum) -> 驱动 App 视口跳转到第 \(targetLine) 行")
+                    self.addLog("🎯 [0x0601 手势通知] 眼镜翻页 Page=\(pageNum) -> App 跳转到第 \(targetLine) 行")
                 }
                 return
             }
         }
         
-        // 通用手势后备步进
-        DispatchQueue.main.async {
-            self.currentFocusPageLine += 10
-            self.addLog("⚡️ 收到通用 Notify 数据 -> 驱动 App 视口跳转到第 \(self.currentFocusPageLine) 行")
-        }
+        // 普通 ACK 确认应答帧静默处理，严禁误触发行号变动！
+        addLog("📥 BLE Rx ACK (Len \(data.count)): [\(hexString)]")
     }
     
     /// 模拟接收 G2 眼镜返回消息 (用于 Debug 界面调试及模拟器测试)
