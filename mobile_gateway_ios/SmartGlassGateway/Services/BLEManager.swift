@@ -219,10 +219,10 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             addLog("🔍 特征值: \(uuidStr) [Notify/Ind:\(canNotify), Write:\(canWrite)]")
             
             let uuidSuffix = String(uuidStr.suffix(4))
-            // 订阅所有支持 Notify/Indicate 的特征通道 (确保不错过手势触控 6E40 或 0002 数据)
+            // 订阅所有支持 Notify/Indicate 的特征通道 (包含 Nordic 串口 6E40 通道与 5402)
             if canNotify {
                 peripheral.setNotifyValue(true, for: characteristic)
-                addLog("🔔 正在开启 [\(uuidSuffix)] 通道 Notify 接收...")
+                addLog("🔔 [物理 CCCD 激活] 正在开启 [\(uuidSuffix)] 通道 Notify 接收...")
             }
             
             // 按 UUID 结尾绑定 G2 专属 Channel 特征通道 (排除 6E40 串口)
