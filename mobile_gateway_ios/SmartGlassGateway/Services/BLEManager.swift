@@ -533,10 +533,19 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     
     /// 解析并记录从 G2 眼镜收到的原始蓝牙数据帧
     private func processReceivedG2Data(_ data: Data) {
-        let hexString = data.map { String(format: "%02X", $0) }.joined(separator: " ")
-        addLog("📥 Rx (G2 -> iPad): [\(hexString)]")
-        
         let rawByte = data.first ?? 0
+        
+        // 1. 优先静默过滤 G2 固件下发的高频 ACK 应答包 (AA 12 ...)，防止调试日志疯狂刷屏
+        if rawByte == 0xAA && data.count >= 4 && data[1] == 0x12 {
+            DispatchQueue.main.async {
+                self.rxCount += 1
+            }
+            return
+        }
+        
+        let hexString = data.map { String(format: "%02X", $0) }.joined(separator: " ")
+        addLog("📥 Rx (G2 -> Phone): [\(hexString)]")
+        
         var cmdDesc = "未知数据帧"
         var isGesture = false
         
