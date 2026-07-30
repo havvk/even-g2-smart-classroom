@@ -11,6 +11,10 @@ struct TeleprompterPreviewView: View {
     @State private var showingEditor: Bool = false
     @State private var isPushing: Bool = false
     
+    // 自动滚屏定时器 (1:1 官方同款 Auto Scroll)
+    @State private var isPlaying: Bool = false
+    @State private var timer = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
+    
     // 每行字数 (通过底部滑块调节，范围 10 ~ 28 汉字)
     @State private var widthChars: Double = 28.0
     
@@ -205,13 +209,19 @@ struct TeleprompterPreviewView: View {
                         proxy.scrollTo(clampedLine, anchor: .center)
                     }
                 }
+                .onReceive(timer) { _ in
+                    if isPlaying && !wrappedLines.isEmpty {
+                        let nextLine = (activeLineIndex + 1) % wrappedLines.count
+                        updateFocusLine(index: nextLine, scrollProxy: proxy)
+                    }
+                }
             }
             .background(Color(UIColor.systemGroupedBackground))
             
-            // MARK: - 底部控制条 (滑块调节每行字数 10~28)
+            // MARK: - 底部控制条 (滑块调节每行字数 10~28 + 自动滚屏)
             VStack(spacing: 12) {
                 HStack(spacing: 14) {
-                    // 首页复位按钮 (>||<)
+                    // 首页复位按钮
                     Button(action: {
                         activeLineIndex = 0
                         syncLineToGlasses(lineIndex: 0)
@@ -219,6 +229,15 @@ struct TeleprompterPreviewView: View {
                         Image(systemName: "arrow.left.to.line.compact")
                             .font(.title3)
                             .foregroundColor(.primary)
+                    }
+                    
+                    // 官方同款 自动平滑滚屏 播放/暂停
+                    Button(action: {
+                        isPlaying.toggle()
+                    }) {
+                        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.title1)
+                            .foregroundColor(.purple)
                     }
                     
                     Text("10字")
