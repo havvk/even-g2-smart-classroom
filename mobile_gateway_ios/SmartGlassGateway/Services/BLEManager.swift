@@ -322,21 +322,11 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     private var syncSeq: UInt8 = 0x2A
     private var syncMsgId: Int = 0x50
     
-    /// 发送双向滚动位置同步报文 (计算目标 pageIndex 并下发 0x06-20 Type=3 Content 视口页)
+    /// 发送双向滚动位置同步 (更新 App 侧焦点视口，不动固件旧显存)
     func sendScrollSync(lineIndex: Int) {
         guard isConnected else { return }
         self.currentFocusPageLine = lineIndex
-        
-        let targetPage = max(0, min(13, lineIndex / 10))
-        let pageText = targetPage < currentPages.count ? currentPages[targetPage] : ""
-        addLog("📍 [位置同步] 目标行号: \(lineIndex) -> 映射视口页码: Page \(targetPage)")
-        
-        // 下发指定页码的 Content (type=3) 触发固件 UI 滚动至目标视口页
-        let pagePackets = G2ProtocolEncoder.buildContentPagePackets(seq: &syncSeq, msgId: syncMsgId, pageNum: targetPage, text: pageText)
-        syncMsgId += 1
-        for pkt in pagePackets {
-            sendRawData(pkt, channel: .content, logDesc: "Sync Scroll to Page \(targetPage)")
-        }
+        addLog("📍 [视口联动] 目标高亮焦点行: \(lineIndex)")
     }
     
     // 自动补发队列
