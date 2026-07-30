@@ -173,9 +173,9 @@ struct TeleprompterPreviewView: View {
                 // 监听眼镜端发来的触控/按键通知 (仅驱动 App 界面滚动，切勿反向下发 Cmd 避免死循环)
                 .onReceive(bleManager.$currentFocusPageLine) { newGlassesLine in
                     if newGlassesLine != activeLineIndex && newGlassesLine >= 0 && newGlassesLine < wrappedLines.count {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
                             self.activeLineIndex = newGlassesLine
-                            proxy.scrollTo(newGlassesLine, anchor: .top)
+                            proxy.scrollTo(newGlassesLine, anchor: .center)
                         }
                     }
                 }
