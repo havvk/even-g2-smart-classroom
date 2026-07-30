@@ -546,16 +546,32 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         var cmdDesc = "未知数据帧"
         var isGesture = false
         
-        if rawByte == 0xAA && data.count >= 4 {
-            let headerType = data.count > 1 ? data[1] : 0x00
-            let seq = data.count > 2 ? data[2] : 0x00
-            
-            if headerType == 0x12 {
-                cmdDesc = "🎉 G2 固件 ACK 确认应答包 [Seq=0x\(String(format: "%02X", seq))]"
-                addLog("🎉 收到 G2 固件 ACK 成功应答 [Seq=0x\(String(format: "%02X", seq))]")
+        if rawByte == 0xAA && data.count >= 8 {
+            let svcHi = data[6]
+            let svcLo = data[7]
+            if svcHi == 0x06 && svcLo == 0x20 {
+                cmdDesc = "G2 提词器通知 (0x0620)"
+                isGesture = true
+                
+                // 从 Protobuf 数据中尝试解析当前页码/行号
+                let payload = data.subdata(in: 8..<(data.count - 2))
+                if payload.count >= 2 {
+                    let type = payload[0]
+                    if type == 0x01 || type == 0x03 || type == 0x05 {
+                        // 提取内部 varint 页码
+                        if payload.count > 3 {
+                            let pageNum = Int(payload[3])
+                            let calculatedLine = pageNum * 10
+                            DispatchQueue.main.async {
+                                self.currentFocusPageLine = calculatedLine
+                                self.addLog("👀 眼镜端滑屏通知 -> 同步 App 视口到第 \(calculatedLine) 行 (Page \(pageNum))")
+                            }
+                        }
+                    }
+                }
             } else {
                 cmdDesc = "G2 固件应答包 (Cmd=0x\(String(format: "%02X", data.count > 4 ? data[4] : 0x00)))"
-                addLog("ℹ️ 解码 G2 固件帧: Header=0x\(String(format: "%02X", headerType))")
+                addLog("ℹ️ 解码 G2 固件帧: Header=0x\(String(format: "%02X", data.count > 1 ? data[1] : 0x00)))")
             }
         } else if rawByte == 0x01 {
             lastGestureReceived = "Swipe Down / Next"

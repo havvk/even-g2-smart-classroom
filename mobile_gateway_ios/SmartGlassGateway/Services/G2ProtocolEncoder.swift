@@ -377,16 +377,8 @@ class G2ProtocolEncoder {
         var pages = [String]()
         for i in stride(from: 0, to: wrappedLines.count, by: linesPerPage) {
             let end = min(i + linesPerPage, wrappedLines.count)
-            var chunk = Array(wrappedLines[i..<end])
-            while chunk.count < linesPerPage {
-                chunk.append("")
-            }
+            let chunk = Array(wrappedLines[i..<end])
             pages.append(chunk.joined(separator: "\n"))
-        }
-        
-        while pages.count < targetPageCount {
-            let emptyPage = Array(repeating: "", count: linesPerPage).joined(separator: "\n")
-            pages.append(emptyPage)
         }
         
         return pages
