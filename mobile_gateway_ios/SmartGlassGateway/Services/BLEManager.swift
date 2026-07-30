@@ -447,7 +447,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         msgId += 1
         for pkt in initPackets {
             let itemInit = DispatchWorkItem {
-                self.sendRawData(pkt, channel: .content, logDesc: "Phase 3: TeleprompterInit (0x06-20, AI:\(scrollModeAI))")
+                self.sendRawData(pkt, channel: .rendering, logDesc: "Phase 3: TeleprompterInit (0x06-20, AI:\(scrollModeAI))")
             }
             self.teleprompterWorkItems.append(itemInit)
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemInit)
@@ -533,18 +533,14 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                 let svcHi = relativeData[6]
                 let svcLo = relativeData[7]
                 
-                // 精确匹配 0x0601 手势通知服务
-                if svcHi == 0x06 && svcLo == 0x01 {
-                    let pageNum = Int(relativeData.last ?? 0)
-                    let targetLine = pageNum * 10
+                // 精确匹配手势/翻页通知服务 (0x0601 / 0x0620 / 0x0D01)，严禁将普通 ACK 校验字节误认为行号
+                if (svcHi == 0x06 && (svcLo == 0x01 || svcLo == 0x20)) || (svcHi == 0x0D && svcLo == 0x01) {
+                    let rawLine = Int(relativeData.last ?? 0)
                     
                     DispatchQueue.main.async {
-                        if self.currentFocusPageLine == targetLine {
-                            self.currentFocusPageLine += 2
-                        } else {
-                            self.currentFocusPageLine = targetLine
-                        }
-                        self.addLog("🎯 [0x0601 手势翻页] 收到眼镜 Page=\(pageNum) -> 驱动 App 视口跳转到第 \(self.currentFocusPageLine) 行")
+                        self.currentFocusPageLine = rawLine
+                        self.lastGestureReceived = "Swipe (Line \(rawLine))"
+                        self.addLog("🎯 [handlePageScrollEventFromOS] 收到眼镜 rawLine=\(rawLine) -> App 同频跳转到第 \(rawLine) 行")
                     }
                     return
                 }
