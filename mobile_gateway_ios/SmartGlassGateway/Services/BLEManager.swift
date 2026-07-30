@@ -533,14 +533,15 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                 let svcHi = relativeData[6]
                 let svcLo = relativeData[7]
                 
-                // 精确匹配手势/翻页通知服务 (0x0601 / 0x0620 / 0x0D01)，严禁将普通 ACK 校验字节误认为行号
+                // 精确匹配手势/翻页通知服务 (0x0601 / 0x0620 / 0x0D01)，1页 = 10行精准对齐
                 if (svcHi == 0x06 && (svcLo == 0x01 || svcLo == 0x20)) || (svcHi == 0x0D && svcLo == 0x01) {
-                    let rawLine = Int(relativeData.last ?? 0)
+                    let pageNum = Int(relativeData.last ?? 0)
+                    let targetLine = pageNum * 10
                     
                     DispatchQueue.main.async {
-                        self.currentFocusPageLine = rawLine
-                        self.lastGestureReceived = "Swipe (Line \(rawLine))"
-                        self.addLog("🎯 [handlePageScrollEventFromOS] 收到眼镜 rawLine=\(rawLine) -> App 同频跳转到第 \(rawLine) 行")
+                        self.currentFocusPageLine = targetLine
+                        self.lastGestureReceived = "Page \(pageNum) (Line \(targetLine))"
+                        self.addLog("🎯 [1:1 页码行号同步] 眼镜翻至 Page=\(pageNum) -> App 视口精准对齐第 \(targetLine) 行")
                     }
                     return
                 }
