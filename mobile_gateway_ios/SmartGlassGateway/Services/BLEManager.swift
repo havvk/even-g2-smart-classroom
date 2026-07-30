@@ -550,14 +550,15 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                     if msgType == 5 || msgType == 6 {
                         isGesture = true
                         DispatchQueue.main.async {
-                            // 从 payload 中提取目标行号 (Field 1 varint)
+                            // 物理解析: payload 传输的是 page_number，换算为 App 绝对行号 = pageNum * 10
                             if payload.count > 4 {
-                                let lineVal = Int(payload[4])
-                                self.currentFocusPageLine = lineVal
-                                self.addLog("👀 [精准协议解包] 收到 G2 固件 Type=\(msgType) 视口滑动通知 -> 驱动 App 到第 \(lineVal) 行")
+                                let pageNum = Int(payload[4])
+                                let calculatedLine = pageNum * 10
+                                self.currentFocusPageLine = calculatedLine
+                                self.addLog("👀 [页码解包] 收到 G2 固件 Page=\(pageNum) -> 精准同步 App 视口到第 \(calculatedLine) 行")
                             } else {
-                                self.currentFocusPageLine += 1
-                                self.addLog("👉 收到 G2 固件 Type=\(msgType) 滑屏通知 -> App 步进 1 行")
+                                self.currentFocusPageLine += 10
+                                self.addLog("👉 收到 G2 固件 Type=\(msgType) 滑屏通知 -> App 步进 1 页 (10 行)")
                             }
                         }
                     }
