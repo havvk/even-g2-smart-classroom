@@ -327,14 +327,20 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     private var syncSeq: UInt8 = 0x2A
     private var syncMsgId: Int = 0x50
     
-    /// 发送双向滚动同步报文 (App 向 Glasses 下发焦点行号)
+    /// 发送双向滚动位置同步报文 (同时兼容 Type 5 手动与 Type 6 AI 跟随模式)
     func sendScrollSync(lineIndex: Int) {
         guard isConnected else { return }
         self.currentFocusPageLine = lineIndex
-        let packet = G2ProtocolEncoder.buildScrollSync(seq: syncSeq, msgId: syncMsgId, lineIndex: lineIndex)
+        
+        let packet5 = G2ProtocolEncoder.buildScrollSync(seq: syncSeq, msgId: syncMsgId, lineIndex: lineIndex)
         syncSeq &+= 1
         syncMsgId += 1
-        sendRawData(packet, channel: .content, logDesc: "ScrollSync 行号: \(lineIndex)")
+        sendRawData(packet5, channel: .content, logDesc: "ScrollSync (Type 5) 行号: \(lineIndex)")
+        
+        let packet6 = G2ProtocolEncoder.buildAISync(seq: syncSeq, msgId: syncMsgId, lineIndex: lineIndex)
+        syncSeq &+= 1
+        syncMsgId += 1
+        sendRawData(packet6, channel: .content, logDesc: "AISync (Type 6) 行号: \(lineIndex)")
     }
     
     // 自动补发队列
@@ -398,7 +404,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     }
     
     /// 动态编码并推送讲稿文本到 G2 眼镜 (100% 对齐 Python teleprompter.py 逆向全流程)
-    func sendTeleprompterText(_ rawText: String, targetWidthChars: Int = 28) {
+    func sendTeleprompterText(_ rawText: String, targetWidthChars: Int = 28, scrollModeAI: Bool = true) {
         guard isConnected else {
             addLog("⚠️ 蓝牙未连接，请先连接 G2 眼镜")
             return
@@ -446,12 +452,12 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         delay += 0.3
         
         // ── Phase 3: Teleprompter Init (0x06-20) ──
-        let initPackets = G2ProtocolEncoder.buildTeleprompterInit(seq: seq, msgId: msgId, scrollModeAI: true)
+        let initPackets = G2ProtocolEncoder.buildTeleprompterInit(seq: seq, msgId: msgId, scrollModeAI: scrollModeAI)
         seq &+= 1
         msgId += 1
         for pkt in initPackets {
             let itemInit = DispatchWorkItem {
-                self.sendRawData(pkt, channel: .content, logDesc: "Phase 3: TeleprompterInit (0x06-20)")
+                self.sendRawData(pkt, channel: .content, logDesc: "Phase 3: TeleprompterInit (0x06-20, AI:\(scrollModeAI))")
             }
             self.teleprompterWorkItems.append(itemInit)
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemInit)

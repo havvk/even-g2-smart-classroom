@@ -280,6 +280,21 @@ class G2ProtocolEncoder {
         return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
+    /// 生成 0x06-20 Type 6 AI 跟随模式位置同步报文
+    static func buildAISync(seq: UInt8 = 0x2A, msgId: Int = 0x50, lineIndex: Int) -> Data {
+        var inner = Data([0x08])
+        inner.append(encodeVarint(lineIndex))
+        inner.append(Data([0x10, 0x00, 0x18, 0x00]))
+        
+        var payload = Data([0x08, 0x06, 0x10]) // Type 6: Teleprompter AI Sync Event
+        payload.append(encodeVarint(msgId))
+        payload.append(Data([0x2A]))
+        payload.append(encodeVarint(inner.count))
+        payload.append(inner)
+        
+        return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
+    }
+    
     static func buildWakePacket(seq: UInt8 = 0x05, msgId: Int = 0x05) -> Data {
         var payload = Data([0x08, 0x01, 0x10])
         payload.append(encodeVarint(msgId))
