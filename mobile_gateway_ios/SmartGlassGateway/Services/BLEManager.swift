@@ -520,35 +520,34 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             addLog("✅ Tx 数据包被 G2 成功接收确认 (ACK) [\(uuidSuffix)]")
         }
     }
-    /// 接收并解析从 G2 眼镜收到的原始蓝牙数据帧 (匹配 0x0601 手势通知)
+    /// 接收并解析从 G2 眼镜收到的原始蓝牙数据帧 (动态扫描 0x0601 手势通知)
     private func processReceivedG2Data(_ data: Data) {
         guard data.count >= 8 else { return }
         
         let hexString = data.map { String(format: "%02X", $0) }.joined(separator: " ")
         
-        let rawByte = data[0]
-        let msgType = data[1]
-        
-        // 匹配官方 G2 抓包中的 0x0601 镜腿触控/翻页 Notify 通知包 (AA 12 ... 06 01 ...)
-        if rawByte == 0xAA && data.count >= 10 {
-            let svcHi = data[6]
-            let svcLo = data[7]
-            
-            // 仅匹配 Service 0x0601 视口手势服务 (排除普通 ACK)
-            if svcHi == 0x06 && svcLo == 0x01 {
-                // 从末尾提取页码字节 PageNum (0, 1, 2...)
-                let pageNum = Int(data.last ?? 0)
-                let targetLine = pageNum * 10
+        // 动态扫描匹配 G2 报文头 0xAA 0x12 (眼镜 -> 手机 Notification)
+        if let aaIndex = data.range(of: Data([0xAA, 0x12]))?.lowerBound {
+            let relativeData = data.subdata(in: aaIndex..<data.count)
+            if relativeData.count >= 8 {
+                let svcHi = relativeData[6]
+                let svcLo = relativeData[7]
                 
-                DispatchQueue.main.async {
-                    self.currentFocusPageLine = targetLine
-                    self.addLog("🎯 [0x0601 手势通知] 眼镜翻页 Page=\(pageNum) -> App 跳转到第 \(targetLine) 行")
+                // 精确匹配 0x0601 手势通知服务
+                if svcHi == 0x06 && svcLo == 0x01 {
+                    let pageNum = Int(relativeData.last ?? 0)
+                    let targetLine = pageNum * 10
+                    
+                    DispatchQueue.main.async {
+                        self.currentFocusPageLine = targetLine
+                        self.addLog("🎯 [动态扫描 0x0601] 眼镜翻页 Page=\(pageNum) -> 驱动 App 视口跳转到第 \(targetLine) 行")
+                    }
+                    return
                 }
-                return
             }
         }
         
-        // 普通 ACK 确认应答帧静默处理，严禁误触发行号变动！
+        // 普通 ACK 确认应答帧静默处理
         addLog("📥 BLE Rx ACK (Len \(data.count)): [\(hexString)]")
     }
     
