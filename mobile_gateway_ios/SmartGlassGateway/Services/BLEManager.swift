@@ -550,21 +550,34 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             let svcHi = data[6]
             let svcLo = data[7]
             if svcHi == 0x06 && svcLo == 0x20 {
-                cmdDesc = "G2 提词器通知 (0x0620)"
+                cmdDesc = "G2 提词器手势通知 (0x0620)"
                 isGesture = true
+                
+                let payload = data.subdata(in: 8..<(data.count - 2))
+                // 解析固件下发的滑屏/滚屏通知
+                DispatchQueue.main.async {
+                    // 如果包含向上滚动/Prev 标志
+                    if payload.contains(0x02) {
+                        self.currentFocusPageLine = max(0, self.currentFocusPageLine - 1)
+                        self.addLog("👈 收到 G2 固件 0x0620 向上滑屏通知 -> 视口上移 1 行 (第 \(self.currentFocusPageLine) 行)")
+                    } else {
+                        // 默认向下滑动/Next 步进 1 行
+                        self.currentFocusPageLine += 1
+                        self.addLog("👉 收到 G2 固件 0x0620 向下滑屏通知 -> 视口下移 1 行 (第 \(self.currentFocusPageLine) 行)")
+                    }
+                }
             } else {
                 cmdDesc = "G2 固件应答包 (Cmd=0x\(String(format: "%02X", data.count > 4 ? data[4] : 0x00)))"
-                addLog("ℹ️ 解码 G2 固件帧: Header=0x\(String(format: "%02X", data.count > 1 ? data[1] : 0x00)))")
             }
-        } else if rawByte == 0x01 {
+        } else if rawByte == 0x01 || rawByte == 0x03 {
             lastGestureReceived = "Swipe Down / Next"
-            cmdDesc = "镜腿手势: 向下滑动 (NEXT)"
+            cmdDesc = "镜腿/按键: 下滑 (NEXT)"
             isGesture = true
             onPageControlTriggered?("NEXT")
             DispatchQueue.main.async {
                 self.currentFocusPageLine += 1
             }
-            addLog("👉 收到镜腿手势: 向下滑动 (NEXT)")
+            addLog("👉 收到镜腿手势: 向下滑动 (+1 行)")
         } else if rawByte == 0x02 {
             lastGestureReceived = "Swipe Up / Prev"
             cmdDesc = "镜腿手势: 向上滑动 (PREV)"
@@ -573,16 +586,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             DispatchQueue.main.async {
                 self.currentFocusPageLine = max(0, self.currentFocusPageLine - 1)
             }
-            addLog("👈 收到镜腿手势: 向上滑动 (PREV)")
-        } else if rawByte == 0x03 {
-            lastGestureReceived = "Ring Click / Next"
-            cmdDesc = "戒指按键: 单击 (NEXT)"
-            isGesture = true
-            onPageControlTriggered?("NEXT")
-            DispatchQueue.main.async {
-                self.currentFocusPageLine += 1
-            }
-            addLog("💍 收到戒指按键: 点击 (NEXT)")
+            addLog("👈 收到镜腿手势: 向上滑动 (-1 行)")
         } else {
             cmdDesc = "G2 通知数据 [\(data.count) 字节]"
         }
