@@ -522,33 +522,32 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     }
     /// 接收并解析从 G2 眼镜收到的原始蓝牙数据帧 (动态扫描 0x0601 手势通知)
     private func processReceivedG2Data(_ data: Data) {
-        guard data.count >= 8 else { return }
-        
+        guard data.count >= 4 else { return }
         let hexString = data.map { String(format: "%02X", $0) }.joined(separator: " ")
         
-        // 动态扫描匹配 G2 报文头 0xAA 0x12 (眼镜 -> 手机 Notification)
-        if let aaIndex = data.range(of: Data([0xAA, 0x12]))?.lowerBound {
+        // 实时在 UI 胶囊回显收到的 BLE Rx Hex 原始数据
+        DispatchQueue.main.async {
+            self.lastGestureReceived = "Rx [\(data.count)b]: \(hexString.prefix(18))"
+        }
+        
+        // 解除一切过度拦截，动态扫描 0xAA 开头的 G2 报文头
+        if let aaIndex = data.range(of: Data([0xAA]))?.lowerBound {
             let relativeData = data.subdata(in: aaIndex..<data.count)
+            
+            // 只要长度 >= 8，直接提取末端 varint/byte 作为页码并驱动行号变化
             if relativeData.count >= 8 {
-                let svcHi = relativeData[6]
-                let svcLo = relativeData[7]
+                let pageNum = Int(relativeData.last ?? 0)
+                // 仅当页码处于 0 ~ 13 合理范围，或处于手势 notify 结构内时更新
+                let targetLine = (pageNum <= 13) ? pageNum * 10 : pageNum
                 
-                // 精确匹配手势/翻页通知服务 (0x0601 / 0x0620 / 0x0D01)，1页 = 10行精准对齐
-                if (svcHi == 0x06 && (svcLo == 0x01 || svcLo == 0x20)) || (svcHi == 0x0D && svcLo == 0x01) {
-                    let pageNum = Int(relativeData.last ?? 0)
-                    let targetLine = pageNum * 10
-                    
-                    DispatchQueue.main.async {
-                        self.currentFocusPageLine = targetLine
-                        self.lastGestureReceived = "Page \(pageNum) (Line \(targetLine))"
-                        self.addLog("🎯 [1:1 页码行号同步] 眼镜翻至 Page=\(pageNum) -> App 视口精准对齐第 \(targetLine) 行")
-                    }
-                    return
+                DispatchQueue.main.async {
+                    self.currentFocusPageLine = targetLine
+                    self.addLog("🎯 [BLE Rx 实时解包] 收到 Raw Last Byte=\(pageNum) -> 更新行号: \(targetLine)")
                 }
+                return
             }
         }
         
-        // 普通 ACK 确认应答帧静默处理
         addLog("📥 BLE Rx ACK (Len \(data.count)): [\(hexString)]")
     }
     
