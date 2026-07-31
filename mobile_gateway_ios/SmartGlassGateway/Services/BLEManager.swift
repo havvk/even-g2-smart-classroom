@@ -542,7 +542,14 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                 
                 if isNoticeEvent && !isAckResponse {
                     let pageNum = Int(relativeData.last ?? 0)
-                    let targetLine = (pageNum <= 13) ? pageNum * 10 : pageNum
+                    
+                    // 严密死锁：眼镜物理屏上限只有 14 页 (0 ~ 13)，超出范围的文本杂字节直接抛弃 return！
+                    guard pageNum >= 0 && pageNum <= 13 else {
+                        addLog("🛡️ [安全拦截] 抛弃非页码杂包 (Raw Byte: \(pageNum))")
+                        return
+                    }
+                    
+                    let targetLine = pageNum * 10
                     
                     DispatchQueue.main.async {
                         self.currentFocusPageLine = targetLine
