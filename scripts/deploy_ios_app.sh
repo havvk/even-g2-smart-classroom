@@ -26,6 +26,7 @@ xcodebuild -project "${PROJECT_DIR}/SmartGlassGateway.xcodeproj" \
            -scheme SmartGlassGateway \
            -destination "id=${DEVICE_ID}" \
            -derivedDataPath "${PROJECT_DIR}/build" \
+           -allowProvisioningUpdates \
            build
 
 echo "📲 [3/3] 正在部署 App 至 iPhone (${DEVICE_NAME})..."
