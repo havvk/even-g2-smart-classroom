@@ -295,7 +295,7 @@ struct TeleprompterPreviewView: View {
                     }
                     
                     Button(action: {
-                        triggerPushToGlasses()
+                        triggerPushToGlasses(scrollProxy: proxy)
                     }) {
                         HStack {
                             if isPushing {
@@ -352,9 +352,14 @@ struct TeleprompterPreviewView: View {
         bleManager.sendScrollSync(lineIndex: lineIndex)
     }
     
-    /// 按当前设置的每行字数下发推屏 (强制开启手动触控手势 scrollModeAI = false)
-    private func triggerPushToGlasses() {
+    /// 按当前设置的每行字数下发推屏 (强制屏顶复位 activeLineIndex = 0)
+    private func triggerPushToGlasses(scrollProxy: ScrollViewProxy) {
         isPushing = true
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            activeLineIndex = 0
+            scrollProxy.scrollTo(0, anchor: .top)
+        }
+        bleManager.currentFocusPageLine = 0
         bleManager.sendTeleprompterText(script.content, targetWidthChars: Int(widthChars), scrollModeAI: false)
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
