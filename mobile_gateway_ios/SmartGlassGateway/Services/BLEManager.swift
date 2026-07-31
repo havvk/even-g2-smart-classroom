@@ -400,8 +400,9 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             return
         }
         
-        // 重置旧的发送任务
+        // 重置旧的发送任务，行号彻底回归第 0 行
         resetTeleprompterSession()
+        self.currentFocusPageLine = 0
         isTeleprompterSessionActive = true
         DispatchQueue.main.async {
             self.currentFocusPageLine = 0
@@ -530,21 +531,26 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             self.lastGestureReceived = "Rx [\(data.count)b]: \(hexString.prefix(18))"
         }
         
-        // 解除一切过度拦截，动态扫描 0xAA 开头的 G2 报文头
+        // 动态扫描 0xAA 开头的 G2 报文头
         if let aaIndex = data.range(of: Data([0xAA]))?.lowerBound {
             let relativeData = data.subdata(in: aaIndex..<data.count)
             
-            // 只要长度 >= 8，直接提取末端 varint/byte 作为页码并驱动行号变化
             if relativeData.count >= 8 {
-                let pageNum = Int(relativeData.last ?? 0)
-                // 仅当页码处于 0 ~ 13 合理范围，或处于手势 notify 结构内时更新
-                let targetLine = (pageNum <= 13) ? pageNum * 10 : pageNum
+                // 严密识别 Protobuf Notice 通知事件 (0x08 0x01)，彻底屏蔽推屏 ACK 确认应答帧 (0x08 0x02)
+                let isNoticeEvent = relativeData.contains(Data([0x08, 0x01]))
+                let isAckResponse = relativeData.contains(Data([0x08, 0x02]))
                 
-                DispatchQueue.main.async {
-                    self.currentFocusPageLine = targetLine
-                    self.addLog("🎯 [BLE Rx 实时解包] 收到 Raw Last Byte=\(pageNum) -> 更新行号: \(targetLine)")
+                if isNoticeEvent && !isAckResponse {
+                    let pageNum = Int(relativeData.last ?? 0)
+                    let targetLine = (pageNum <= 13) ? pageNum * 10 : pageNum
+                    
+                    DispatchQueue.main.async {
+                        self.currentFocusPageLine = targetLine
+                        self.lastGestureReceived = "Page \(pageNum) (Line \(targetLine))"
+                        self.addLog("🎯 [1:1 手势 Notice] 收到眼镜真实 Page=\(pageNum) -> 视口对齐第 \(targetLine) 行")
+                    }
+                    return
                 }
-                return
             }
         }
         
