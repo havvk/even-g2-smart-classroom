@@ -403,7 +403,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     }
     
     /// 动态编码并推送讲稿文本到 G2 眼镜 (Pkt 1~22 解锁触控 + 动态高清全屏文字)
-    func sendTeleprompterText(_ rawText: String, targetWidthChars: Int = 28, scrollModeAI: Bool = true) {
+    func sendTeleprompterText(_ rawText: String, targetWidthChars: Int = 28, scrollModeAI: Bool = false) {
         guard isConnected else {
             addLog("⚠️ 蓝牙未连接，请先连接 G2 眼镜")
             return
@@ -501,7 +501,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         
         DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.1) {
             self.isWritingRawPackets = false
-            self.sendScrollSync(lineIndex: 0)
+            // self.sendScrollSync(lineIndex: 0) // <--- Commented out: teleprompter.py doesn't send this, might cause black screen
             self.addLog("🎉 讲稿文本与触控监听全量推屏完成！视口对齐第 0 行。")
         }
     }

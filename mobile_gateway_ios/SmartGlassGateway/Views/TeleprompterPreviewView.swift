@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 讲稿预览与控制台视图 (1:1 官方同款：10行紧凑视口全显、亮白高对比度、防抖滚动同步)
+/// 讲稿预览视图 (包含讲稿元信息卡片、当前行号/手势调试胶囊与 10 行视口预览)
 struct TeleprompterPreviewView: View {
     @EnvironmentObject var bleManager: BLEManager
     @ObservedObject var storage = ScriptStorage.shared
@@ -10,20 +10,14 @@ struct TeleprompterPreviewView: View {
     @State private var activeLineIndex: Int = 0
     @State private var showingEditor: Bool = false
     @State private var isPushing: Bool = false
-    
-    // 自动滚屏定时器 (1:1 官方同款 Auto Scroll)
     @State private var isPlaying: Bool = false
     @State private var timer = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
     
-    // 每行字数 (通过底部滑块调节，范围 10 ~ 28 汉字)
     @State private var widthChars: Double = 28.0
-    
-    // 固件标准视口容纳行数 (10 行)
     let viewportLineCount = 10
     
-    // 动态根据每行字数重折行后的行数组
     var wrappedLines: [String] {
-        let maxLineWidth = Int(widthChars) * 2 // 1个汉字 = 2字节宽度
+        let maxLineWidth = Int(widthChars) * 2
         let cleanText = script.content.replacingOccurrences(of: "\\n", with: "\n")
         var lines = [String]()
         
@@ -50,12 +44,30 @@ struct TeleprompterPreviewView: View {
                 lines.append(currentLine)
             }
         }
-        return lines.isEmpty ? [script.content] : lines
+        return lines.isEmpty ? ["暂无讲稿内容"] : lines
     }
     
     var body: some View {
         VStack(spacing: 0) {
-            // MARK: - 顶部讲稿卡片与模式切换器
+            // MARK: - 顶栏
+            HStack {
+                Button(action: { presentationMode.wrappedValue.dismiss() }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text("返回")
+                    }
+                }
+                Spacer()
+                Text(script.title).font(.headline).lineLimit(1)
+                Spacer()
+                Button(action: { showingEditor = true }) {
+                    Image(systemName: "square.and.pencil").font(.title3)
+                }
+            }
+            .padding()
+            .background(Color(UIColor.systemBackground))
+            
+            // MARK: - 顶部讲稿卡片与模式选择器
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 6) {
@@ -78,7 +90,6 @@ struct TeleprompterPreviewView: View {
                     
                     Spacer()
                     
-                    // 模式下拉选择器 (官方同款 ||| AI ∨)
                     Menu {
                         ForEach(TeleprompterScrollMode.allCases) { mode in
                             Button(action: {
@@ -105,18 +116,20 @@ struct TeleprompterPreviewView: View {
                     }
                 }
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
             .background(Color(UIColor.secondarySystemGroupedBackground))
             .cornerRadius(16)
             .padding(.horizontal)
             .padding(.top, 8)
             
-            // MARK: - 实时手势与视口调试胶囊 (直观排查滑动响应)
-            HStack(spacing: 12) {
+            // MARK: - 实时当前行号与眼镜手势调试胶囊
+            HStack(spacing: 10) {
                 HStack(spacing: 4) {
                     Circle()
-                        .fill(Color.green)
+                        .fill(bleManager.isConnected ? Color.green : Color.red)
                         .frame(width: 8, height: 8)
-                    Text("行号: \(bleManager.currentFocusPageLine)")
+                    Text("行号:\(bleManager.currentFocusPageLine)")
                         .font(.system(.caption, design: .monospaced))
                         .fontWeight(.bold)
                         .foregroundColor(.green)
@@ -124,22 +137,28 @@ struct TeleprompterPreviewView: View {
                 
                 Divider().frame(height: 12)
                 
-                Text("最新手势: \(bleManager.lastGestureReceived.isEmpty ? "无" : bleManager.lastGestureReceived)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                Text("Rx:\(bleManager.rxPacketCount)")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundColor(.purple)
+                
+                Divider().frame(height: 12)
+                
+                Text("手势: \(bleManager.lastGestureReceived.isEmpty ? "无" : bleManager.lastGestureReceived)")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundColor(.orange)
                 
                 Spacer()
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .background(Color(UIColor.secondarySystemGroupedBackground))
             .cornerRadius(8)
             .padding(.horizontal, 16)
             .padding(.top, 4)
             
-            // MARK: - 10行 HUD 视口预览区域 (中央高亮)
+            // MARK: - 10 行视口预览区域
             ScrollViewReader { proxy in
-                ScrollView(.vertical, showsIndicators: false) {
+                ScrollView(.vertical, showsIndicators: true) {
                     VStack(spacing: 4) {
                         Spacer(minLength: 20)
                         
@@ -172,36 +191,16 @@ struct TeleprompterPreviewView: View {
                                     }
                                 }
                             )
-                            .overlay(
-                                Group {
-                                    if isViewportTop {
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .stroke(Color.purple.opacity(0.4), lineWidth: 1)
-                                    }
-                                }
-                            )
                             .id(index)
                             .onTapGesture {
                                 updateFocusLine(index: index, scrollProxy: proxy)
                             }
                         }
                         
-                        // 500px 巨型底边滚动缓冲区 (确保任何最后行均能物理 100% 置顶)
                         Spacer(minLength: 500)
                     }
                     .padding(.vertical, 8)
                 }
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 15).onEnded { value in
-                        // 手势滑动停止后，精准计算最新焦点行并仅触发一次同步
-                        let delta = Int(-value.translation.height / 32.0)
-                        let newIndex = min(max(0, activeLineIndex + delta), max(0, wrappedLines.count - 1))
-                        if newIndex != activeLineIndex {
-                            updateFocusLine(index: newIndex, scrollProxy: proxy)
-                        }
-                    }
-                )
-                // 监听眼镜端发来的触控/按键通知 (无门槛驱动 App 界面 1:1 屏顶对齐)
                 .onReceive(bleManager.$currentFocusPageLine) { newGlassesLine in
                     guard !wrappedLines.isEmpty else { return }
                     let clampedLine = max(0, min(wrappedLines.count - 1, newGlassesLine))
@@ -219,20 +218,17 @@ struct TeleprompterPreviewView: View {
             }
             .background(Color(UIColor.systemGroupedBackground))
             
-            // MARK: - 底部控制条 (滑块调节每行字数 10~28 + 自动滚屏)
+            // MARK: - 底部控制工具条 (含每行字数调节滑块 + 自动滚屏)
             VStack(spacing: 12) {
                 HStack(spacing: 14) {
-                    // 首页复位按钮
                     Button(action: {
-                        activeLineIndex = 0
-                        syncLineToGlasses(lineIndex: 0)
+                        updateFocusLine(index: 0, scrollProxy: nil)
                     }) {
                         Image(systemName: "arrow.left.to.line.compact")
                             .font(.title3)
                             .foregroundColor(.primary)
                     }
                     
-                    // 官方同款 自动平滑滚屏 播放/暂停
                     Button(action: {
                         isPlaying.toggle()
                     }) {
@@ -245,90 +241,57 @@ struct TeleprompterPreviewView: View {
                         .font(.caption2)
                         .foregroundColor(.secondary)
                     
-                    // 控制每行文字数量的滑块 (10 ~ 28 汉字)
-                    Slider(
-                        value: $widthChars,
-                        in: 10...28,
-                        step: 1
-                    ) {
-                        Text("每行字数")
-                    } onEditingChanged: { isEditing in
-                        if !isEditing {
-                            script.targetWidthChars = Int(widthChars)
-                            storage.updateScript(script)
-                            // 字数重新排版后下发推屏
-                            if bleManager.isConnected {
-                                triggerPushToGlasses()
-                            }
-                        }
-                    }
-                    .accentColor(.purple)
+                    Slider(value: $widthChars, in: 10...28, step: 1)
+                        .accentColor(.purple)
                     
                     Text("28字")
                         .font(.caption2)
                         .foregroundColor(.secondary)
-                    
-                    // 视口边界调节图标 (|-><-|)
-                    Button(action: {}) {
-                        Image(systemName: "arrow.left.and.right.righttriangle.left.righttriangle.right")
-                            .font(.title3)
-                            .foregroundColor(.primary)
-                    }
                 }
                 .padding(.horizontal, 24)
                 
-                // MARK: - 底部核心动作按钮 (编辑 & 开始推屏)
                 HStack(spacing: 16) {
-                    Button(action: {
-                        showingEditor = true
-                    }) {
+                    Button(action: { showingEditor = true }) {
                         HStack {
                             Image(systemName: "square.and.pencil")
                             Text("编辑")
                         }
                         .font(.headline)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
+                        .padding(.vertical, 12)
                         .background(Color(UIColor.secondarySystemGroupedBackground))
                         .foregroundColor(.primary)
                         .cornerRadius(12)
                     }
                     
                     Button(action: {
-                        triggerPushToGlasses(scrollProxy: proxy)
+                        triggerPushToGlasses(scrollProxy: nil)
                     }) {
                         HStack {
                             if isPushing {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .white))
                             } else {
                                 Image(systemName: "arrow.right.circle.fill")
                             }
-                            Text(bleManager.isConnected ? "开始" : "未连接 G2")
+                            Text(bleManager.isConnected ? "推送至眼镜" : "未连接 G2")
                         }
                         .font(.headline)
                         .fontWeight(.bold)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(bleManager.isConnected ? Color.primary : Color.gray)
-                        .foregroundColor(Color(UIColor.systemBackground))
+                        .padding(.vertical, 12)
+                        .background(bleManager.isConnected ? Color.purple : Color.gray)
+                        .foregroundColor(.white)
                         .cornerRadius(12)
                     }
                     .disabled(!bleManager.isConnected || isPushing)
                 }
                 .padding(.horizontal, 24)
-                .padding(.bottom, 12)
+                .padding(.bottom, 8)
             }
-            .padding(.top, 8)
-            .background(Color(UIColor.systemGroupedBackground).edgesIgnoringSafeArea(.bottom))
+            .padding(.vertical, 10)
+            .background(Color(UIColor.secondarySystemGroupedBackground))
         }
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Text("预览")
-                    .font(.headline)
-            }
-        }
+        .navigationBarHidden(true)
         .onAppear {
             widthChars = Double(script.targetWidthChars)
         }
@@ -337,27 +300,25 @@ struct TeleprompterPreviewView: View {
         }
     }
     
-    /// 点击更新焦点行，并同步给眼镜
-    private func updateFocusLine(index: Int, scrollProxy: ScrollViewProxy) {
+    private func updateFocusLine(index: Int, scrollProxy: ScrollViewProxy?) {
+        let clamped = max(0, min(wrappedLines.count - 1, index))
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-            activeLineIndex = index
-            scrollProxy.scrollTo(index, anchor: .top)
+            activeLineIndex = clamped
+            scrollProxy?.scrollTo(clamped, anchor: .top)
         }
-        syncLineToGlasses(lineIndex: index)
+        syncLineToGlasses(lineIndex: clamped)
     }
     
-    /// 下发行号真实双向位置同步到 G2 眼镜 (100% 对齐 teleprompter.py)
     private func syncLineToGlasses(lineIndex: Int) {
         guard bleManager.isConnected else { return }
         bleManager.sendScrollSync(lineIndex: lineIndex)
     }
     
-    /// 按当前设置的每行字数下发推屏 (强制屏顶复位 activeLineIndex = 0)
-    private func triggerPushToGlasses(scrollProxy: ScrollViewProxy) {
+    private func triggerPushToGlasses(scrollProxy: ScrollViewProxy?) {
         isPushing = true
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
             activeLineIndex = 0
-            scrollProxy.scrollTo(0, anchor: .top)
+            scrollProxy?.scrollTo(0, anchor: .top)
         }
         bleManager.currentFocusPageLine = 0
         bleManager.sendTeleprompterText(script.content, targetWidthChars: Int(widthChars), scrollModeAI: false)
