@@ -51,10 +51,13 @@ class G2ProtocolEncoder {
     /// 支持 BLE ATT MTU 分片的物理封包器
     /// - 单包 (<= maxChunkSize): Header(8b) + Payload + Frame-level CRC(2b), Header Len = PayloadLen + 2
     /// - 多包 (> maxChunkSize): 尾部拼接 Payload-level CRC(2b) 后分包，Header Len = ChunkLen, 无子包级 CRC
-    static func buildPackets(seq: UInt8, serviceHi: UInt8, serviceLo: UInt8, payload: Data, maxChunkSize: Int = 232) -> [Data] {
+    static func buildPackets(seq: inout UInt8, serviceHi: UInt8, serviceLo: UInt8, payload: Data, maxChunkSize: Int = 232) -> [Data] {
+        let currentSeq = seq
+        seq &+= 1 // 一个逻辑包只消耗一个 seq (与官方应用对齐)
+        
         if payload.count <= maxChunkSize {
             let lenByte = UInt8((payload.count + 2) & 0xFF)
-            var header = Data([0xAA, 0x21, seq, lenByte, 0x01, 0x01, serviceHi, serviceLo])
+            var header = Data([0xAA, 0x21, currentSeq, lenByte, 0x01, 0x01, serviceHi, serviceLo])
             header.append(payload)
             return [addCRC(header)]
         }
@@ -77,7 +80,7 @@ class G2ProtocolEncoder {
             let pktTot = UInt8(totalChunks & 0xFF)
             let pktSer = UInt8((i + 1) & 0xFF)
             
-            var header = Data([0xAA, 0x21, seq, lenByte, pktTot, pktSer, serviceHi, serviceLo])
+            var header = Data([0xAA, 0x21, currentSeq, lenByte, pktTot, pktSer, serviceHi, serviceLo])
             header.append(chunk)
             packets.append(header) // 多包子包无帧级 CRC
         }
@@ -85,8 +88,8 @@ class G2ProtocolEncoder {
         return packets
     }
     
-    static func buildPacket(seq: UInt8, serviceHi: UInt8, serviceLo: UInt8, payload: Data) -> Data {
-        let pkts = buildPackets(seq: seq, serviceHi: serviceHi, serviceLo: serviceLo, payload: payload)
+    static func buildPacket(seq: inout UInt8, serviceHi: UInt8, serviceLo: UInt8, payload: Data) -> Data {
+        let pkts = buildPackets(seq: &seq, serviceHi: serviceHi, serviceLo: serviceLo, payload: payload)
         return pkts.first ?? Data()
     }
     
@@ -155,7 +158,7 @@ class G2ProtocolEncoder {
     // MARK: - 2. Display Config (Service 0x0E-20)
     
     /// 物理显示面板校准配置 (官方基线 106 字节 Hex 串)
-    static func buildDisplayConfig(seq: UInt8, msgId: Int) -> Data {
+    static func buildDisplayConfig(seq: inout UInt8, msgId: Int) -> Data {
         let configHex = "08011215080210904E1D0000000025000000002800300038001215080310AC021D0000000025000000002800300038001214080410001D0000000025000000002800300038001214080510001D0000000025000000002800300038001214080610001D0000000025000000002800300038001214080910001D0000000025000000002800300038001800"
         var configBytes = Data()
         var hexStr = configHex
@@ -173,13 +176,13 @@ class G2ProtocolEncoder {
         payload.append(encodeVarint(configBytes.count))
         payload.append(configBytes)
         
-        return buildPacket(seq: seq, serviceHi: 0x0E, serviceLo: 0x20, payload: payload)
+        return buildPacket(seq: &seq, serviceHi: 0x0E, serviceLo: 0x20, payload: payload)
     }
     
     // MARK: - 3. Teleprompter Init (Service 0x06-20 type=1)
     
     /// 物理屏显提词器初始化 (100% 对齐全屏 28 字 x 10 行参数: width=59, content_height=585, line_height=567, viewport=3113)
-    static func buildTeleprompterInit(seq: UInt8, msgId: Int, scrollModeAI: Bool = false) -> [Data] {
+    static func buildTeleprompterInit(seq: inout UInt8, msgId: Int, scrollModeAI: Bool = false) -> [Data] {
         let modeByte: UInt8 = scrollModeAI ? 0x01 : 0x00
         
         let display = Data([
@@ -206,7 +209,7 @@ class G2ProtocolEncoder {
         payload.append(encodeVarint(settings.count))
         payload.append(settings)
         
-        return buildPackets(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
+        return buildPackets(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
     // MARK: - 4. Teleprompter Content Page (Service 0x06-20 type=3)
@@ -232,41 +235,46 @@ class G2ProtocolEncoder {
         payload.append(encodeVarint(msgId))
         payload.append(content)
         
-        let currentSeq = seq
-        seq &+= 1
-        return buildPackets(seq: currentSeq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
+        return buildPackets(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
+    }
+
+    static func buildScrollToPage(seq: inout UInt8, msgId: Int, pageNum: Int) -> Data {
+        var inner = Data([0x08])
+        inner.append(encodeVarint(pageNum))
+        inner.append(Data([0x18, 0x02]))
+        
+        var content = Data([0x42])
+        content.append(encodeVarint(inner.count))
+        content.append(inner)
+        
+        var payload = Data([0x08, 0x02, 0x10])
+        payload.append(encodeVarint(msgId))
+        payload.append(content)
+        
+        return buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
     // MARK: - 5. Route Switch & Sync (Service 0x8000 & 0x0920)
     
-    /// 触发 0x80-00 Sync 广播
-    static func buildSyncPacket(seq: UInt8, msgId: Int) -> Data {
-        var payload = Data([0x08, 0x0E, 0x10])
+    static func buildDashboardSync(seq: inout UInt8, msgId: Int) -> Data {
+        var payload = Data([0x08, 0x1A, 0x10])
         payload.append(encodeVarint(msgId))
-        payload.append(Data([0x6A, 0x00]))
-        return buildPacket(seq: seq, serviceHi: 0x80, serviceLo: 0x00, payload: payload)
+        payload.append(Data([0x1A, 0x00]))
+        return buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
     /// 触发 0x09-20 UI 路由规则前台切换至 Teleprompter App
-    static func buildRouteSwitchPacket(seq: UInt8, msgId: Int) -> Data {
+    static func buildRouteSwitch(seq: inout UInt8, msgId: Int) -> Data {
         var payload = Data([0x08, 0x01, 0x10])
         payload.append(encodeVarint(msgId))
-        let routeBytes = Data([
-            0x52, 0x18,
-            0x0A, 0x06, 0x08, 0x00, 0x10, 0x00, 0x18, 0x00,
-            0x0A, 0x06, 0x08, 0x00, 0x10, 0x01, 0x18, 0x00,
-            0x0A, 0x06, 0x08, 0x00, 0x10, 0x02, 0x18, 0x00
-        ])
-        payload.append(Data([0x1A]))
-        payload.append(encodeVarint(routeBytes.count))
-        payload.append(routeBytes)
-        return buildPacket(seq: seq, serviceHi: 0x09, serviceLo: 0x20, payload: payload)
+        payload.append(Data([0x1A, 0x0A, 0x08, 0x0A, 0x12, 0x06, 0x08, 0x02, 0x10, 0x02, 0x18, 0x01]))
+        return buildPacket(seq: &seq, serviceHi: 0x09, serviceLo: 0x20, payload: payload)
     }
     
     // MARK: - Legacy / UI Control Helpers
     
     /// 生成 0x06-20 Type 5 双向位置同步报文 (100% 对齐 teleprompter.py build_scroll_sync)
-    static func buildScrollSync(seq: UInt8 = 0x2A, msgId: Int = 0x50, lineIndex: Int) -> Data {
+    static func buildScrollSync(seq: inout UInt8, msgId: Int = 0x50, lineIndex: Int) -> Data {
         var inner = Data([0x08])
         inner.append(encodeVarint(lineIndex))
         inner.append(Data([0x10, 0x00, 0x18, 0x00]))
@@ -277,11 +285,11 @@ class G2ProtocolEncoder {
         payload.append(encodeVarint(inner.count))
         payload.append(inner)
         
-        return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
+        return buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
     /// 生成 0x06-20 Type 6 AI 跟随模式位置同步报文
-    static func buildAISync(seq: UInt8 = 0x2A, msgId: Int = 0x50, lineIndex: Int) -> Data {
+    static func buildAISync(seq: inout UInt8, msgId: Int = 0x50, lineIndex: Int) -> Data {
         var inner = Data([0x08])
         inner.append(encodeVarint(lineIndex))
         inner.append(Data([0x10, 0x00, 0x18, 0x00]))
@@ -292,44 +300,44 @@ class G2ProtocolEncoder {
         payload.append(encodeVarint(inner.count))
         payload.append(inner)
         
-        return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
+        return buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
-    static func buildWakePacket(seq: UInt8 = 0x05, msgId: Int = 0x05) -> Data {
+    static func buildWakePacket(seq: inout UInt8, msgId: Int = 0x05) -> Data {
         var payload = Data([0x08, 0x01, 0x10])
         payload.append(encodeVarint(msgId))
         payload.append(Data([0x1A, 0x08, 0x08, 0x01, 0x10, 0x01, 0x18, 0x05, 0x28, 0x01]))
-        return buildPacket(seq: seq, serviceHi: 0x04, serviceLo: 0x20, payload: payload)
+        return buildPacket(seq: &seq, serviceHi: 0x04, serviceLo: 0x20, payload: payload)
     }
     
-    static func buildSleepPacket(seq: UInt8 = 0x06, msgId: Int = 0x06) -> Data {
+    static func buildSleepPacket(seq: inout UInt8, msgId: Int = 0x06) -> Data {
         var payload = Data([0x08, 0x01, 0x10])
         payload.append(encodeVarint(msgId))
         payload.append(Data([0x1A, 0x08, 0x08, 0x01, 0x10, 0x00, 0x18, 0x05, 0x28, 0x00]))
-        return buildPacket(seq: seq, serviceHi: 0x04, serviceLo: 0x20, payload: payload)
+        return buildPacket(seq: &seq, serviceHi: 0x04, serviceLo: 0x20, payload: payload)
     }
     
-    static func buildEnterTeleprompterModePacket(seq: UInt8 = 0x09, msgId: Int = 0x15) -> Data {
+    static func buildEnterTeleprompterModePacket(seq: inout UInt8, msgId: Int = 0x15) -> Data {
         let stateMsg = Data([0x08, 0x01])
         var payload = Data([0x08, 0x01, 0x10])
         payload.append(encodeVarint(msgId))
         payload.append(Data([0x1A]))
         payload.append(encodeVarint(stateMsg.count))
         payload.append(stateMsg)
-        return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
+        return buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
-    static func buildTeleprompterModeConfigPacket(seq: UInt8 = 0x0A, mode: UInt8 = 0x00) -> Data {
+    static func buildTeleprompterModeConfigPacket(seq: inout UInt8, mode: UInt8 = 0x00) -> Data {
         var payload = Data([0x08, 0x01, 0x10, 0x16, 0x48, mode])
-        return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
+        return buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
     /// 查询眼镜当前提词器模式与运行状态 (Service 0x06-20 Type 2 Status Query)
-    static func buildQueryTeleprompterStatePacket(seq: UInt8 = 0x0A, msgId: Int = 0x20) -> Data {
+    static func buildQueryTeleprompterStatePacket(seq: inout UInt8, msgId: Int = 0x20) -> Data {
         var payload = Data([0x08, 0x02, 0x10])
         payload.append(encodeVarint(msgId))
         payload.append(Data([0x22, 0x02, 0x08, 0x01]))
-        return buildPacket(seq: seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
+        return buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
     // MARK: - Text Formatting Helper
