@@ -96,7 +96,7 @@ class G2ProtocolEncoder {
     // MARK: - 1. 7-Packet Session Authentication (Service 0x8000 & 0x8020)
     
     static func buildAuthPackets() -> [Data] {
-        let timestamp = Int(Date().timeIntervalSince1970 * 1000)
+        let timestamp = Int(Date().timeIntervalSince1970)
         let tsVarint = encodeVarint(timestamp)
         let txid = Data([0xE8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01])
         
