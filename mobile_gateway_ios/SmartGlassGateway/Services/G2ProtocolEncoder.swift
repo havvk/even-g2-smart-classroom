@@ -96,7 +96,7 @@ class G2ProtocolEncoder {
     // MARK: - 1. 7-Packet Session Authentication (Service 0x8000 & 0x8020)
     
     static func buildAuthPackets() -> [Data] {
-        let timestamp = Int(Date().timeIntervalSince1970)
+        let timestamp = Int(Date().timeIntervalSince1970 * 1000)
         let tsVarint = encodeVarint(timestamp)
         let txid = Data([0xE8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01])
         
@@ -257,17 +257,27 @@ class G2ProtocolEncoder {
     // MARK: - 5. Route Switch & Sync (Service 0x8000 & 0x0920)
     
     static func buildDashboardSync(seq: inout UInt8, msgId: Int) -> Data {
-        var payload = Data([0x08, 0x1A, 0x10])
+        var payload = Data([0x08, 0x0E, 0x10])
         payload.append(encodeVarint(msgId))
-        payload.append(Data([0x1A, 0x00]))
-        return buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
+        payload.append(Data([0x6A, 0x00]))
+        return buildPacket(seq: &seq, serviceHi: 0x80, serviceLo: 0x00, payload: payload)
     }
     
     /// 触发 0x09-20 UI 路由规则前台切换至 Teleprompter App
     static func buildRouteSwitch(seq: inout UInt8, msgId: Int) -> Data {
         var payload = Data([0x08, 0x01, 0x10])
         payload.append(encodeVarint(msgId))
-        payload.append(Data([0x1A, 0x0A, 0x08, 0x0A, 0x12, 0x06, 0x08, 0x02, 0x10, 0x02, 0x18, 0x01]))
+        let hex = "1a1a52180a060800100018000a060800100118000a06080010021800"
+        var hexData = Data()
+        var hexStr = hex
+        while !hexStr.isEmpty {
+            let subHex = hexStr.prefix(2)
+            hexStr = String(hexStr.dropFirst(2))
+            if let b = UInt8(subHex, radix: 16) {
+                hexData.append(b)
+            }
+        }
+        payload.append(hexData)
         return buildPacket(seq: &seq, serviceHi: 0x09, serviceLo: 0x20, payload: payload)
     }
     
