@@ -102,19 +102,19 @@ class G2ProtocolEncoder {
         
         var packets = [Data]()
         
-        // Auth 1
+        // Auth 1 (seq=0x01)
         packets.append(addCRC(Data([
             0xAA, 0x21, 0x01, 0x0C, 0x01, 0x01, 0x80, 0x00,
             0x08, 0x04, 0x10, 0x0C, 0x1A, 0x04, 0x08, 0x01, 0x10, 0x04
         ])))
         
-        // Auth 2
+        // Auth 2 (seq=0x02)
         packets.append(addCRC(Data([
             0xAA, 0x21, 0x02, 0x0A, 0x01, 0x01, 0x80, 0x20,
             0x08, 0x05, 0x10, 0x0E, 0x22, 0x02, 0x08, 0x02
         ])))
         
-        // Auth 3
+        // Auth 3 (seq=0x03)
         var p3Payload = Data([0x08, 0x80, 0x01, 0x10, 0x0F, 0x82, 0x08, 0x11, 0x08])
         p3Payload.append(tsVarint)
         p3Payload.append(Data([0x10]))
@@ -124,25 +124,25 @@ class G2ProtocolEncoder {
         p3Header.append(p3Payload)
         packets.append(addCRC(p3Header))
         
-        // Auth 4
+        // Auth 4 (seq=0x04)
         packets.append(addCRC(Data([
             0xAA, 0x21, 0x04, 0x0C, 0x01, 0x01, 0x80, 0x00,
             0x08, 0x04, 0x10, 0x10, 0x1A, 0x04, 0x08, 0x01, 0x10, 0x04
         ])))
         
-        // Auth 5
+        // Auth 5 (seq=0x05)
         packets.append(addCRC(Data([
             0xAA, 0x21, 0x05, 0x0C, 0x01, 0x01, 0x80, 0x00,
             0x08, 0x04, 0x10, 0x11, 0x1A, 0x04, 0x08, 0x01, 0x10, 0x04
         ])))
         
-        // Auth 6
+        // Auth 6 (seq=0x06)
         packets.append(addCRC(Data([
             0xAA, 0x21, 0x06, 0x0A, 0x01, 0x01, 0x80, 0x20,
             0x08, 0x05, 0x10, 0x12, 0x22, 0x02, 0x08, 0x01
         ])))
         
-        // Auth 7
+        // Auth 7 (seq=0x07)
         var p7Payload = Data([0x08, 0x80, 0x01, 0x10, 0x13, 0x82, 0x08, 0x11, 0x08])
         p7Payload.append(tsVarint)
         p7Payload.append(Data([0x10]))
@@ -181,8 +181,8 @@ class G2ProtocolEncoder {
     
     // MARK: - 3. Teleprompter Init (Service 0x06-20 type=1)
     
-    /// 物理屏显提词器初始化 (100% 对齐全屏 28 字 x 10 行参数: width=59, content_height=585, line_height=567, viewport=3113)
-    static func buildTeleprompterInit(seq: inout UInt8, msgId: Int, scrollModeAI: Bool = false) -> [Data] {
+    /// 物理屏显提词器初始化 (100% 对齐 teleprompter.py: 0x48, 0x01 模式)
+    static func buildTeleprompterInit(seq: inout UInt8, msgId: Int, scrollModeAI: Bool = true) -> [Data] {
         let modeByte: UInt8 = scrollModeAI ? 0x01 : 0x00
         
         let display = Data([
