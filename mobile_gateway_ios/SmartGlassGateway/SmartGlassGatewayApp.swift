@@ -12,6 +12,9 @@ struct SmartGlassGatewayApp: App {
                 .environmentObject(bleManager)
                 .environmentObject(speechEngine)
                 .environmentObject(webSocketClient)
+                .onAppear {
+                    bleManager.setupWebSocketTelemetryBinding(webSocketClient)
+                }
         }
     }
 }

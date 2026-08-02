@@ -281,6 +281,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         let hexStr = data.map { String(format: "%02X", $0) }.joined(separator: " ")
         
         addLog("📩 [Rx Notify] 通道 [\(uuidSuffix)] (\(data.count)B): \(hexStr)")
+        onG2TelemetryLog?("Rx", hexStr, "G2 Notify 接收 [\(uuidSuffix)] (\(data.count)B)")
         
         DispatchQueue.main.async {
             self.rxPacketCount += 1
@@ -288,6 +289,13 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         
         processReceivedG2Data(data)
+    }
+    
+    /// 将 BLEManager 的收发日志与 WebSocketClient 的遥测调试通道进行自动绑定
+    func setupWebSocketTelemetryBinding(_ client: WebSocketClient) {
+        self.onG2TelemetryLog = { [weak client] direction, hexBytes, desc in
+            client?.sendG2TelemetryLog(direction: direction, hexBytes: hexBytes, description: desc)
+        }
     }
     
     // 独立握手已废弃，统一由 sendTeleprompterText 自包含串行下发 Auth 鉴权序列
@@ -350,8 +358,8 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         guard isConnected else { return }
         self.currentFocusPageLine = lineIndex
         
-        let syncPkt = G2ProtocolEncoder.buildScrollSync(seq: &syncSeq, msgId: syncMsgId, lineIndex: lineIndex)
-        syncMsgId += 1
+        let syncPkt = G2ProtocolEncoder.buildScrollSync(seq: &teleprompterSeq, msgId: teleprompterMsgId, lineIndex: lineIndex)
+        teleprompterMsgId += 1
         sendRawData(syncPkt, channel: .content, logDesc: "双向位置同步 (Line \(lineIndex))")
         addLog("📍 [双向同步] 已发送 0x06-20 Type 5 报文 (Line \(lineIndex))")
     }
@@ -504,7 +512,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemSync)
         delay += 0.1
         
-        // 6. UI Route Switch (0x09-20) 显存全亮切前台
+        // 6. UI Route Switch (0x09-20) 显存全亮切前台 (对齐 teleprompter.py line 337)
         let routePkt = G2ProtocolEncoder.buildRouteSwitch(seq: &seq, msgId: msgId)
         msgId += 1
         let itemRoute = DispatchWorkItem {
@@ -522,7 +530,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         
         DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.1) {
             self.isTeleprompterSessionActive = true
-            self.addLog("🎉 讲稿文本与触控监听全量推屏完成！视口对齐第 0 行。")
+            self.addLog("🎉 讲稿文本 1:1 标准推屏完成！视口对齐第 0 行。")
         }
     }
     
@@ -590,6 +598,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                         self.lastGestureReceived = "P\(page) (L\(targetLine))"
                         self.addLog("🎯 ⬇️ [RX 手势接收] 切页 Notify Page \(page) -> 视口对齐第 \(targetLine) 行")
                     }
+                    onG2TelemetryLog?("Rx", hexString, "Gesture Notify: Page \(page) (Line \(targetLine))")
                     return
                 }
             }

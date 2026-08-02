@@ -4,7 +4,9 @@ import SwiftUI
 struct G2DebugView: View {
     @EnvironmentObject var bleManager: BLEManager
     @EnvironmentObject var webSocketClient: WebSocketClient
+    @StateObject private var discoveryEngine = ServerDiscoveryEngine.shared
     
+    @State private var serverUrlInput: String = "ws://192.168.1.100:8000/ws/session/sess_demo"
     @State private var testHeaderInput: String = "[P01/03] 签到 42/45 | 智慧课堂提词网关"
     @State private var testActiveInput: String = "今天我们来详细讲解智能眼镜在智慧课堂联动中的核心技术"
     @State private var testNextInput: String = "接下来进入第二十四讲的实战部分，通过声明式协议实现交互"
@@ -13,6 +15,112 @@ struct G2DebugView: View {
         NavigationView {
             ScrollView {
                 VStack(spacing: 20) {
+                    // 0. 智慧课堂 / 本地 WebSocket 调试服务端连接卡片 (集成 UDP 8001 自动发现)
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Image(systemName: "server.rack")
+                                .font(.title3)
+                                .foregroundColor(.purple)
+                            Text("智慧课堂 / 本地调试服务端")
+                                .font(.headline)
+                            Spacer()
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(webSocketClient.isConnected ? Color.green : Color.red)
+                                    .frame(width: 8, height: 8)
+                                Text(webSocketClient.isConnected ? "已连接" : "未连接")
+                                    .font(.subheadline)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(webSocketClient.isConnected ? .green : .red)
+                            }
+                        }
+                        
+                        Text("支持 UDP 8001 广播自动发现。连接后，手机与眼镜的所有 BLE 通讯数据 (Tx/Rx Notify) 将自动实时同步至服务端。")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        HStack {
+                            Text("WS 地址:")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                            TextField("ws://192.168.1.100:8000/ws/session/sess_demo", text: $serverUrlInput)
+                                .font(.system(.caption, design: .monospaced))
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .autocapitalization(.none)
+                                .disableAutocorrection(true)
+                            
+                            Button(action: {
+                                if discoveryEngine.isSearching {
+                                    discoveryEngine.stopDiscovery()
+                                } else {
+                                    discoveryEngine.startDiscovery { discoveredUrl in
+                                        self.serverUrlInput = discoveredUrl
+                                        self.webSocketClient.connect(urlString: discoveredUrl)
+                                        self.bleManager.setupWebSocketTelemetryBinding(self.webSocketClient)
+                                    }
+                                }
+                            }) {
+                                HStack(spacing: 4) {
+                                    if discoveryEngine.isSearching {
+                                        ProgressView()
+                                            .progressViewStyle(CircularProgressViewStyle(tint: .purple))
+                                            .scaleEffect(0.7)
+                                        Text("搜寻中...")
+                                    } else {
+                                        Image(systemName: "antenna.radiowaves.left.and.right.circle.fill")
+                                        Text("自动发现")
+                                    }
+                                }
+                                .font(.caption2)
+                                .fontWeight(.bold)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
+                                .background(Color.purple.opacity(0.15))
+                                .foregroundColor(.purple)
+                                .cornerRadius(6)
+                            }
+                        }
+                        
+                        HStack(spacing: 12) {
+                            Button(action: {
+                                if webSocketClient.isConnected {
+                                    webSocketClient.disconnect()
+                                } else {
+                                    webSocketClient.connect(urlString: serverUrlInput)
+                                    bleManager.setupWebSocketTelemetryBinding(webSocketClient)
+                                }
+                            }) {
+                                HStack {
+                                    Image(systemName: webSocketClient.isConnected ? "bolt.slash.fill" : "bolt.fill")
+                                    Text(webSocketClient.isConnected ? "断开服务端" : "连接调试服务端")
+                                }
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 9)
+                                .background(webSocketClient.isConnected ? Color.red.opacity(0.15) : Color.purple)
+                                .foregroundColor(webSocketClient.isConnected ? .red : .white)
+                                .cornerRadius(8)
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(Color(UIColor.secondarySystemBackground))
+                    .cornerRadius(12)
+                    .padding(.horizontal)
+                    .onAppear {
+                        if !webSocketClient.serverAddress.isEmpty {
+                            serverUrlInput = webSocketClient.serverAddress
+                        }
+                        // 启动页面时自动尝试扫描局域网 8001 UDP 广播
+                        if !webSocketClient.isConnected {
+                            discoveryEngine.startDiscovery { discoveredUrl in
+                                self.serverUrlInput = discoveredUrl
+                                self.webSocketClient.connect(urlString: discoveredUrl)
+                                self.bleManager.setupWebSocketTelemetryBinding(self.webSocketClient)
+                            }
+                        }
+                    }
                     // 1. G2 眼镜蓝牙连接与状态控制卡片
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {

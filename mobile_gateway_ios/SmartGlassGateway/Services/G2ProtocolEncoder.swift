@@ -327,6 +327,14 @@ class G2ProtocolEncoder {
         return buildPacket(seq: &seq, serviceHi: 0x04, serviceLo: 0x20, payload: payload)
     }
     
+    /// 构造 Service 0x06-20 Type 1 (state=4) 提词视口激活与 Touchpad 滑动 Notify 解禁报文 (100% 对齐 bt2.pklg 抓包)
+    static func buildTeleprompterActivateState4Packet(seq: inout UInt8, msgId: Int) -> Data {
+        var payload = Data([0x08, 0x01, 0x10])
+        payload.append(encodeVarint(msgId))
+        payload.append(Data([0x1A, 0x02, 0x08, 0x04]))
+        return buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
+    }
+    
     static func buildEnterTeleprompterModePacket(seq: inout UInt8, msgId: Int = 0x15) -> Data {
         let stateMsg = Data([0x08, 0x01])
         var payload = Data([0x08, 0x01, 0x10])
