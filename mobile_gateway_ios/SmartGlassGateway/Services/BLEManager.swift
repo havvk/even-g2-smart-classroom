@@ -512,24 +512,9 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         
         let pages = G2ProtocolEncoder.formatTextToPages(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: 10, targetPageCount: 14)
         self.currentPages = pages
-        addLog("🚀 [推屏序列] 开始下发 4 阶段标准提词报文 (前置 Session 显存自动释放重置)...")
+        addLog("🚀 [推屏序列] 开始发送对齐 teleprompter.py 的 25 包提词报文...")
         
         var delay: Double = 0.05
-        var seq: UInt8 = 0x01
-        var msgId: Int = 12
-        
-        // 0. 自动显存释放与 Session 重置 (下发 State=4 彻底复位 G2 提词器显存，确保再次推送实时更新)
-        let exitPayload = Data([0x08, 0x04, 0x10, UInt8(msgId & 0x7F), 0x22, 0x02, 0x08, 0x04])
-        let exitPktHeader = G2ProtocolEncoder.buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: exitPayload)
-        let exitPktWithCrc = G2ProtocolEncoder.addCRC(exitPktHeader)
-        msgId += 1
-        
-        let itemExit = DispatchWorkItem {
-            self.sendRawData(exitPktWithCrc, channel: .content, logDesc: "显存释放/Session重置 (Type 4)")
-        }
-        self.teleprompterWorkItems.append(itemExit)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemExit)
-        delay += 0.15 // 给固件显存释放留足 150ms 缓冲空间
         
         // 1. 动态生成下发 Pkt 1 ~ 7 基础 Auth (带有实时 Unix 时间戳, seq 0x01~0x07)
         let authPackets = G2ProtocolEncoder.buildAuthPackets()
@@ -545,8 +530,8 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         delay += 0.4 // 对齐 teleprompter.py line 296
         
         // 2. 动态下发 DisplayConfig (0x0E-20, seq 0x08, [8/25])
-        seq = 0x08
-        msgId = 0x14
+        var seq: UInt8 = 0x08
+        var msgId: Int = 0x14
         let pktDisplayConfig = G2ProtocolEncoder.buildDisplayConfig(seq: &seq, msgId: msgId)
         msgId += 1
         let itemCfg = DispatchWorkItem {
