@@ -859,14 +859,16 @@ stateDiagram-v2
 ```
 Pkt Hex: AA 12 [Seq] [Len] 01 01 06 01 08 A4 01 10 1C 52 02 08 [PageNum] [CRC16]
 ```
-1. **Header & Service**：Magic `AA 12`，Service `0x06-01`
-2. **切页页码字段（Tag 0x52）**：`0x52 0x02 0x08 [PageNum]`
-   - `PageNum = 0x00` -> 切换到 Page 0 (行 0)
-   - `PageNum = 0x01` -> 切换到 Page 1 (行 10)
-   - `PageNum = 0x02` -> 切换到 Page 2 (行 20)
-3. **解析注意事项**：切勿使用 `Tag 0x5A` 解析，真正的镜头触控切页页码恒在 `0x52 0x02 0x08` 的第 4 字节。
+### 20.4 官方 Native 二进制 `libapp.so` 原生符号验证 (2026-08-02)
 
----
+通过提取官方应用 `libapp.so` 中的 Dart AOT 原生编译符号，验证了官方 App 处理提词器位置与手势的绝对底层依据：
+
+1. **底层状态控制器**：
+   - 官方 App 内部通过 `_TeleprompterBaseV2.currentLine` 记录并维护全局当前绝对行号。
+2. **手势事件处理方法**：
+   - 当接收到 G2 智能眼镜发回的 Notify 时，官方 Dart 引擎调用的原生解调入口函数名为 **`handlePageScrollEvent`**。
+3. **物理事件粒度**：
+   - `handlePageScrollEvent` 对应的系统事件语义为 `Next page`（按页翻页）。眼镜硬件上报 `Tag 0x52 0x02 0x08 [PageNum]` 后，官方 App 在 `handlePageScrollEvent` 中执行 `currentLine = PageNum * 10` 计算，实现全系统位置同步！
 
 
 
