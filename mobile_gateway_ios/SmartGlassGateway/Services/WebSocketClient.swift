@@ -4,7 +4,7 @@ import Combine
 class WebSocketClient: ObservableObject {
     @Published var isConnected = false
     @Published var currentPayload: TeleprompterSyncPayload?
-    @Published var serverAddress: String = "ws://192.168.1.100:8000/ws/session/sess_demo"
+    @Published var serverAddress: String = "ws://192.168.8.59:8000/ws/session/sess_demo"
     
     private var webSocketTask: URLSessionWebSocketTask?
     private var urlSession = URLSession(configuration: .default)

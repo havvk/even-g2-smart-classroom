@@ -102,19 +102,19 @@ class G2ProtocolEncoder {
         
         var packets = [Data]()
         
-        // Auth 1 (seq=0x01)
+        // Auth 1
         packets.append(addCRC(Data([
             0xAA, 0x21, 0x01, 0x0C, 0x01, 0x01, 0x80, 0x00,
             0x08, 0x04, 0x10, 0x0C, 0x1A, 0x04, 0x08, 0x01, 0x10, 0x04
         ])))
         
-        // Auth 2 (seq=0x02)
+        // Auth 2
         packets.append(addCRC(Data([
             0xAA, 0x21, 0x02, 0x0A, 0x01, 0x01, 0x80, 0x20,
             0x08, 0x05, 0x10, 0x0E, 0x22, 0x02, 0x08, 0x02
         ])))
         
-        // Auth 3 (seq=0x03)
+        // Auth 3
         var p3Payload = Data([0x08, 0x80, 0x01, 0x10, 0x0F, 0x82, 0x08, 0x11, 0x08])
         p3Payload.append(tsVarint)
         p3Payload.append(Data([0x10]))
@@ -124,25 +124,25 @@ class G2ProtocolEncoder {
         p3Header.append(p3Payload)
         packets.append(addCRC(p3Header))
         
-        // Auth 4 (seq=0x04)
+        // Auth 4
         packets.append(addCRC(Data([
-            0xAA, 0x21, 0x04, 0x0C, 0x01, 0x01, 0x80, 0x00,
-            0x08, 0x04, 0x10, 0x10, 0x1A, 0x04, 0x08, 0x01, 0x10, 0x04
+            0xAA, 0x21, 0x04, 0x0A, 0x01, 0x01, 0x80, 0x20,
+            0x08, 0x05, 0x10, 0x10, 0x22, 0x02, 0x08, 0x01
         ])))
         
-        // Auth 5 (seq=0x05)
+        // Auth 5
         packets.append(addCRC(Data([
-            0xAA, 0x21, 0x05, 0x0C, 0x01, 0x01, 0x80, 0x00,
-            0x08, 0x04, 0x10, 0x11, 0x1A, 0x04, 0x08, 0x01, 0x10, 0x04
+            0xAA, 0x21, 0x05, 0x0A, 0x01, 0x01, 0x80, 0x20,
+            0x08, 0x05, 0x10, 0x11, 0x22, 0x02, 0x08, 0x01
         ])))
         
-        // Auth 6 (seq=0x06)
+        // Auth 6
         packets.append(addCRC(Data([
             0xAA, 0x21, 0x06, 0x0A, 0x01, 0x01, 0x80, 0x20,
             0x08, 0x05, 0x10, 0x12, 0x22, 0x02, 0x08, 0x01
         ])))
         
-        // Auth 7 (seq=0x07)
+        // Auth 7
         var p7Payload = Data([0x08, 0x80, 0x01, 0x10, 0x13, 0x82, 0x08, 0x11, 0x08])
         p7Payload.append(tsVarint)
         p7Payload.append(Data([0x10]))
@@ -153,31 +153,6 @@ class G2ProtocolEncoder {
         packets.append(addCRC(p7Header))
         
         return packets
-    }
-    
-    // MARK: - 1.5 System App Focus & Touchpad Switch (Service 0x09-20)
-    
-    /// 生成 Service 0x09-20 前台应用聚焦与触控路由切换报文 (100% 对齐 OfficialRawPkts Pkt 21, 22)
-    static func buildAppFocusPackets(seq: inout UInt8, msgId: inout Int) -> [Data] {
-        var pkts = [Data]()
-        
-        // Pkt 1: Service 0x09-20 (Focus App)
-        let p1Payload = Data([0x08, 0x02, 0x10, UInt8(msgId & 0xFF), 0x22, 0x02, 0x08, 0x01])
-        msgId += 1
-        pkts.append(buildPacket(seq: &seq, serviceHi: 0x09, serviceLo: 0x20, payload: p1Payload))
-        
-        // Pkt 2: Service 0x09-20 (Switch Touchpad Router)
-        let p2Payload = Data([0x08, 0x02, 0x10, UInt8(msgId & 0xFF), 0x22, 0x02, 0x08, 0x01])
-        msgId += 1
-        pkts.append(buildPacket(seq: &seq, serviceHi: 0x09, serviceLo: 0x20, payload: p2Payload))
-        
-        return pkts
-    }
-    
-    /// 生成 Service 0x09-20 单包 UI Route Switch 报文
-    static func buildRouteSwitch(seq: inout UInt8, msgId: Int) -> Data {
-        let payload = Data([0x08, 0x02, 0x10, UInt8(msgId & 0xFF), 0x22, 0x02, 0x08, 0x01])
-        return buildPacket(seq: &seq, serviceHi: 0x09, serviceLo: 0x20, payload: payload)
     }
     
     // MARK: - 2. Display Config (Service 0x0E-20)
@@ -198,56 +173,17 @@ class G2ProtocolEncoder {
         var payload = Data([0x08, 0x02, 0x10])
         payload.append(encodeVarint(msgId))
         payload.append(Data([0x22]))
-        payload.append(encodeVarint(configBytes.count))
+        payload.append(Data([UInt8(configBytes.count & 0xFF)]))
         payload.append(configBytes)
         
         return buildPacket(seq: &seq, serviceHi: 0x0E, serviceLo: 0x20, payload: payload)
     }
     
-    /// 100% 物理对齐 bt3.pklg 抓包: 生成 Service 0x07-20 / 0x03-20 / 0x0C-20 系统全局路由器注册前置帧列表
-    static func buildSystemSetupPackets(seq: inout UInt8, msgId: inout Int) -> [Data] {
-        var pkts: [Data] = []
-        
-        // 1. Service 0x07-20 (bt3.pklg 包 #05)
-        let s07Payload: [UInt8] = [
-            0x08, 0x0A,
-            0x10, UInt8(msgId & 0x7F),
-            0x6A, 0x06, 0x08, 0x00, 0x10, 0x50, 0x20, 0x00
-        ]
-        msgId += 1
-        pkts.append(buildPacket(seq: &seq, serviceHi: 0x07, serviceLo: 0x20, payload: Data(s07Payload)))
-        
-        // 2. Service 0x03-20 (bt3.pklg 包 #06)
-        let s03Payload: [UInt8] = [
-            0x08, 0x00,
-            0x10, UInt8(msgId & 0x7F),
-            0x1A, 0x33,
-            0x08, 0x08, 0x12, 0x04, 0x08, 0x00, 0x20, 0x04,
-            0x12, 0x04, 0x08, 0x00, 0x20, 0x0B, 0x12, 0x04, 0x08, 0x00, 0x20, 0x06,
-            0x12, 0x04, 0x08, 0x00, 0x20, 0x05, 0x12, 0x04, 0x08, 0x00, 0x20, 0x08,
-            0x12, 0x04, 0x08, 0x00, 0x20, 0x07, 0x12, 0x04, 0x08, 0x00, 0x20, 0x01,
-            0x12, 0x05, 0x08, 0x00, 0x20, 0x8A, 0x02
-        ]
-        msgId += 1
-        pkts.append(buildPacket(seq: &seq, serviceHi: 0x03, serviceLo: 0x20, payload: Data(s03Payload)))
-        
-        // 3. Service 0x0C-20 (bt3.pklg 包 #07)
-        let s0cPayload: [UInt8] = [
-            0x08, 0x02,
-            0x10, UInt8(msgId & 0x7F),
-            0x22, 0x04, 0x08, 0x01, 0x10, 0x00
-        ]
-        msgId += 1
-        pkts.append(buildPacket(seq: &seq, serviceHi: 0x0C, serviceLo: 0x20, payload: Data(s0cPayload)))
-        
-        return pkts
-    }
-    
     // MARK: - 3. Teleprompter Init (Service 0x06-20 type=1)
     
-    /// 物理屏显提词器初始化 (100% 对齐 bt3.pklg 抓包: 0x48 0x01 开启 Touchpad 触控板手势监听)
-    static func buildTeleprompterInit(seq: inout UInt8, msgId: Int, scrollModeAI: Bool = true) -> [Data] {
-        let modeByte: UInt8 = 0x01 // 恒定 0x01 (物理抓包 bt3.pklg 包 #98 对齐: 使能 Touchpad 触控板手势监听)
+    /// 物理屏显提词器初始化 (100% 对齐全屏 28 字 x 10 行参数: width=59, content_height=585, line_height=567, viewport=3113)
+    static func buildTeleprompterInit(seq: inout UInt8, msgId: Int, scrollModeAI: Bool = false) -> [Data] {
+        let modeByte: UInt8 = scrollModeAI ? 0x01 : 0x00
         
         let display = Data([
             0x08, 0x00,        // field 1
@@ -302,7 +238,23 @@ class G2ProtocolEncoder {
         return buildPackets(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
 
-    // MARK: - 5. Route Switch & Sync (Service 08000 & 0920)
+    static func buildScrollToPage(seq: inout UInt8, msgId: Int, pageNum: Int) -> Data {
+        var inner = Data([0x08])
+        inner.append(encodeVarint(pageNum))
+        inner.append(Data([0x18, 0x02]))
+        
+        var content = Data([0x42])
+        content.append(encodeVarint(inner.count))
+        content.append(inner)
+        
+        var payload = Data([0x08, 0x02, 0x10])
+        payload.append(encodeVarint(msgId))
+        payload.append(content)
+        
+        return buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
+    }
+    
+    // MARK: - 5. Route Switch & Sync (Service 0x8000 & 0x0920)
     
     static func buildDashboardSync(seq: inout UInt8, msgId: Int) -> Data {
         var payload = Data([0x08, 0x0E, 0x10])
@@ -311,53 +263,22 @@ class G2ProtocolEncoder {
         return buildPacket(seq: &seq, serviceHi: 0x80, serviceLo: 0x00, payload: payload)
     }
     
-    /// 触发 Service 0x80-00 双缓冲区翻转与显存 Flush Commit 提交 (Pkt 42 对齐: 解决黑屏的根源)
-    static func buildFlushCommit(seq: inout UInt8, msgId: Int) -> Data {
-        let payload = Data([
-            0x08, 0x0E,
-            0x10, UInt8(msgId & 0x7F),
-            0x6A, 0x00
-        ])
-        return buildPacket(seq: &seq, serviceHi: 0x80, serviceLo: 0x00, payload: payload)
-    }
-    
-
-    
-    /// 触发 0x01-20 系统手势与 App 布局路由绑定 (100% 物理抓包 bt3.pklg 包 #100 对齐)
-    static func buildSystemLayoutConfig(seq: inout UInt8, msgId: Int) -> Data {
-        var payload = Data([0x08, 0x02, 0x10])
+    /// 触发 0x09-20 UI 路由规则前台切换至 Teleprompter App
+    static func buildRouteSwitch(seq: inout UInt8, msgId: Int) -> Data {
+        var payload = Data([0x08, 0x01, 0x10])
         payload.append(encodeVarint(msgId))
-        let hexStr = "22171215080410031a0301020320042a040103020230003801"
+        let hex = "1a1a52180a060800100018000a060800100118000a06080010021800"
         var hexData = Data()
-        var tempHex = hexStr
-        while !tempHex.isEmpty {
-            let sub = tempHex.prefix(2)
-            tempHex = String(tempHex.dropFirst(2))
-            if let b = UInt8(sub, radix: 16) {
+        var hexStr = hex
+        while !hexStr.isEmpty {
+            let subHex = hexStr.prefix(2)
+            hexStr = String(hexStr.dropFirst(2))
+            if let b = UInt8(subHex, radix: 16) {
                 hexData.append(b)
             }
         }
         payload.append(hexData)
-        return buildPacket(seq: &seq, serviceHi: 0x01, serviceLo: 0x20, payload: payload)
-    }
-    
-    /// 100% 物理对齐 bt3.pklg 抓包包 #18: 生成 Touchpad 手势监听配置报文 (Service 0x01-20, msg_id=0x13)
-    static func buildTouchpadEventListener(seq: inout UInt8, msgId: Int = 0x13) -> Data {
-        var payload = Data([0x08, 0x02, 0x10])
-        payload.append(encodeVarint(msgId))
-        
-        // 物理 Payload: 22 0C 1A 0A 12 08 1A 06 08 00 10 00 20 01
-        let listenerBytes: [UInt8] = [
-            0x22, 0x0C,
-            0x1A, 0x0A,
-            0x12, 0x08,
-            0x1A, 0x06,
-            0x08, 0x00,
-            0x10, 0x00,
-            0x20, 0x01  // enable_touchpad_listener = true
-        ]
-        payload.append(contentsOf: listenerBytes)
-        return buildPacket(seq: &seq, serviceHi: 0x01, serviceLo: 0x20, payload: payload)
+        return buildPacket(seq: &seq, serviceHi: 0x09, serviceLo: 0x20, payload: payload)
     }
     
     // MARK: - Legacy / UI Control Helpers
@@ -404,14 +325,6 @@ class G2ProtocolEncoder {
         payload.append(encodeVarint(msgId))
         payload.append(Data([0x1A, 0x08, 0x08, 0x01, 0x10, 0x00, 0x18, 0x05, 0x28, 0x00]))
         return buildPacket(seq: &seq, serviceHi: 0x04, serviceLo: 0x20, payload: payload)
-    }
-    
-    /// 构造 Service 0x06-20 Type 1 (state=4) 提词视口激活与 Touchpad 滑动 Notify 解禁报文 (100% 对齐 bt2.pklg 抓包)
-    static func buildTeleprompterActivateState4Packet(seq: inout UInt8, msgId: Int) -> Data {
-        var payload = Data([0x08, 0x01, 0x10])
-        payload.append(encodeVarint(msgId))
-        payload.append(Data([0x1A, 0x02, 0x08, 0x04]))
-        return buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
     static func buildEnterTeleprompterModePacket(seq: inout UInt8, msgId: Int = 0x15) -> Data {
@@ -488,93 +401,46 @@ class G2ProtocolEncoder {
             }
             pages.append(chunk.joined(separator: "\n"))
         }
+        
+        // 固件显存 14 页 Buffer 强制硬性约束
+        while pages.count < targetPageCount {
+            let emptyPage = Array(repeating: "", count: linesPerPage).joined(separator: "\n")
+            pages.append(emptyPage)
+        }
+        
         return pages
     }
-    
-    // MARK: - Position Notification Parser (Service 0x06-01)
-    
-    struct PositionNotification {
-        let eventType: UInt32
-        let currentLine: Int
-        let pageId: Int
-        let rawLine: Int
-    }
-    
-    /// 从眼镜 Notify 数据帧中解调 0x0601 位置与手势变更通知 (支持 Type 164 / 165 / 167)
-    static func parsePositionNotification(from rawFrame: Data) -> PositionNotification? {
-        guard rawFrame.count >= 10,
-              rawFrame[0] == 0xAA,
-              rawFrame[1] == 0x12,
-              rawFrame[6] == 0x06,
-              rawFrame[7] == 0x01 else {
-            return nil
-        }
-        
-        let payload = rawFrame.subdata(in: 8..<rawFrame.count)
-        guard payload.count >= 3, payload[0] == 0x08 else { return nil }
-        
-        let eventType = UInt32(payload[1]) // 164 (0xA4), 165 (0xA5), 167 (0xA7)
-        var pageNum = 0
-        var lineNum = 0
-        var hasPositionData = false
-        
-        if eventType == 165 { // Type 165 (0xA5): 触控板滑动通知 (Tag 11 / 0x5A)
-            if let idx5A = payload.range(of: Data([0x5A]))?.lowerBound {
-                let p = idx5A + 1
-                if p < payload.count {
-                    let subLen = Int(payload[p])
-                    let subData = payload.subdata(in: (p+1)..<min(p+1+subLen, payload.count))
-                    var i = 0
-                    while i < subData.count {
-                        if subData[i] == 0x08 && i + 1 < subData.count {
-                            pageNum = Int(subData[i+1])
-                            i += 2
-                        } else if subData[i] == 0x10 && i + 1 < subData.count {
-                            lineNum = Int(subData[i+1])
-                            i += 2
-                        } else {
-                            i += 1
-                        }
-                    }
-                    hasPositionData = true
-                }
-            }
-        } else if eventType == 164 { // Type 164 (0xA4): 页面装载确认 (Tag 10 / 0x52)
-            if let idx52 = payload.range(of: Data([0x52]))?.lowerBound {
-                let p = idx52 + 1
-                if p < payload.count {
-                    let subLen = Int(payload[p])
-                    let subData = payload.subdata(in: (p+1)..<min(p+1+subLen, payload.count))
-                    if subData.count >= 2 && subData[0] == 0x08 {
-                        pageNum = Int(subData[1])
-                        hasPositionData = true
-                    }
-                }
-            }
-        } else if eventType == 167 { // Type 167 (0xA7): 翻页触底触发 (Tag 14 / 0x72)
-            if let idx72 = payload.range(of: Data([0x72]))?.lowerBound {
-                let p = idx72 + 1
-                if p < payload.count {
-                    let subLen = Int(payload[p])
-                    let subData = payload.subdata(in: (p+1)..<min(p+1+subLen, payload.count))
-                    if subData.count >= 2 && subData[0] == 0x10 {
-                        pageNum = Int(subData[1])
-                        hasPositionData = true
-                    }
-                }
-            }
-        }
-        
-        if hasPositionData {
-            let absLine = pageNum * 10 + lineNum
-            return PositionNotification(
-                eventType: eventType,
-                currentLine: absLine,
-                pageId: pageNum,
-                rawLine: lineNum
-            )
-        }
-        
-        return nil
-    }
+}
+import Foundation
+
+// Assuming we appended G2ProtocolEncoder.swift
+var seq: UInt8 = 0x08
+var msgId = 0x15
+
+var allPkts = [Data]()
+allPkts.append(contentsOf: G2ProtocolEncoder.buildAuthPackets())
+
+allPkts.append(G2ProtocolEncoder.buildDisplayConfig(seq: &seq, msgId: msgId))
+msgId += 1
+
+allPkts.append(contentsOf: G2ProtocolEncoder.buildTeleprompterInit(seq: &seq, msgId: msgId, scrollModeAI: true))
+msgId += 1
+
+let pages = ["测试"]
+for (i, pageText) in pages.enumerated() {
+    allPkts.append(contentsOf: G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: msgId, pageNum: i, text: pageText))
+    msgId += 1
+}
+
+var payload = Data([0x08, 0x0E, 0x10])
+payload.append(G2ProtocolEncoder.encodeVarint(msgId))
+payload.append(Data([0x6A, 0x00]))
+let pktsSync = G2ProtocolEncoder.buildPackets(seq: &seq, serviceHi: 0x80, serviceLo: 0x00, payload: payload)
+allPkts.append(contentsOf: pktsSync)
+msgId += 1
+
+allPkts.append(G2ProtocolEncoder.buildRouteSwitch(seq: &seq, msgId: msgId))
+
+for p in allPkts {
+    print(p.map { String(format: "%02x", $0) }.joined())
 }

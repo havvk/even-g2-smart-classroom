@@ -278,6 +278,17 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         guard let data = characteristic.value, !data.isEmpty else { return }
         
         let uuidSuffix = String(characteristic.uuid.uuidString.suffix(4))
+        
+        // 核心过滤 1: 6402 为麦克风 PCM 音频流通道，必须在接收端静默拦截，严禁打印日志轰炸
+        if uuidSuffix == "6402" {
+            return
+        }
+        
+        // 核心过滤 2: G2 协议指令帧必须以 0xAA 开头，过滤杂乱的非协议原始数据
+        guard data[0] == 0xAA else {
+            return
+        }
+        
         let hexStr = data.map { String(format: "%02X", $0) }.joined(separator: " ")
         
         addLog("📩 [Rx Notify] 通道 [\(uuidSuffix)] (\(data.count)B): \(hexStr)")
@@ -421,6 +432,66 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         
         DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.1) {
             self.addLog("🎉 1:1 物理抓包 71 个 Raw 字节包全部重发完成！")
+        }
+    }
+    
+    private var bt3PendingPackets: [Data] = []
+    private var bt3CurrentIndex: Int = 0
+    private var bt3TimeoutWorkItem: DispatchWorkItem?
+    
+    /// 100% 零加工 1:1 原装 bt3.pklg 提词物理帧 39 包重发 (ACK 优先 + 200ms 超时保底 Lock-step 引擎)
+    func sendHardcodedOfficialBt3Pklg() {
+        guard isConnected else {
+            addLog("⚠️ 蓝牙未连接，请先连接 G2 眼镜")
+            return
+        }
+        guard contentTxChar != nil else {
+            addLog("⚠️ 5401 通道未绑定")
+            return
+        }
+        
+        cancelPendingTeleprompterTasks()
+        let rawHexes = OfficialBt3Pkts.bt3TxRawHexes
+        self.bt3PendingPackets = rawHexes.map { hexToData($0) }
+        self.bt3CurrentIndex = 0
+        
+        addLog("🚀 [1:1 Lock-step 步进引擎] 开始发送 OfficialBt3Pkts 41 个原装提词与触控使能 Raw 数据包 (ACK+200ms保底)...")
+        sendNextBt3PacketInLockstep()
+    }
+    
+    /// 下发当前 Lock-step 队列中的下一包物理帧
+    private func sendNextBt3PacketInLockstep() {
+        bt3TimeoutWorkItem?.cancel()
+        
+        guard bt3CurrentIndex < bt3PendingPackets.count else {
+            self.isTeleprompterSessionActive = true
+            addLog("🎉 [Lock-step] 1:1 bt3 提词与触控使能 41 包全部下发完成！触控路由已激活，请尝试滑动镜腿 Touchpad！")
+            return
+        }
+        
+        let pktData = bt3PendingPackets[bt3CurrentIndex]
+        let pktNum = bt3CurrentIndex + 1
+        bt3CurrentIndex += 1
+        
+        sendRawData(pktData, channel: .content, logDesc: "bt3 步进帧 [\(pktNum)/41]")
+        
+        // 设置 200ms 超时保底，防止由于 ACK 未回发或丢包导致流程卡死
+        let timeoutItem = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            print("⏱️ [Lock-step] 第 \(pktNum) 包 ACK 等待超时 (200ms)，保底触发下发下一包...")
+            self.sendNextBt3PacketInLockstep()
+        }
+        self.bt3TimeoutWorkItem = timeoutItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.200, execute: timeoutItem)
+    }
+    
+    /// 收到眼镜 ACK 后调用的驱动闭合
+    private func onGlassAckReceivedForBt3Lockstep() {
+        guard !bt3PendingPackets.isEmpty && bt3CurrentIndex < bt3PendingPackets.count else { return }
+        bt3TimeoutWorkItem?.cancel()
+        // 收到 ACK 延时 20ms 下发下一包
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.020) {
+            self.sendNextBt3PacketInLockstep()
         }
     }
     
@@ -573,13 +644,19 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             let sLo = relativeData[7]
             let svcStr = String(format: "%02X-%02X", sHi, sLo)
             
-            // 1. 100% 匹配 bt2.pklg 物理抓包中的 Service 06-01 触控切页 Notify
+            // 1. 100% 匹配 bt3.pklg 物理抓包中的 Service 06-01 触控切页 Notify (Tag 0x52 0x02 0x08 [Page])
             if magic == 0x12 && sHi == 0x06 && sLo == 0x01 {
                 let payload = relativeData.subdata(in: 8..<relativeData.count)
                 var pageNum: Int? = nil
                 
-                // 查找 Tag 11 (0x5A)
-                if let idx5A = payload.range(of: Data([0x5A]))?.lowerBound {
+                // 查找 Tag 0x52 0x02 0x08
+                if let idx52 = payload.range(of: Data([0x52, 0x02, 0x08]))?.lowerBound {
+                    let pageIdx = idx52 + 3
+                    if pageIdx < payload.count {
+                        pageNum = Int(payload[pageIdx])
+                    }
+                } else if let idx5A = payload.range(of: Data([0x5A]))?.lowerBound {
+                    // 兼容 Tag 0x5A
                     let after5A = idx5A + 1
                     if after5A < payload.count {
                         let subLen = Int(payload[after5A])
@@ -606,6 +683,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             // 2. 显示眼镜返回的 ACK / 确认数据包
             if magic == 0x12 {
                 addLog("⬇️ [RX 确认接收] Svc \(svcStr) 确认包: [\(hexString)]")
+                onGlassAckReceivedForBt3Lockstep()
                 return
             }
         }

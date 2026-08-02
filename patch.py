@@ -1,0 +1,39 @@
+import re
+
+with open('mobile_gateway_ios/SmartGlassGateway/Services/G2ProtocolEncoder.swift', 'r') as f:
+    content = f.read()
+
+content = content.replace(
+    'let timestamp = Int(Date().timeIntervalSince1970 * 1000)',
+    'let timestamp = Int(Date().timeIntervalSince1970)'
+)
+
+auth4_old = """        // Auth 4
+        packets.append(addCRC(Data([
+            0xAA, 0x21, 0x04, 0x0C, 0x01, 0x01, 0x80, 0x00,
+            0x08, 0x04, 0x10, 0x10, 0x1A, 0x04, 0x08, 0x01, 0x10, 0x04
+        ])))"""
+
+auth4_new = """        // Auth 4
+        packets.append(addCRC(Data([
+            0xAA, 0x21, 0x04, 0x0A, 0x01, 0x01, 0x80, 0x20,
+            0x08, 0x05, 0x10, 0x10, 0x22, 0x02, 0x08, 0x01
+        ])))"""
+
+auth5_old = """        // Auth 5
+        packets.append(addCRC(Data([
+            0xAA, 0x21, 0x05, 0x0C, 0x01, 0x01, 0x80, 0x00,
+            0x08, 0x04, 0x10, 0x11, 0x1A, 0x04, 0x08, 0x01, 0x10, 0x04
+        ])))"""
+
+auth5_new = """        // Auth 5
+        packets.append(addCRC(Data([
+            0xAA, 0x21, 0x05, 0x0A, 0x01, 0x01, 0x80, 0x20,
+            0x08, 0x05, 0x10, 0x11, 0x22, 0x02, 0x08, 0x01
+        ])))"""
+
+content = content.replace(auth4_old, auth4_new)
+content = content.replace(auth5_old, auth5_new)
+
+with open('mobile_gateway_ios/SmartGlassGateway/Services/G2ProtocolEncoder.swift', 'w') as f:
+    f.write(content)

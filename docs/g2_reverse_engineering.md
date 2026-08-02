@@ -286,9 +286,10 @@ message SyncMessage {
 - **根因**：G2 窗口管理器要回发 `OS_RESPONSE_CREATE_STARTUP_PAGE_PACKET` 响应。若 iOS 端未为 Notify 特征使能 `setNotifyValue(true)`，固件会卡死在等待握手状态。
 - **解决方案**：在 BLE 发现特征后，为包含 `.notify` 属性的所有特征值执行订阅使能。
 
-### 4️⃣ 关键点四：14 页 140 行画卷下限自动补全
-- **根因**：提词视口要求 140 行的滚动缓冲区下限。若推送文本不足 14 页（140 行），渲染引擎因数据溢出/不足而保持黑屏。
-- **解决方案**：短文本自动填充空白换行符 `\n`，确保 `TeleprompterComplete` 帧的 `total_pages >= 14`，`total_lines >= 140`。
+### 4️⃣ 关键点四：按需正文切片与页数下发 (澄清社区早期 14 页补满误区) 🆕
+- **澄清误区**：社区早期误以为官方固件要求强制补满 14 页（140 行）。根据 `bt3.pklg` 物理抓包与真机验证，**官方 App 是按实际文本量下发页数（如 4 页/Page 0~3）**。
+- **物理规范**：`TeleprompterContent` 按需下发实际页数（Page 0..N-1），每页包含最多 10 行 UTF-8 文本；`TeleprompterComplete` 中的 `total_pages` 与 `total_lines` 填入实际下发的页数与行数即可，无需填充假空行。
+- **渲染基准**：显示排版基准为 `display_width = 59` (全屏模式)，每行最多 28 汉字。
 
 ### 5️⃣ 关键点五：GPU VSYNC Sync Trigger 物理刷屏脉冲 (`0x80-00` Type 14)
 - **根因**：MicroLED 显示芯片采用后台双缓冲，下发完文本后画面保存在后台 Buffer。
@@ -583,12 +584,45 @@ APP 接收到该 Notification 报文后的解调处理链如下：
 
 若第三方 App 始终无法获取眼镜发出的位置信息，请按以下顺序排查：
 
-- [ ] **Check 1: CCCD Notify 描述符使能**  
-  确保 iOS `setNotifyValue(true, for: characteristic)` 或 Android `setCharacteristicNotification` 已为 UUID `00002760-08c2-11e1-9073-0e8ac72e5402` 正确执行。
+- [ ] **Check 1: CCCD 0x2902 描述符物理使能 (防系统缺报文)**  
+  在 UUID `00002760-08c2-11e1-9073-0e8ac72e5402` (`5402` 通道) 上，除调用 iOS `setNotifyValue(true, for: characteristic)` 外，**必须在发现 `0x2902` 描述符后显式向物理 ATT Handle `0x0013` 写入 `Data([0x02, 0x00])` (ENABLE INDICATION)**，对齐官方抓包包 #28，防止 CoreBluetooth 系统未自动下发使能帧。
 - [ ] **Check 2: Service ID 匹配规则**  
   确认接收端未过滤 `Service 0x06-01` 数据包（注意：位置通知数据包的 Service ID 是 `0x0601`，而非发文本时的 `0x0620`）。
 - [ ] **Check 3: Protobuf Field 11 嵌套解析**  
   确认数据解析器能正确拆解 Tag 11 嵌套消息（`0x5A`），取其中的 Tag 2 (`0x10`) 作为 `current_line`，而非在顶层查找。
+
+---
+
+### 17.6 最新实测抓包 `tests/bt3.pklg` 物理数据全解析 (包含打开 APP 到手势滑动的全过程) 🆕
+
+在对最新的官方 App 物理抓包文件 [tests/bt3.pklg](file:///Users/l.ylive.cn/OneDrive/smart-glass/tests/bt3.pklg)（共 608 个 ACL 报文）解析中，提取到了完整的三大类 `Service 0x06-01` 触控/位置 Notify 事件包：
+
+#### 1. 三大类 Notify 事件类型表 (Event Type / Tag 1)
+
+| Event Type | Hex Tag | 协议含义 | Protobuf 内部 payload 结构 |
+| :--- | :--- | :--- | :--- |
+| **`Type 164`** | `0xA4` | **页面加截确认 / 页码切换** | Tag 10 (`0x52`): `{ Tag 1 (0x08): page_number }` |
+| **`Type 165`** | `0xA5` | **Touchpad 实时滑动手势上报** | Tag 11 (`0x5A`): `{ Tag 1 (0x08): page_number, Tag 2 (0x10): line_number }` |
+| **`Type 167`** | `0xA7` | **滑至页末 / 请求下一页** | Tag 14 (`0x72`): `{ Tag 2 (0x10): page_number }` |
+
+#### 2. `tests/bt3.pklg` 核心滑动事件抓包片断物理明细
+
+```text
+📍 [包 #105] G2->Phone (Rx) | Svc: 0x06-01 | Frame: AA 12 6E 09 01 01 06 01 08 A4 01 10 1C 52 00 C3 6A
+   => Type 164 (0xA4) 页面加载确认，当前为 Page 0
+
+📍 [包 #357] G2->Phone (Rx) | Svc: 0x06-01 | Frame: AA 12 53 0D 01 01 06 01 08 A5 01 10 23 5A 02 10 01 FB DB
+   => Type 165 (0xA5) 镜腿 Touchpad 滑动手势，定位到 Page 0 的 Line 1
+
+📍 [包 #419] G2->Phone (Rx) | Svc: 0x06-01 | Frame: AA 12 1D 0D 01 01 06 01 08 A5 01 10 34 5A 04 08 01 10 03 67 D9
+   => Type 165 (0xA5) 镜腿 Touchpad 滑动手势，定位到 Page 1 的 Line 3
+
+📍 [包 #458] G2->Phone (Rx) | Svc: 0x06-01 | Frame: AA 12 4D 0B 01 01 06 01 08 A7 01 10 35 72 02 10 08 26 BE
+   => Type 167 (0xA7) 滑动触及页末，请求装载 Page 8
+```
+
+#### 3. 初始连接使能 CCCD 物理句柄
+在 `bt3.pklg` 包 #28 中，官方 APP 在初始化阶段显式向 **ATT Handle `0x0013`** (即 `5402` 特征的 CCCD 描述符) 写入了 **`0x0002` (ENABLE INDICATION / NOTIFICATION)**，拉通了物理 Notify 数据管道。
 
 ---
 
@@ -706,6 +740,134 @@ APP 接收到该 Notification 报文后的解调处理链如下：
 - **测试目的**：验证在 Watch 点击 `👁️` 控件发送 `SLEEP_HUD` 指令时，BLE 侧及时下发屏显休眠帧。
 - **输入 Action**：`SLEEP_HUD`
 - **断言条件**：下发 `TeleprompterState(state: 4)` 停能屏显或下发 Display Sleep 特征帧，更新本地 HUD 激活状态标记 `isHUDActive == false`。
+
+---
+
+## 19. 物理真相解密：Even Realities G2 固件状态机与触控中断路由器激活 (2026-08-02 最新成果) 🆕
+
+在对最新的官方 App 物理抓包文件 [tests/bt3.pklg](file:///Users/l.ylive.cn/OneDrive/smart-glass/tests/bt3.pklg) 的逐字节差分提取中，我们彻底澄清了 G2 固件内部的完整状态迁移机制，并破译了镜腿 Touchpad 触控板硬件中断路由器的激活协议。
+
+### 19.1 G2 固件全生命周期状态机 (State Diagram)
+
+```mermaid
+stateDiagram-v2
+    [*] --> BLE_Disconnected : 硬件静置 / 广播模式
+
+    state "1. 蓝牙物理连接阶段" as Stage1 {
+        BLE_Disconnected --> GATT_Services_Discovered : CoreBluetooth 连接成功
+        GATT_Services_Discovered --> GATT_CCCD_Subscribed : 使能 5402/6402 Notify 特征通道
+    }
+
+    state "2. 链路鉴权与就绪阶段" as Stage2 {
+        GATT_CCCD_Subscribed --> Auth_Handshake : 手机下发 Tx 80-00 / 80-20 (Auth 1~7 帧)
+        Auth_Handshake --> Auth_Session_Ready : 眼镜回吐 Rx 80-00 / 80-01 (Ack 确认)
+    }
+
+    state "3. 硬件总线与应用路由切换阶段" as Stage3 {
+        Auth_Session_Ready --> System_Router_Registered : Tx 07-20 / 03-20 / 0C-20 (系统全局路由表注册)
+        System_Router_Registered --> App_Focus_Activated : Tx 09-20 / 1F-20 / 10-20 (切换前台 App & 激活触控中断)
+        App_Focus_Activated --> Hardware_Bus_Ready : 眼镜回吐 Rx 09-00 / 10-00 (硬件中断就绪)
+    }
+
+    state "4. 画面渲染与视口初始化阶段" as Stage4 {
+        Hardware_Bus_Ready --> Display_Memory_Allocated : Tx 0E-20 (DisplayConfig 显存分配)
+        Display_Memory_Allocated --> Teleprompter_Engine_Init : Tx 06-20 (TeleprompterInit, 0x48 0x01)
+        Teleprompter_Engine_Init --> Touchpad_Router_Mounted : Tx 01-20 (SystemLayout & Touch Event Listener)
+    }
+
+    state "5. 全屏提词与交互主循环" as Stage5 {
+        Touchpad_Router_Mounted --> Active_Teleprompter_Rendering : Tx 06-20 (Content Slices, type=3) + 80-00 Sync
+        
+        state Active_Teleprompter_Rendering {
+            [*] --> Page_View_Displaying : 视口对齐当前 Page / Line
+            
+            state "触控与位置双向交互" as TouchInteraction {
+                Page_View_Displaying --> Realtime_Scroll : 镜腿滑动 (Touchpad Slide)
+                Realtime_Scroll --> Gesture_Notification : 眼镜向上推屏 Rx 06-01 (Type 165 Scroll)
+                Gesture_Notification --> Viewport_Line_Updated : 手机更新当前焦点 Line
+                
+                Page_View_Displaying --> Page_Boundary_Trigger : 翻页触底 (Boundary Touch)
+                Page_Boundary_Trigger --> Page_Switch_Notification : 眼镜向上推屏 Rx 06-01 (Type 167 Boundary)
+                Page_Switch_Notification --> Next_Slice_Fetched : 手机按需下发下一页 Slice
+                
+                Viewport_Line_Updated --> Bidirectional_Sync : 手机反馈 Tx 06-20 (Type 5 Position Sync)
+                Bidirectional_Sync --> Page_View_Displaying
+            }
+        }
+    }
+
+    state "6. 模式退出与状态复位" as Stage6 {
+        Active_Teleprompter_Rendering --> Teleprompter_Session_Reset : 手机下发 Tx 06-20 (type=4, state=4)
+        Teleprompter_Session_Reset --> System_Router_Registered : 卸载 HUD 界面，退回仪表盘主菜单
+    }
+
+    BLE_Disconnected --> [*]
+```
+
+---
+
+### 19.2 关键硬件突破：Service `0x09-20` 前台应用聚焦与触控中断激活协议
+
+在物理抓包 `OfficialRawPkts.swift` [Pkt 21, 22] 中，解密出官方 APP 下发的核心底层中断激活指令：
+
+```text
+[Pkt 21] Seq: 0x15 | Service: 0x09-20 | Hex: aa21150a010109200802101722020801c31b
+[Pkt 22] Seq: 0x16 | Service: 0x09-20 | Hex: aa21160a0101092008021018220208013a7e
+```
+
+- **物理 Service ID**：`0x09-20`（`svchi = 0x09`, `svclo = 0x20`）
+- **Protobuf Payload 结构**：
+  ```protobuf
+  // Service 0x09-20: App Focus & Touchpad Interrupt Router Switch
+  message AppFocusControl {
+    uint32 type = 1;       // Tag 1 (0x08): 恒为 2
+    uint32 msg_id = 2;     // Tag 2 (0x10): 递增消息 ID
+    AppTarget target = 4;  // Tag 4 (0x22): { Tag 1 (0x08): 1 (表示前台聚焦并绑定触控板) }
+  }
+  ```
+- **硬件作用机制**：在 Auth 鉴权完成后，若不发送 `0x09-20`，眼镜 MCU 的 Touchpad 触控板硬件中断总线将处于关断状态。唯有下发 `0x09-20` 之后，镜腿手势滑动的物理中断信号才会被正确分配给当前前台应用，进而触发 `Service 0x06-01` (`5402` 通道) 的手势 Notification 上报。
+
+### 19.3 讲稿文本分包下发物理规范
+
+对 `bt3.pklg` 全包中 11 包 Content Page（`Pkt #0576 ~ #1352`）的 Protobuf 解析证实了官方 APP 的真实下发规则：
+
+1. **按需下发真实有效页数**：官方 APP 严格根据讲稿内容实际切割出的有效页数进行下发（如抓包 `bt3.pklg` 中长文本切出 11 页，则下发 `Page 0 ~ Page 10` 共 11 包；若短文本切出 4 页，则仅下发 `Page 0 ~ Page 3` 共 4 包）。
+2. **拒绝强行空页补齐**：当讲稿实际内容发送完毕后，官方 APP **绝对不会强行填充全空假页面（`\n\n\n...`）去补满 14 页**。
+3. **数据包 Service 认定**：下发讲稿 Content 页面时，使用物理抓包验证的 **`Service 0x06-20` (type=3)**，绝不可与系统布局包 `0x01-20` (type=2) 混淆。
+
+---
+
+## 20. 1:1 官方物理发包引擎与 Touchpad 镜腿手势通道解析规范 (2026-08-02 确凿核验版) 🆕
+
+本章总结了对 `bt2.pklg` / `bt3.pklg` / `test2.pklg` 全部物理抓包逐帧分析与物理 iPhone/G2 眼镜调试验证出的权威底层结论。
+
+### 20.1 物理发包机制：一问一答 Lock-Step 步进协议 (Lock-Step Ack-Driven Pacing)
+1. **传输层停顿等待**：
+   - 官方 App 并非高频连续盲发。在物理信道上，App 发出 1 包 `Tx` 后，在 BLE 信道上停顿 170ms~260ms **等待眼镜固件在 `5402` 回传 `Rx ACK` (Svc 80-00 / 80-01)**；
+   - 收到 ACK 确认后，App 延迟 20ms 再下发下一包 `Tx`；
+   - **错误反模式**：盲目机械按 30ms 连续下发会导致 BLE 接收 Buffer 溢出、固件握手死锁，进而导致眼镜硬件直接关闭触控手势中断。
+2. **200ms 超时保底引擎 (Ack-with-Timeout)**：
+   - 实现端应采用 ACK 驱动 + 200ms 超时保底下发，既保证 100% 匹配官方物理节奏，又防止丢包导致流程卡死。
+
+### 20.2 提词器硬件触控激活关键序列 (Pkts 40 & 41)
+在下发完正文预加载数据（Page 0~3，即前 39 包）后，必须紧接着下发 2 包关键的硬件路由使能帧：
+- **Pkt 40 (Service `0x04-20`)**：`AA 21 23 10 01 01 04 20 08 01 10 23 1A 08 08 00 10 00 18 00 28 01 4E CE` (通知固件挂载 HUD 视口渲染容器)
+- **Pkt 41 (Service `0x09-20`)**：`AA 21 24 22 01 01 09 20 08 01 10 24 1A 1A 52 18 0A 06 08 00 10 00 18 00 0A 06 08 00 10 01 18 00 0A 06 08 00 10 02 18 00 89 5E` (包含 3 个 `0A 06 08 00 10 0x` 路由表，**将 0/1/2 三号 Touchpad 手势路由强制绑定并聚焦到提词前台**)。
+
+### 20.3 Touchpad 触控切页 Notify 物理二进制结构
+当用户滑动镜腿时，G2 固件在 `5402` 特征值上传回的切页 Notification 物理字节为：
+```
+Pkt Hex: AA 12 [Seq] [Len] 01 01 06 01 08 A4 01 10 1C 52 02 08 [PageNum] [CRC16]
+```
+1. **Header & Service**：Magic `AA 12`，Service `0x06-01`
+2. **切页页码字段（Tag 0x52）**：`0x52 0x02 0x08 [PageNum]`
+   - `PageNum = 0x00` -> 切换到 Page 0 (行 0)
+   - `PageNum = 0x01` -> 切换到 Page 1 (行 10)
+   - `PageNum = 0x02` -> 切换到 Page 2 (行 20)
+3. **解析注意事项**：切勿使用 `Tag 0x5A` 解析，真正的镜头触控切页页码恒在 `0x52 0x02 0x08` 的第 4 字节。
+
+---
+
 
 
 

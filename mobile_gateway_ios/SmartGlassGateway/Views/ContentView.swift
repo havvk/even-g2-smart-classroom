@@ -70,7 +70,7 @@ struct ControlCenterSheetView: View {
     @StateObject private var discoveryEngine = ServerDiscoveryEngine.shared
     @Environment(\.presentationMode) var presentationMode
     
-    @State private var serverUrlInput: String = "ws://192.168.1.100:8000/ws/session/sess_demo"
+    @State private var serverUrlInput: String = "ws://192.168.8.59:8000/ws/session/sess_demo"
     
     var body: some View {
         NavigationView {
@@ -186,6 +186,7 @@ struct ControlCenterSheetView: View {
                             }
                         }
                     }
+                    
                 }
                 
                 // 3. 实时蓝牙协议数据帧日志

@@ -183,9 +183,6 @@ struct G2DebugView: View {
                             }
                         }
                     }
-                    .padding()
-                    .background(Color(UIColor.secondarySystemBackground))
-                    .cornerRadius(12)
                     .padding(.horizontal)
                     
                     // 2. G2 硬件控制与显存刷屏测试面板

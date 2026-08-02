@@ -12,6 +12,7 @@
 		A10000032C50000100000001 /* HUDLayoutAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000032C50000100000001 /* HUDLayoutAdapter.swift */; };
 		A10000042C50000100000001 /* BLEManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000042C50000100000001 /* BLEManager.swift */; };
 		A10000042C50000100000099 /* OfficialRawPkts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000042C50000100000099 /* OfficialRawPkts.swift */; };
+		A10000042C5000010000009A /* OfficialBt3Pkts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000042C5000010000009A /* OfficialBt3Pkts.swift */; };
 		A10000052C50000100000001 /* SpeechFollowEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000052C50000100000001 /* SpeechFollowEngine.swift */; };
 		A10000062C50000100000001 /* WebSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000062C50000100000001 /* WebSocketClient.swift */; };
 		A10000072C50000100000001 /* HUDPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000072C50000100000001 /* HUDPreviewView.swift */; };
@@ -35,6 +36,7 @@
 		B10000032C50000100000001 /* HUDLayoutAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/HUDLayoutAdapter.swift; sourceTree = "<group>"; };
 		B10000042C50000100000001 /* BLEManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/BLEManager.swift; sourceTree = "<group>"; };
 		B10000042C50000100000099 /* OfficialRawPkts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/OfficialRawPkts.swift; sourceTree = "<group>"; };
+		B10000042C5000010000009A /* OfficialBt3Pkts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/OfficialBt3Pkts.swift; sourceTree = "<group>"; };
 		B10000052C50000100000001 /* SpeechFollowEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/SpeechFollowEngine.swift; sourceTree = "<group>"; };
 		B10000062C50000100000001 /* WebSocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/WebSocketClient.swift; sourceTree = "<group>"; };
 		B10000072C50000100000001 /* HUDPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/HUDPreviewView.swift; sourceTree = "<group>"; };
@@ -90,6 +92,7 @@
 				B10000032C50000100000001 /* HUDLayoutAdapter.swift */,
 				B10000042C50000100000001 /* BLEManager.swift */,
 				B10000042C50000100000099 /* OfficialRawPkts.swift */,
+				B10000042C5000010000009A /* OfficialBt3Pkts.swift */,
 				B10000052C50000100000001 /* SpeechFollowEngine.swift */,
 				B10000062C50000100000001 /* WebSocketClient.swift */,
 				B100000A2C50000100000001 /* WatchSessionManager.swift */,
@@ -167,6 +170,7 @@
 				A10000032C50000100000001 /* HUDLayoutAdapter.swift in Sources */,
 				A10000042C50000100000001 /* BLEManager.swift in Sources */,
 				A10000042C50000100000099 /* OfficialRawPkts.swift in Sources */,
+				A10000042C5000010000009A /* OfficialBt3Pkts.swift in Sources */,
 				A10000052C50000100000001 /* SpeechFollowEngine.swift in Sources */,
 				A10000062C50000100000001 /* WebSocketClient.swift in Sources */,
 				A100000A2C50000100000001 /* WatchSessionManager.swift in Sources */,

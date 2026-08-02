@@ -6,3 +6,7 @@ __pycache__/
 .pytest_cache/
 mobile_gateway_ios/SmartGlassGateway.xcodeproj/xcuserdata/
 mobile_gateway_ios/SmartGlassGateway.xcodeproj/project.xcworkspace/
+
+decompiled_app/
+extracted_assets/
+extracted_so/
