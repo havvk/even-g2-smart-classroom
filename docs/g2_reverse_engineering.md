@@ -251,6 +251,65 @@ message SyncMessage {
   uint32 msg_id = 2;
   bytes data = 13;          // 6A-00
 }
+
+// 5. 系统级 Setup 与基础设施配置 Schema (Service 0x07/0x03/0x0C/0x30/0x0D/0x1F/0x10/0x04) 🆕
+message DashboardSetup { // Service 0x07-20 (语言/基线)
+  uint32 type = 1;          // 10
+  uint32 msg_id = 2;        // 10
+  DashboardConfig config = 13;
+}
+
+message DashboardConfig {
+  uint32 field1 = 1;        // 0
+  uint32 lang_code = 2;     // 80 (UTF-8 字符映射)
+  uint32 field4 = 4;        // 0
+}
+
+message ScreenGeometrySetup { // Service 0x03-20 (视口点阵/DPI 布局)
+  uint32 type = 1;          // 0
+  uint32 msg_id = 2;        // 7
+  ScreenLayout layout = 3;
+}
+
+message ScreenLayout {
+  uint32 base_id = 1;       // 8
+  repeated RegionDPI regions = 2; // Region 4, 11, 6, 5, 8, 7, 1, 266
+}
+
+message TaskManagerSetup { // Service 0x0C-20 (挂件管理使能)
+  uint32 type = 1;          // 2
+  uint32 msg_id = 2;        // 9
+  TaskState state = 4;      // Tag 1=1, Tag 2=0
+}
+
+message EventTriggerSetup { // Service 0x30-20 (物理事件监听器使能)
+  uint32 type = 1;          // 1
+  uint32 msg_id = 2;        // 11
+  EventListener listener = 3; // Tag 1=1, Tag 2=0
+}
+
+message InputDeviceSetup { // Service 0x0D-20 (交互输入设备注册)
+  uint32 type = 1;          // 0
+  uint32 msg_id = 2;        // 5
+}
+
+message TouchpadInterruptSetup { // Service 0x1F-20 (🚨 Touchpad 触控板滑动中断使能)
+  uint32 type = 1;          // 0
+  uint32 msg_id = 2;        // 8
+  TouchpadEnable enable = 3; // Tag 1=1 (使能触控板中断)
+}
+
+message PowerSleepSetup { // Service 0x10-20 (屏幕功耗/休眠/亮度策略)
+  uint32 type = 1;          // 1
+  uint32 msg_id = 2;        // 12
+  PowerPolicy policy = 3;   // Tag 1=4 (唤醒并保持高亮模式)
+}
+
+message DisplayPowerWakeSetup { // Service 0x04-20 (MicroLED 光学引擎总线电源唤醒)
+  uint32 type = 1;          // 1
+  uint32 msg_id = 2;        // 35
+  PowerWake wake = 3;       // Tag 5=1 (唤醒 MicroLED 光学总线电源)
+}
 ```
 
 ---
@@ -336,19 +395,100 @@ message SyncMessage {
 ### 10.2 官方 APP 完整发送序列（69 帧）
 
 ```
-阶段 1：鉴权与基础初始化 (seq 1~22)
-──────────────────────────────────────
-seq  1-2:  Auth/Capability (0x8000)       ← 会话能力协商
-seq  3-4:  Auth/TimeSync   (0x8020)       ← Unix 时间戳同步
-seq  5:    0D20                            ← 未知初始化
-seq  6:    1F20                            ← 未知配置
-seq  7:    0920                            ← 状态设置
-seq  8:    0320                            ← 显示通道配置
-seq  9:    0C20                            ← 未知
-seq 10:    0720                            ← 未知
-seq 11:    3020                            ← 未知
-seq 12:    1020                            ← 未知
-seq 13-22: (重复一轮类似初始化)
+阶段 1：鉴权与系统级 Setup 物理初始化序列 (seq 1~15) 🆕 (2026-08-02 精确修订)
+──────────────────────────────────────────────────────────────────────────────────
+seq  1: Auth/Capability (0x80-00)     ← [20B] AA 21 01 0C 01 01 80 00 08 04 10 01 1A 04 08 01 10 03 2B 26
+seq  2: Auth/TimeSync   (0x80-20)     ← [18B] AA 21 02 0A 01 01 80 20 08 05 10 02 22 02 08 01 8A 25
+seq  3: Auth/UnixTime   (0x80-20)     ← [26B] AA 21 03 12 01 01 80 20 08 80 01 10 03 82 08 08 08 8A 92 BB...
+seq  4: Auth/Capability (0x80-00)     ← [20B] AA 21 04 0C 01 01 80 00 08 04 10 04 1A 04 08 01 10 03 8C 5F
+
+--- 以下为官方提词前必发 7 包基础设施 Setup 配置 (缺失将导致 Touchpad 触控不可用) ---
+seq  5: 07-20 (Dashboard Setup)       ← [22B] AA 21 0A 0E 01 01 07 20 08 0A 10 0A 6A 06 08 00 10 50 20 00 4E 15 (语言/基线)
+seq  6: 03-20 (Screen & DPI Layout)   ← [67B] AA 21 07 3B 01 01 03 20 08 00 10 07 1A 33... (视口 8 区域分辨率/点阵)
+seq  7: 0C-20 (Task Manager Setup)    ← [20B] AA 21 09 0C 01 01 0C 20 08 02 10 09 22 04 08 01 10 00 A3 FD (挂件管理)
+seq  8: 30-20 (Event Trigger Setup)   ← [20B] AA 21 0B 0C 01 01 30 20 08 01 10 0B 1A 04 08 01 10 00 CA 92 (物理监听器)
+seq  9: 0D-20 (Input Device Register) ← [14B] AA 21 05 06 01 01 0D 20 08 00 10 05 D5 52 (交互设备注册)
+seq 10: 09-20 (Device Settings Setup)  ← [28B] AA 21 06 14 01 01 09 20 08 01 10 06 1A 0C 4A 0A 08 00 10 00 18 00...
+seq 11: 1F-20 (Touchpad Interrupt)    ← [18B] AA 21 08 0A 01 01 1F 20 08 00 10 08 1A 02 08 01 A9 B3 (🚨 触控板滑动中断使能)
+seq 12: 10-20 (Power & Sleep Control) ← [18B] AA 21 0C 0A 01 01 10 20 08 01 10 0C 1A 02 08 04 6B D2 (功耗与亮度策略)
+seq 13: 09-20 (App Focus Lock #1)     ← [18B] AA 21 0D 0A 01 01 09 20 08 02 10 0D 22 02 08 01 37 59 (焦点强行一次锁死)
+seq 14: 09-20 (App Focus Lock #2)     ← [18B] AA 21 0F 0A 01 01 09 20 08 02 10 0F 22 02 08 01 B4 1D (焦点强行二次锁死)
+seq 15: 01-20 (Pipeline Layout Ready) ← [26B] AA 21 10 12 01 01 01 20 08 02 10 10 22 0A 1A 08 12 06 12 04 08 00 10 00 (画布渲染流水线就绪帧)
+seq 16: 06-20 (TeleprompterInit)      ← [45B] AA 21 1B 25 01 01 06 20... (提词画卷参数初始化)
+seq 17: 01-20 (System Layout Config)  ← [39B] AA 21 11 1F 01 01 01 20... (UI 视口结构确认)
+seq 18: 01-20 (System Layout Config)  ← [28B] AA 21 13 14 01 01 01 20... (UI 视口结构确认)
+...
+
+### 10.2 官方 APP 100% 全量 172 个 ATT 物理事件与 CCCD 使能明细 🆕 (2026-08-02 物理全量对齐)
+
+根据 `bt3.pklg` 的二进制解调，官方 APP 在下发 `AA 21` 协议包之前，必须首先在 ATT 底层向 **5 大 CCCD 描述符句柄** 写入使能控制位。
+
+#### 物理事件总览：
+- **总下发事件数**：172 个 ATT Write 事件（包含 9 次 CCCD 描述符使能 + 163 包 AA 21 数据帧）
+- **物理写句柄映射 (Handle Map)**：
+  - `Handle 0x0845` -> `5402 CCCD` (写入 `01 00` 开启 Notify)
+  - `Handle 0x0825` -> `5403 CCCD` (写入 `01 00` 开启 Notify)
+  - `Handle 0x0865` -> `5404 CCCD` (写入 `01 00` 开启 Notify)
+  - `Handle 0x0885` -> `5405 CCCD` (写入 `01 00` 开启 Notify)
+  - `Handle 0x0013` -> `2A4D CCCD` (**写入 `02 00` 开启 Indicate 确认订阅！**)
+  - `Handle 0x0842` -> `5401 Write` (写入 `AA 21` 数据 Payload)
+
+#### 前 15 个底层 ATT 物理事件顺序明细：
+
+| 事件序号 | 物理 Handle | ATT Opcode | 载荷长度 | HEX 数据与物理语义 |
+| :--- | :--- | :--- | :--- | :--- |
+| **Event # 1** | `0x0845` | `WriteReq (0x12)` | 2B | `01 00` (开启 5402 CCCD Notify #1) |
+| **Event # 2** | `0x0825` | `WriteReq (0x12)` | 2B | `01 00` (开启 5403 CCCD Notify #1) |
+| **Event # 3** | `0x0865` | `WriteReq (0x12)` | 2B | `01 00` (开启 5404 CCCD Notify #1) |
+| **Event # 4** | **`0x0013`** | `WriteReq (0x12)` | 2B | **`02 00` (🚨 开启 2A4D CCCD Indicate 确认！)** |
+| **Event # 5** | `0x0885` | `WriteReq (0x12)` | 2B | `01 00` (开启 5405 CCCD Notify #1) |
+| **Event # 6** | `0x0842` | `WriteCmd (0x52)` | 20B | `AA 21 01 0C 01 01 80 00...` (Auth Capability) |
+| **Event # 7** | `0x0842` | `WriteCmd (0x52)` | 18B | `AA 21 02 0A 01 01 80 20...` (Auth TimeSync) |
+| **Event # 8** | `0x0842` | `WriteCmd (0x52)` | 26B | `AA 21 03 12 01 01 80 20...` (Auth UnixTime) |
+| **Event # 9** | `0x0845` | `WriteReq (0x12)` | 2B | `01 00` (二次确认 5402 CCCD Notify #2) |
+| **Event #10** | `0x0825` | `WriteReq (0x12)` | 2B | `01 00` (二次确认 5403 CCCD Notify #2) |
+| **Event #11** | `0x0865` | `WriteReq (0x12)` | 2B | `01 00` (二次确认 5404 CCCD Notify #2) |
+| **Event #12** | `0x0885` | `WriteReq (0x12)` | 2B | `01 00` (二次确认 5405 CCCD Notify #2) |
+| **Event #13** | `0x0842` | `WriteCmd (0x52)` | 20B | `AA 21 04 0C 01 01 80 00...` (Auth Session Ready) |
+| **Event #14** | `0x0842` | `WriteCmd (0x52)` | 22B | `AA 21 0A 0E 01 01 07 20...` (Dashboard Setup) |
+| **Event #15** | `0x0842` | `WriteCmd (0x52)` | 67B | `AA 21 07 3B 01 01 03 20...` (Screen Geometry Setup) |
+
+```text
+⏱️ 三大 Timing 物理下发法则：
+1. 基础设施 Setup 阶段 (seq 1~18): 包间强制留出 250ms ~ 300ms 安全窗口 (平均 +270ms)，确保 MCU 寄存器写入。
+2. 同一 Page 多包切片 (Pkt #19~22): 采用 12ms ~ 13ms 极速 Burst 下发，利用 BLE 链路 MTU 高速连续吐包。
+3. 文本页间切换 (Page N -> Page N+1): 暂停 770ms ~ 800ms，等待前台 HUD 画布卷轴重构。
+```
+
+#### 前 25 包物理下发时间线明细表：
+
+| 序号 | 物理 Service | Seq ID | 相对时间戳 | 包间间隔 (Delta) | 官方 App 下发动作与物理语义 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| Pkt # 1 | **`0x80-00`** | `0x01` | 0.0 ms | Baseline | Auth Capability (会话能力协商) |
+| Pkt # 2 | **`0x80-20`** | `0x01` | 358.0 ms | **+358.0 ms** | Auth TimeSync (时间戳同步) |
+| Pkt # 3 | **`0x80-20`** | `0x01` | 627.0 ms | **+269.0 ms** | Auth UnixTime (Unix 绝对时间) |
+| Pkt # 4 | **`0x80-00`** | `0x01` | 1224.0 ms | **+597.0 ms** | Auth Session Ready (鉴权就绪) |
+| Pkt # 5 | **`0x07-20`** | `0x01` | 1390.0 ms | **+166.0 ms** | Dashboard Setup (语言/基线) |
+| Pkt # 6 | **`0x03-20`** | `0x01` | 1892.0 ms | **+502.0 ms** | Screen Geometry (视口 8 区域 DPI 点阵) |
+| Pkt # 7 | **`0x0C-20`** | `0x01` | 2164.0 ms | **+272.0 ms** | Task Manager Setup (挂件管理) |
+| Pkt # 8 | **`0x30-20`** | `0x01` | 2432.0 ms | **+268.0 ms** | Event Trigger Setup (物理事件监听器) |
+| Pkt # 9 | **`0x0D-20`** | `0x01` | 2741.0 ms | **+309.0 ms** | Input Device Register (交互设备注册) |
+| Pkt #10 | **`0x09-20`** | `0x01` | 2972.0 ms | **+231.0 ms** | Device Settings Setup (全局设置) |
+| Pkt #11 | **`0x1F-20`** | `0x01` | 3333.0 ms | **+361.0 ms** | **Touchpad Interrupt (🚨 触控板滑动使能)** |
+| Pkt #12 | **`0x10-20`** | `0x01` | 3604.0 ms | **+271.0 ms** | Power & Sleep Control (功耗与亮度策略) |
+| Pkt #13 | **`0x09-20`** | `0x01` | 3875.0 ms | **+271.0 ms** | App Focus Lock #1 (焦点一次锁死) |
+| Pkt #14 | **`0x09-20`** | `0x01` | 4144.0 ms | **+269.0 ms** | App Focus Lock #2 (焦点二次锁死) |
+| Pkt #15 | **`0x01-20`** | `0x01` | 4415.0 ms | **+271.0 ms** | Pipeline Layout Ready (画布就绪帧) |
+| Pkt #16 | **`0x06-20`** | `0x01` | 4683.0 ms | **+268.0 ms** | TeleprompterInit (提词参数初始化) |
+| Pkt #17 | **`0x01-20`** | `0x01` | 5068.0 ms | **+385.0 ms** | System Layout Config (UI 结构确认) |
+| Pkt #18 | **`0x01-20`** | `0x01` | 5314.0 ms | **+246.0 ms** | System Layout Config (UI 结构确认) |
+| Pkt #19 | **`0x06-20`** | `0x01` | 5494.0 ms | **+180.0 ms** | Page 0 Slice 1 (首页文本分片 1) |
+| Pkt #20 | **`0x06-20`** | `0x02` | 5507.0 ms | ⚡ **+13.0 ms** | Page 0 Slice 2 (首页 Burst 连续发) |
+| Pkt #21 | **`0x06-20`** | `0x03` | 5519.0 ms | ⚡ **+12.0 ms** | Page 0 Slice 3 (首页 Burst 连续发) |
+| Pkt #22 | **`0x06-20`** | `0x04` | 5532.0 ms | ⚡ **+13.0 ms** | Page 0 Slice 4 (首页 Burst 连续发) |
+| Pkt #23 | **`0x06-20`** | `0x01` | 6306.0 ms | 🐢 **+774.0 ms** | Page 1 Slice 1 (暂停 774ms 后发 Page 1) |
+| Pkt #24 | **`0x06-20`** | `0x02` | 6319.0 ms | ⚡ **+13.0 ms** | Page 1 Slice 2 (次页 Burst 连续发) |
+| Pkt #25 | **`0x06-20`** | `0x03` | 6333.0 ms | ⚡ **+14.0 ms** | Page 1 Slice 3 (次页 Burst 连续发) |
 
 阶段 2：Display Config 与提词器初始化 (seq 23~36)
 ──────────────────────────────────────────────────
@@ -494,18 +634,33 @@ seq 68:    Teleprompter State (type=4, state=4) ← 🚨 物理退出/关闭提�
 
 ---
 
-## 16. 双向滚动与位置同步实测突破归档 (2026-07-30 实测记录) 🆕
+## 16. 双向滚动与位置同步实测突破归档 (2026-08-02 100% 完整实测版) 🆕
 
 ### 16.1 屏显上电与 14 页显存 Buffer 硬性约束
 - **黑屏根因**：G2 眼镜固件在收到 `Service 0x09-20` 路由切页前台前，**强制要求显存必须收到 14 个完整 Content 页（14 Pages）** 的 Buffer 空间分配。
 - **物理填补规则**：若实际讲稿仅切分出 2~3 页，必须在末尾通过 `\n` 换行符填充补齐至 14 个物理 Page。缺失补齐会导致固件 MicroLED 渲染引擎等待显存分配而拒绝上电保持黑屏。
 
-### 16.2 G2 $\rightarrow$ Phone 双向视口同步与 Handle 物理路径
-- **手势通知 Channel**：镜腿触控手势（Swipe Touch）与视口改变通知并不是在 `5402` 通道单向回发，而是通过 **Service `0x06-01`**（ATT Handle `0x0844`）回发。
-- **Protobuf 页码与行号换算**：固件在 `Type=165` (`0xA5`) 位置通知数据包中传输的是绝对/相对行号 `current_line`（0-indexed）。
-- **绝对行号转换公式**：
-  $$\text{App 显示绝对行号 (currentLine)} = \text{pageId} \times 10 + \text{rawLine}$$
-- **交互稳定性保护**：手势滑动期间**切勿反向向眼镜下发 `Type=3 Content` 页面覆盖包**，避免打乱固件显存流水线引发 MicroLED 关屏保护。
+### 16.2 触控板激活与 `Svc 0x01-20` 前台活跃心跳锁 (关键突破)
+- **底层阻断机制**：在 BLE 物理连接正常且能收到 `6402` (PCM 语音流) 的情况下，若滑动镜腿完全收不到 `5402` (`0x06-01`) 的 Notify，是因为眼镜处于系统主菜单/语音交互态，固件未将 Touchpad 事件分发给提词应用。
+- **前台焦点锁 (`Svc 0x01-20`)**：
+  在 `0x09-20` (Route Switch) 之后，必须跟随下发一包 **`Svc 0x01-20` 前台活跃心跳锁**：
+  `AA 21 [Seq] 12 01 01 01 20 08 02 10 [MsgId] 22 0A 1A 08 12 06 12 04 08 01 [CRC]`
+  下发后将强行锁定固件的 UI Focus Route，唤醒镜腿 Touchpad 中断并派发至 `0x06-01` 提词监听通道。
+
+### 16.3 Protobuf `Tag 0x52` 与 `Tag 0x5A` 物理双通道分工与 1:1 视口对齐
+- **`Tag 0x52` (消息 Type 164 `A4 01`) — 屏显静止/渲染 Telemetry 心跳**：
+  $$\text{Payload} = \text{52 02 08 [Line]}$$
+  在用户没有任何物理滑动操作时，眼镜固件仍会定期主动上发该数据包，向 APP 广播当前 MicroLED 屏幕物理对齐停留的行号 `Line`（作为 rendering 同步心跳）。
+- **`Tag 0x5A` (消息 Type 165 `A5 01`) — 镜腿 Touchpad 物理手势中断**：
+  $$\text{Payload} = \underbrace{\text{5A}}_{\text{Tag 11}} \ \underbrace{\text{04}}_{\text{Length 4}} \ \underbrace{\text{08 \ \text{[Code]}}}_{\text{Field 1: 手势 Raw Code (1,2,3,4)}} \ \underbrace{\text{10 \ \text{[Line]}}}_{\text{Field 2: 视口物理行号}}$$
+  仅在用户手指物理触摸、按压或滑动镜腿的瞬间爆发上报。
+- **1:1 绝对物理行号公式**：
+  抓包序列与真机测试证实：`52 02 08 [Line]` 与 `5A 04 08 [Code] 10 [Line]` 末尾字节代表物理递增的连续行号序列 `[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]`：
+  $$\text{App 视口对齐行号 (currentLine)} = \text{rawLine}$$
+  *(⚠️ 警告：切勿套用 `page * 10` 公式，否则滑动 1 行会导致界面产生 10 倍放大跳跃错位)*。
+
+### 16.4 交互稳定性保护
+- **下行覆盖保护**：手势滑动期间**切勿反向向眼镜下发 `Type=3 Content` 页面覆盖包**，避免打乱固件显存流水线引发 MicroLED 关屏保护。
 
 ---
 
@@ -527,6 +682,20 @@ seq 68:    Teleprompter State (type=4, state=4) ← 🚨 物理退出/关闭提�
 ### 17.2 位置通知报文物理帧结构与 Protobuf Schema
 
 眼镜在镜腿 Touchpad 滑动、匀速滚屏或 AI 跟随滚屏时，每次视口行号发生变动，均会向 APP 发送一帧 `Service 0x0601` 数据包：
+
+### 17.3 动画停止锁定与硬件待命 ACK 报文 (新增) 🆕
+
+在位置心跳（`52 02 08 [Line]`）广播完毕后，眼镜固件会依次吐出两包动作收尾确认包：
+
+1. **画面滚动停止锁定包 (`Type 161` / `0xA1 0x01`)**：
+   - **Service**: `0x06-01`
+   - **HEX 样本**: `AA 12 AE 0B 01 01 06 01 08 A1 01 10 1B 3A 02 08 04 F8 59`
+   - **Protobuf 含义**: `Tag 1 = 161 (0xA1 0x01)`, `Tag 7 = 3A 02 08 04` (`Status Code = 4`)。代表 MicroLED 画面滚动画面的位移计算完毕，视口像素物理锁死停留。
+   
+2. **显示芯片待命确认包 (`Service 0x0D-01`)**：
+   - **Service**: `0x0D-01` (**System Control & Power Management Service**)
+   - **HEX 样本**: `AA 12 B4 06 01 01 0D 01 08 01 1A 00 8B DA`
+   - **Protobuf 含义**: `Tag 1 = 1` (`08 01`), `Tag 3 = empty` (`1A 00`)。代表眼镜物理显示引擎在画面锁定后，芯片降低功耗切入 Hardware Idle 低功耗待命状态。
 
 ```
 8-Byte Header:
@@ -602,10 +771,58 @@ APP 接收到该 Notification 报文后的解调处理链如下：
 | Event Type | Hex Tag | 协议含义 | Protobuf 内部 payload 结构 |
 | :--- | :--- | :--- | :--- |
 | **`Type 164`** | `0xA4` | **页面加截确认 / 页码切换** | Tag 10 (`0x52`): `{ Tag 1 (0x08): page_number }` |
-| **`Type 165`** | `0xA5` | **Touchpad 实时滑动手势上报** | Tag 11 (`0x5A`): `{ Tag 1 (0x08): page_number, Tag 2 (0x10): line_number }` |
-| **`Type 167`** | `0xA7` | **滑至页末 / 请求下一页** | Tag 14 (`0x72`): `{ Tag 2 (0x10): page_number }` |
 
-#### 2. `tests/bt3.pklg` 核心滑动事件抓包片断物理明细
+
+### 6.2 激活眼镜回传文本位置信息的物理流水线与操作规范 🆕 (2026-08-02 专项归纳)
+
+眼镜向 `5402` 信道推送到手机 `Tag 0x5A`（实时滑动手势 `Type 165`）或 `Tag 0x52`（切页/换行位置变更）数据的前提，是手机端必须按顺序完成以下 **5 步物理激活流水线**：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Phone as 📱 iOS Gateway
+    participant BLE as 📡 BLE Channel 5401/5402
+    participant G2 as 👓 G2 Glass MCU
+
+    Phone->>BLE: 1. 写入 0x2902 CCCD 描述符 (setNotifyValue = true)
+    BLE-->>G2: 激活 5402 Notify 硬件物理通道
+    Phone->>BLE: 2. 下发 Auth 鉴权 1~7 帧 (0x80-00 / 0x80-20)
+    BLE-->>G2: 会话已鉴权 (Session Authenticated)
+    Phone->>BLE: 3. 下发 Setup 基础设施 (0x1F-20 中断使能 + 0x30-20 事件监听)
+    BLE-->>G2: 触控板 (Touchpad) 硬件中断路由器就绪
+    Phone->>BLE: 4. 下发 App 聚焦指令 (0x09-20 target=1)
+    BLE-->>G2: 窗口管理器绑定当前 Touchpad 焦点至 HUD 前台
+    Phone->>BLE: 5. 下发 TeleprompterInit (0x06-20 render_mode=9, scroll_mode=1)
+    BLE-->>G2: 初始化提词画卷视口
+### 6.2 Touchpad 触控板滑动通知回传物理规范 (Tag 0x5A / Tag 0x52)
+
+根据 `tests/bt3.pklg` 抓包解调，真正的 Touchpad 触控滑动与行号位置回传具有极其严格的物理格式：
+
+#### 物理上报特征：
+- **物理通道**：GATT Characteristic `00002760-08c2-11e1-9073-0e8ac72e6402` (`5402` 通道)
+- **帧头特征**：必须以 **`AA 12`** 协议头部开头
+- **服务编号**：必须为 **`Service 0x06-01`** (提词器位置/手势服务)
+- **数据帧长度**：**19 字节 ~ 21 字节**
+- **核心 Payload 字段**：
+  - `Tag 0x5A` (Type 165): Touchpad 实时滑动手势 (例如: `AA 12 ... 08 A5 01 10 32 5A 04 08 01 10 03`)
+  - `Tag 0x52` (Type 164): 页面加载/行位置变更 (例如: `AA 12 ... 08 A4 01 10 1C 52 00`)
+  - `Tag 0x72` (Type 167): 边界换页请求 (例如: `AA 12 ... 08 A7 01 10 31 72 02 10 06`)
+
+1. **GATT 层 CCCD 订阅**：在 CoreBluetooth 发现 `5402` 特征后，执行 `peripheral.setNotifyValue(true, for: char5402)`，打开硬件 Notify 通道。
+2. **会话鉴权 ACK**：下发 7 包 Auth 帧，确保 G2 Window Manager 的安全策略解除对后续控制指令的封锁。
+3. **触控中断路由使能**：下发 **`Service 0x1F-20`** (`AA 21 08 0A 01 01 1F 20 08 00 10 08 1A 02 08 01 A9 B3`) 与 **`Service 0x30-20`** (`AA 21 0B 0C 01 01 30 20...`)，激活底层触控板物理中断。
+4. **前台应用焦点绑定**：下发 **`Service 0x09-20`** (`AA 21 15 0A 01 01 09 20 08 02 10 17 22 02 08 01...`)，将触控中断事件路由至当前提词前台容器。
+```
+
+#### 🎯 激活位置回传的 5 大关键物理要素：
+
+1. **GATT 层 CCCD 订阅**：在 CoreBluetooth 发现 `5402` 特征后，执行 `peripheral.setNotifyValue(true, for: char5402)`，打开硬件 Notify 通道。
+2. **会话鉴权 ACK**：下发 7 包 Auth 帧，确保 G2 Window Manager 的安全策略解除对后续控制指令的封锁。
+3. **触控中断路由使能**：下发 **`Service 0x1F-20`** (`AA 21 08 0A 01 01 1F 20 08 00 10 08 1A 02 08 01 A9 B3`) 与 **`Service 0x30-20`** (`AA 21 0B 0C 01 01 30 20...`)，激活底层触控板物理中断。
+4. **前台应用焦点绑定**：下发 **`Service 0x09-20`** (`AA 21 15 0A 01 01 09 20 08 02 10 17 22 02 08 01...`)，将触控中断事件路由至当前提词前台容器。
+5. **视口模式参数**：在下发 `TeleprompterInit` (`0x06-20`) 时，指定 `render_mode = 9`（全屏模式）且 `scroll_mode = 1`（AI/交互滚动模式）。
+
+#### 6.3 `tests/bt3.pklg` 核心滑动事件抓包片断物理明细
 
 ```text
 📍 [包 #105] G2->Phone (Rx) | Svc: 0x06-01 | Frame: AA 12 6E 09 01 01 06 01 08 A4 01 10 1C 52 00 C3 6A
@@ -764,15 +981,17 @@ stateDiagram-v2
     }
 
     state "3. 硬件总线与应用路由切换阶段" as Stage3 {
-        Auth_Session_Ready --> System_Router_Registered : Tx 07-20 / 03-20 / 0C-20 (系统全局路由表注册)
-        System_Router_Registered --> App_Focus_Activated : Tx 09-20 / 1F-20 / 10-20 (切换前台 App & 激活触控中断)
+        Auth_Session_Ready --> System_Router_Registered : Tx 07-20 / 03-20 / 0C-20 (全局布局与视口 DPI 注册)
+        System_Router_Registered --> Event_Input_Registered : Tx 0D-20 / 30-20 (输入设备注册 & 物理事件监听器使能)
+        Event_Input_Registered --> App_Focus_Activated : Tx 09-20 / 1F-20 / 10-20 (切换前台 App, 激活 Touchpad 触控中断与功耗策略)
         App_Focus_Activated --> Hardware_Bus_Ready : 眼镜回吐 Rx 09-00 / 10-00 (硬件中断就绪)
     }
 
     state "4. 画面渲染与视口初始化阶段" as Stage4 {
         Hardware_Bus_Ready --> Display_Memory_Allocated : Tx 0E-20 (DisplayConfig 显存分配)
-        Display_Memory_Allocated --> Teleprompter_Engine_Init : Tx 06-20 (TeleprompterInit, 0x48 0x01)
-        Teleprompter_Engine_Init --> Touchpad_Router_Mounted : Tx 01-20 (SystemLayout & Touch Event Listener)
+        Display_Memory_Allocated --> MicroLED_Bus_Power_On : Tx 04-20 (Display Wake 唤醒 MicroLED 光学总线电源)
+        MicroLED_Bus_Power_On --> Teleprompter_Engine_Init : Tx 06-20 (TeleprompterInit, 0x48 0x01)
+        Teleprompter_Engine_Init --> Touchpad_Router_Mounted : Tx 81-20 / 20-20 (Display Trigger 物理显示触发 & 显存 Commit 提交)
     }
 
     state "5. 全屏提词与交互主循环" as Stage5 {
@@ -859,7 +1078,21 @@ stateDiagram-v2
 ```
 Pkt Hex: AA 12 [Seq] [Len] 01 01 06 01 08 A4 01 10 1C 52 02 08 [PageNum] [CRC16]
 ```
-### 20.4 官方 Native 二进制 `libapp.so` 原生符号验证 (2026-08-02)
+### 20.5 提词器前置 Setup 必备 7 包信令映射表 (对齐 bt3.pklg 权威抓包)
+
+在完成基础 4 包 Auth 鉴权后、正式下发 `0x06-20` 文本 Slice 之前，必须按顺序下发以下 7 包系统 Setup 信令，用于在眼镜固件中注册全局 Viewport 与 App 触控焦点中断：
+
+| 顺序 | Service ID | 物理 Payload 长度 | 完整物理数据 Hex | 物理作用与含义 |
+| :--- | :--- | :--- | :--- | :--- |
+| **Pkt 5** | `Service 07-20` | 14B | `AA 21 0A 0E 01 01 07 20 08 0A 10 0A 6A 06 08 00 10 50 [CRC16]` | 建立全局 Viewport 视口容器 |
+| **Pkt 6** | `Service 03-20` | 59B | `AA 21 07 3B 01 01 03 20 08 00 10 07 1A 33 08 08 12 04 08 00 18 00 20 00 1A 2B 08 04 10 00 18 00 20 FB 01 28 DF 04 30 B7 04 38 A9 18 40 00 48 01 50 09 58 00 [CRC16]` | 配置系统级 Layout 画布参数 |
+| **Pkt 7** | `Service 0C-20` | 12B | `AA 21 09 0C 01 01 0C 20 08 02 10 09 22 04 08 01 10 00 [CRC16]` | 激活 Display 显示通道配置 |
+| **Pkt 8** | `Service 30-20` | 12B | `AA 21 0B 0C 01 01 30 20 08 01 10 0B 1A 04 08 01 10 00 [CRC16]` | 系统模式切换与权限响应 |
+| **Pkt 9** | `Service 0D-20` | 6B | `AA 21 05 06 01 01 0D 20 08 00 [CRC16]` | 状态同步指示 |
+| **Pkt 10** | `Service 1F-20` | 10B | `AA 21 08 0A 01 01 1F 20 08 00 10 08 1A 02 08 00 [CRC16]` | 系统焦点状态绑定 |
+| **Pkt 11** | `Service 10-20` | 10B | `AA 21 0C 0A 01 01 10 20 08 01 10 0C 1A 02 08 01 [CRC16]` | App 界面挂载通知 |
+
+### 20.6 官方 Native 二进制 `libapp.so` 原生符号验证 (2026-08-02)
 
 通过提取官方应用 `libapp.so` 中的 Dart AOT 原生编译符号，验证了官方 App 处理提词器位置与手势的绝对底层依据：
 

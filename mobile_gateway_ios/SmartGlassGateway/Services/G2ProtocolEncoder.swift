@@ -488,6 +488,13 @@ class G2ProtocolEncoder {
             }
             pages.append(chunk.joined(separator: "\n"))
         }
+        
+        // 关键修补: G2 固件显存要求必须填充补齐至 14 页 Buffer 槽位，防止短文本丢页导致显存分配超时黑屏
+        let emptyPageText = Array(repeating: "", count: linesPerPage).joined(separator: "\n")
+        while pages.count < targetPageCount {
+            pages.append(emptyPageText)
+        }
+        
         return pages
     }
     

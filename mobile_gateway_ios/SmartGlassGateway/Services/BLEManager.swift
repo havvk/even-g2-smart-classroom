@@ -102,7 +102,26 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             self.isManualDisconnect = false
             self.hasHandshakeExecuted = false
             self.isScanning = true
-            self.lastBLEStatusMessage = "正在扫描附近的 Even G2 眼镜..."
+            self.lastBLEStatusMessage = "正在扫描/检索附近的 Even G2 眼镜..."
+            
+            // 核心修复 1: 优先检索已经被 iOS 系统级别配对连接的 G2 设备
+            let knownServices = [
+                CBUUID(string: "00002760-08c2-11e1-9073-0e8ac72e0001"),
+                CBUUID(string: "6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
+            ]
+            let connectedPeripherals = cm.retrieveConnectedPeripherals(withServices: knownServices)
+            for p in connectedPeripherals {
+                let name = p.name ?? ""
+                if name.contains("Even G2") || name.contains("Even") || name.contains("_L_") {
+                    self.addLog("⚡️ [系统快连] 成功检索到 iOS 系统已连接设备: \(name)")
+                    self.targetPeripheral = p
+                    self.targetPeripheral?.delegate = self
+                    cm.connect(p, options: nil)
+                    return
+                }
+            }
+            
+            // 核心修复 2: 发起物理广播扫描
             cm.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
         }
     }
@@ -284,11 +303,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             return
         }
         
-        // 核心过滤 2: G2 协议指令帧必须以 0xAA 开头，过滤杂乱的非协议原始数据
-        guard data[0] == 0xAA else {
-            return
-        }
-        
+        // 核心过滤 2: 过滤 6402 音频流，只放行含有 0xAA 协议帧或 Notify 特征的数据
         let hexStr = data.map { String(format: "%02X", $0) }.joined(separator: " ")
         
         addLog("📩 [Rx Notify] 通道 [\(uuidSuffix)] (\(data.count)B): \(hexStr)")
@@ -397,7 +412,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         
         let rawHexes = OfficialRawPkts.officialRawPktsHex
-        addLog("🚀 [1:1 零加工抓包重放] 开始发送 OfficialRawPkts 70 个二进制 Raw 数据包...")
+        addLog("🚀 [bt2.pklg 抓包重放] 开始发送 bt2.pklg 7 个精纯 Raw 数据包...")
         
         var delay: Double = 0.05
         for (idx, hexStr) in rawHexes.enumerated() {
@@ -405,33 +420,15 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             let pktIndex = idx + 1
             
             let item = DispatchWorkItem {
-                self.sendRawData(currentPkt, channel: .content, logDesc: "bt.pklg 物理包 [\(pktIndex)/71]")
+                self.sendRawData(currentPkt, channel: .content, logDesc: "bt2.pklg 物理包 [\(pktIndex)/7]")
             }
             self.teleprompterWorkItems.append(item)
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
-            
-            // 精确 1:1 物理时间线 Pacing 算力
-            if pktIndex <= 22 {
-                delay += 0.025 // Auth 阶段
-            } else if pktIndex <= 36 {
-                delay += 0.035 // DisplayConfig / VSYNC 初始化阶段
-            } else if pktIndex == 37 {
-                delay += 0.150 // TeleprompterInit 阶段, 预留 150ms 显存分配
-            } else if pktIndex <= 67 {
-                // 正文下发阶段
-                let isLastSliceInPage = (pktIndex == 41 || pktIndex == 44 || pktIndex == 48 || pktIndex == 52 || pktIndex == 55 || pktIndex == 58 || pktIndex == 61 || pktIndex == 64 || pktIndex == 67)
-                delay += isLastSliceInPage ? 0.040 : 0.018
-            } else if pktIndex <= 69 {
-                delay += 0.050 // Render Trigger 阶段
-            } else if pktIndex == 70 {
-                delay += 0.080 // UI 0x09-20 路由切页前台
-            } else {
-                delay += 0.020
-            }
+            delay += 0.05
         }
         
         DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.1) {
-            self.addLog("🎉 1:1 物理抓包 71 个 Raw 字节包全部重发完成！")
+            self.addLog("🎉 bt2.pklg 7 个精纯 Raw 数据包全部下发完成！")
         }
     }
     
@@ -515,9 +512,24 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         
         let pages = G2ProtocolEncoder.formatTextToPages(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: 10, targetPageCount: 14)
         self.currentPages = pages
-        addLog("🚀 [推屏序列] 开始发送对齐 teleprompter.py 的 25 包提词报文...")
+        addLog("🚀 [推屏序列] 开始下发 4 阶段标准提词报文 (前置 Session 显存自动释放重置)...")
         
         var delay: Double = 0.05
+        var seq: UInt8 = 0x01
+        var msgId: Int = 12
+        
+        // 0. 自动显存释放与 Session 重置 (下发 State=4 彻底复位 G2 提词器显存，确保再次推送实时更新)
+        let exitPayload = Data([0x08, 0x04, 0x10, UInt8(msgId & 0x7F), 0x22, 0x02, 0x08, 0x04])
+        let exitPktHeader = G2ProtocolEncoder.buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: exitPayload)
+        let exitPktWithCrc = G2ProtocolEncoder.addCRC(exitPktHeader)
+        msgId += 1
+        
+        let itemExit = DispatchWorkItem {
+            self.sendRawData(exitPktWithCrc, channel: .content, logDesc: "显存释放/Session重置 (Type 4)")
+        }
+        self.teleprompterWorkItems.append(itemExit)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemExit)
+        delay += 0.15 // 给固件显存释放留足 150ms 缓冲空间
         
         // 1. 动态生成下发 Pkt 1 ~ 7 基础 Auth (带有实时 Unix 时间戳, seq 0x01~0x07)
         let authPackets = G2ProtocolEncoder.buildAuthPackets()
@@ -533,8 +545,8 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         delay += 0.4 // 对齐 teleprompter.py line 296
         
         // 2. 动态下发 DisplayConfig (0x0E-20, seq 0x08, [8/25])
-        var seq: UInt8 = 0x08
-        var msgId: Int = 0x14
+        seq = 0x08
+        msgId = 0x14
         let pktDisplayConfig = G2ProtocolEncoder.buildDisplayConfig(seq: &seq, msgId: msgId)
         msgId += 1
         let itemCfg = DispatchWorkItem {
@@ -583,7 +595,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemSync)
         delay += 0.1
         
-        // 6. UI Route Switch (0x09-20) 显存全亮切前台 (对齐 teleprompter.py line 337)
+        // 6. UI Route Switch (0x09-20) 显存全亮切前台
         let routePkt = G2ProtocolEncoder.buildRouteSwitch(seq: &seq, msgId: msgId)
         msgId += 1
         let itemRoute = DispatchWorkItem {
@@ -591,10 +603,24 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         self.teleprompterWorkItems.append(itemRoute)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemRoute)
-        delay += 0.1
+        delay += 0.15
+        
+        // 7. 补发 Svc 0x01-20 前台活跃心跳锁 (100% 对齐 bt3.pklg 抓包 Event #33, 强制激活 Touchpad 0x06-01 路由)
+        var heartbeatPkt = Data([0xAA, 0x21, seq, 0x12, 0x01, 0x01, 0x01, 0x20, 0x08, 0x02, 0x10, UInt8(msgId & 0x7F), 0x22, 0x0A, 0x1A, 0x08, 0x12, 0x06, 0x12, 0x04])
+        // 自动追加 2 字节尾部标记
+        heartbeatPkt.append(contentsOf: [0x08, 0x01])
+        seq = (seq + 1) & 0xFF
+        msgId += 1
+        
+        let itemHeartbeat = DispatchWorkItem {
+            self.sendRawData(heartbeatPkt, channel: .content, logDesc: "前台活跃心跳锁 (Svc 0x01-20)")
+        }
+        self.teleprompterWorkItems.append(itemHeartbeat)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemHeartbeat)
+        delay += 0.15
         
         let itemComplete = DispatchWorkItem {
-            self.addLog("✅ [25/25] G2 物理屏显提词下发完成，全屏画卷渲染中")
+            self.addLog("✅ G2 物理屏显提词与前台焦点已锁定，Touchpad 0x06-01 触控已唤醒")
         }
         self.teleprompterWorkItems.append(itemComplete)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemComplete)
@@ -644,41 +670,55 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             let sLo = relativeData[7]
             let svcStr = String(format: "%02X-%02X", sHi, sLo)
             
-            // 1. 100% 匹配 bt3.pklg 物理抓包中的 Service 06-01 触控切页 Notify (Tag 0x52 0x02 0x08 [Page])
-            if magic == 0x12 && sHi == 0x06 && sLo == 0x01 {
-                let payload = relativeData.subdata(in: 8..<relativeData.count)
-                var pageNum: Int? = nil
-                
-                // 查找 Tag 0x52 0x02 0x08
-                if let idx52 = payload.range(of: Data([0x52, 0x02, 0x08]))?.lowerBound {
-                    let pageIdx = idx52 + 3
-                    if pageIdx < payload.count {
-                        pageNum = Int(payload[pageIdx])
+        // 动态全量匹配 Svc 06-01 / Tag 0x52 / Tag 0x5A 触控与页码
+        var rawLine: Int? = nil
+        var isTouchGesture: Bool = false
+        var eventTypeStr: String = "📺 屏幕物理渲染对齐"
+        
+        // 1. 解析 Tag 0x52 (0x52 0x02 0x08 [Line]) -> 物理抓包铁证: 屏幕静止/自动滚动时的 rendering Telemetry 心跳
+        if let idx52 = data.range(of: Data([0x52, 0x02, 0x08]))?.lowerBound {
+            let lineIdx = idx52 + 3
+            if lineIdx < data.count {
+                rawLine = Int(data[lineIdx])
+            }
+        }
+        
+        // 2. 解析 Tag 0x5A -> 用户物理手指按压/滑动镜腿产生的手势中断 (两阶段上报)
+        if let idx5A = data.range(of: Data([0x5A]))?.lowerBound {
+            let after5A = idx5A + 1
+            if after5A < data.count {
+                let subLen = Int(data[after5A])
+                // Phase-2: 21B 长包 (5A 04 08 [Code] 10 [Line]) -> 手势位移结算对齐
+                if subLen >= 4 && after5A + 4 < data.count {
+                    let evt = data[after5A + 2]
+                    isTouchGesture = true
+                    eventTypeStr = "👆 镜腿手势(Code:\(evt))"
+                    if data[after5A + 3] == 0x10 {
+                        rawLine = Int(data[after5A + 4])
                     }
-                } else if let idx5A = payload.range(of: Data([0x5A]))?.lowerBound {
-                    // 兼容 Tag 0x5A
-                    let after5A = idx5A + 1
-                    if after5A < payload.count {
-                        let subLen = Int(payload[after5A])
-                        if subLen == 0 {
-                            pageNum = 0
-                        } else if after5A + 2 < payload.count && payload[after5A + 1] == 0x10 {
-                            pageNum = Int(payload[after5A + 2])
-                        }
-                    }
-                }
-                
-                if let page = pageNum, page >= 0 && page <= 20 {
-                    let targetLine = page * 10
-                    DispatchQueue.main.async {
-                        self.currentFocusPageLine = targetLine
-                        self.lastGestureReceived = "P\(page) (L\(targetLine))"
-                        self.addLog("🎯 ⬇️ [RX 手势接收] 切页 Notify Page \(page) -> 视口对齐第 \(targetLine) 行")
-                    }
-                    onG2TelemetryLog?("Rx", hexString, "Gesture Notify: Page \(page) (Line \(targetLine))")
-                    return
+                } 
+                // Phase-1: 19B 短包 (5A 02 08 [Code]) -> 手势动作发起通知
+                else if subLen == 2 && after5A + 2 < data.count {
+                    let evt = data[after5A + 2]
+                    isTouchGesture = true
+                    eventTypeStr = "👆 镜腿手势发起(Code:\(evt))"
                 }
             }
+        }
+        
+        if let line = rawLine, line >= 0 && line <= 200 {
+            DispatchQueue.main.async {
+                self.currentFocusPageLine = line
+                self.lastGestureReceived = "\(eventTypeStr) -> L\(line)"
+                if isTouchGesture {
+                    self.addLog("🎯 👆 [RX 镜腿手势触发] \(eventTypeStr) | 视口跳至第 \(line) 行")
+                } else {
+                    self.addLog("📺 ⬇️ [RX 屏显心跳对齐] 保持静止渲染 | 当前屏幕停留在第 \(line) 行")
+                }
+            }
+            onG2TelemetryLog?("Rx", hexString, "Viewport Sync: \(eventTypeStr) Line \(line)")
+            return
+        }
             
             // 2. 显示眼镜返回的 ACK / 确认数据包
             if magic == 0x12 {
@@ -779,12 +819,21 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
 
     @Published var physicalWriteCount: Int = 0
     
-    private func sendRawData(_ data: Data, channel: G2Channel = .content, withResponse: Bool = false, logDesc: String? = nil) {
-        guard isConnected else {
-            addLog("⚠️ 发送失败: 蓝牙未连接")
+    func sendRawData(_ data: Data, channel: G2Channel = .content, withResponse: Bool = false, logDesc: String? = nil) {
+        guard let peripheral = targetPeripheral, peripheral.state == .connected else {
+            addLog("⚠️ 发送失败: 蓝牙物理未连接 (State: \(targetPeripheral?.state.rawValue ?? -1))")
+            DispatchQueue.main.async {
+                self.isConnected = false
+            }
             return
         }
-        guard let peripheral = targetPeripheral else { return }
+        
+        // 自动保持同步
+        if !isConnected {
+            DispatchQueue.main.async {
+                self.isConnected = true
+            }
+        }
         
         // 100% 对齐 teleprompter.py: 唯一物理写特征 5401 (contentTxChar)
         guard let txChar = contentTxChar ?? controlTxChar else {

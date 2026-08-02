@@ -174,17 +174,6 @@ struct ControlCenterSheetView: View {
                             .fontWeight(.bold)
                             .foregroundColor(bleManager.isConnected ? .red : .blue)
                         }
-                        
-                        if bleManager.isConnected {
-                            Spacer()
-                            Button(action: {
-                                bleManager.sendExitTeleprompterMode()
-                            }) {
-                                Text("重置屏显")
-                                    .font(.caption)
-                                    .foregroundColor(.orange)
-                            }
-                        }
                     }
                     
                 }
