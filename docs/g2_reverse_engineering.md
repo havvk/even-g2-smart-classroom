@@ -369,7 +369,7 @@ seq 38-67: Teleprompter CONTENT ×9 页      ← 正文多包分片 (pktTot=3~4)
 seq 68:    Teleprompter State (type=4, state=4) ← 🚨 物理退出/关闭提词器指令 (重放推屏时切勿下发!)
 ```
 
-### 10.3 Teleprompter Init 精确参数（官方 vs 第三方）
+### 10.3 Teleprompter Init 精确参数对比（官方抓包 vs 原始第三方 vs 当前重构版）
 
 官方 Init 原始 hex：
 ```
@@ -378,19 +378,19 @@ seq 68:    Teleprompter State (type=4, state=4) ← 🚨 物理退出/关闭提�
 
 解码对照表：
 
-| Protobuf Field | Tag | 官方值 | 第三方 teleprompter.py | iOS APP | 语义推断 |
+| Protobuf Field | Tag | 官方 APP 抓包原生值 | 原始第三方开源版<br>(even-g2 早期社区版) | 当前项目 teleprompter.py<br>(实测重构版) | 语义推断与排版效果 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| field 1 | `08` | **0** | 1 | — | 渲染引擎模式选择器 |
-| field 2 | `10` | 0 | 0 | 0 | 保留 |
-| field 3 | `18` | 0 | 0 | 0 | 保留 |
-| **field 4 (display_width)** | `20` | **59** | 644 | 267 | **全屏模式标志**（非像素宽度） |
-| field 5 (content_height) | `28` | **585** | 动态 | — | 画卷总高度 |
-| **field 6 (line_height)** | `30` | **567** | 230 | — | 行高 |
-| **field 7 (viewport)** | `38` | **3113** | 1294 | — | 视口高度 |
-| **field 8 (font_size)** | `40` | **0** | 5 | — | 字号/渲染参数（0=默认） |
-| field 9 (mode) | `48` | 1 | 0 | — | 0=手动, 1=AI |
-| **field 10** 🆕 | `50` | **9** | ❌ | ❌ | 未知（可能控制全屏行数） |
-| **field 11** 🆕 | `58` | **0** | ❌ | ❌ | 未知 |
+| **field 1** | `08` | **0** | 1 | **0** | 渲染引擎模式选择器 (0=默认全屏) |
+| **field 2** | `10` | 0 | 0 | 0 | 保留字段 |
+| **field 3** | `18` | 0 | 0 | 0 | 保留字段 |
+| **field 4 (display_width)** | `20` | **59** | 644 | **59** | **全屏模式标志** (59=开启全屏 28 汉字排版，非 644 居中框) |
+| **field 5 (content_height)** | `28` | **585** (`0xC9 0x04`) | 动态 | **585** (`0xC9 0x04`) | 画卷总高度 |
+| **field 6 (line_height)** | `30` | **567** (`0xB7 0x04`) | 230 | **567** (`0xB7 0x04`) | 视口行高 |
+| **field 7 (viewport)** | `38` | **3113** (`0xA9 0x18`) | 1294 | **3113** (`0xA9 0x18`) | 视口总高度 |
+| **field 8 (font_size)** | `40` | **0** | 5 | **0** | 字号与渲染缩放 (0=标准系统字号) |
+| **field 9 (scroll_mode)** | `48` | **1** | 0 | **1** | 滚动模式 (0=手动, 1=AI 模式) |
+| **field 10 (render_mode)** | `50` | **9** | ❌ (缺失) | **9** | 全屏视口渲染模式标志 |
+| **field 11** | `58` | **0** | ❌ (缺失) | **0** | 扩展标志 |
 
 ### 10.4 Display Config 精确参数
 
@@ -500,9 +500,212 @@ seq 68:    Teleprompter State (type=4, state=4) ← 🚨 物理退出/关闭提�
 - **物理填补规则**：若实际讲稿仅切分出 2~3 页，必须在末尾通过 `\n` 换行符填充补齐至 14 个物理 Page。缺失补齐会导致固件 MicroLED 渲染引擎等待显存分配而拒绝上电保持黑屏。
 
 ### 16.2 G2 $\rightarrow$ Phone 双向视口同步与 Handle 物理路径
-- **手势通知 Channel**：镜腿触控手势（Swipe Touch）与视口改变通知并不是在 `5402` 通道单向回发，而是通过 **Service `0x0D-01` 与 Service `0x09-01`**（ATT Handle `0x0044`）回发。
-- **Protobuf 页码换算**：固件在 `Type=5` (Scroll Event) 数据包中传输的是 `page_number`（0-indexed 物理页码）。
+- **手势通知 Channel**：镜腿触控手势（Swipe Touch）与视口改变通知并不是在 `5402` 通道单向回发，而是通过 **Service `0x06-01`**（ATT Handle `0x0844`）回发。
+- **Protobuf 页码与行号换算**：固件在 `Type=165` (`0xA5`) 位置通知数据包中传输的是绝对/相对行号 `current_line`（0-indexed）。
 - **绝对行号转换公式**：
-  $$\text{App 显示绝对行号} = \text{page\_number} \times 10$$
+  $$\text{App 显示绝对行号 (currentLine)} = \text{pageId} \times 10 + \text{rawLine}$$
 - **交互稳定性保护**：手势滑动期间**切勿反向向眼镜下发 `Type=3 Content` 页面覆盖包**，避免打乱固件显存流水线引发 MicroLED 关屏保护。
+
+---
+
+## 17. 突破性发现：眼镜向 APP 实时回传文本位置信息协议全解密 (2026-08-02 最新成果) 🆕
+
+经过对官方抓包 `tests/bt2.pklg` 的逐帧透视解密以及反编译 Core 逻辑 (`_handlePageAndLineInfoFromOS`) 的深入追踪，我们彻底破译了眼镜主动向手机 APP 回传当前滚动/滑动文本位置信息的全套通信协议。
+
+### 17.1 物理 GATT 通道与 Notify 使能规范
+
+| 属性 | 物理参数与格式 |
+| :--- | :--- |
+| **监听 Service ID** | `0x06-01` (`svchi = 0x06`, `svclo = 0x01`) |
+| **物理 ATT Handle** | `0x0844`（Notify 接收通道） |
+| **物理 Characteristic UUID** | `00002760-08c2-11e1-9073-0e8ac72e5402` |
+| **必须的前置操作** | 向 `0x2902` Descriptor 写入 `0x0100` 开启 Notify 订阅使能 |
+
+> ⚠️ **关键根因 1**：若客户端仅开启了 `0x5402` 的 Notify 订阅，或未为 `0x0844` 开启 CCCD 使能，操作系统蓝牙栈将直接丢弃眼镜回发的行位置 Notification 帧！
+
+### 17.2 位置通知报文物理帧结构与 Protobuf Schema
+
+眼镜在镜腿 Touchpad 滑动、匀速滚屏或 AI 跟随滚屏时，每次视口行号发生变动，均会向 APP 发送一帧 `Service 0x0601` 数据包：
+
+```
+8-Byte Header:
+┌────────┬────────┬────────┬────────┬────────┬────────┬────────┬────────┐
+│ Magic  │  Type  │  Seq   │  Len   │  Pkt   │  Pkt   │  Svc   │  Svc   │
+│  0xAA  │  0x12  │   ID   │  0x0B  │  0x01  │  0x01  │  0x06  │  0x01  │
+└────────┴────────┴────────┴────────┴────────┴────────┴────────┴────────┘
+```
+
+**Protobuf Schema 结构：**
+
+```protobuf
+syntax = "proto3";
+package even.g2;
+
+// Service 0x06-01: G2 -> Phone 实时位置与滚动状态通知
+message TeleprompterPositionNotification {
+  uint32 event_type = 1;      // 恒为 165 (0xA5)，代表位置/行号变更事件
+  uint32 msg_id = 2;          // 消息序列号 (如 94 / 0x5E)
+  TeleprompterEventData event_data = 11; // Field 11 (Tag 0x5A)
+}
+
+message TeleprompterEventData {
+  uint32 current_line = 2;    // Tag 2 (0x10): 当前眼镜屏幕聚焦的实际行号 (0-indexed 整数: 0, 1, 2, 3, 4...)
+}
+```
+
+### 17.3 抓包数据实测对齐与解密对照表
+
+下表为从官方 APP BLE 抓包 `tests/bt2.pklg` 中提取的眼镜实时滑动上报真实数据帧：
+
+| 时间戳 (s) | 抓包 Payload (Hex) | Protobuf 解码结构 | 上报滚动行位置 |
+| :--- | :--- | :--- | :--- |
+| `1785413632.187` | `08a501105e5a00` | `{1: 165, 2: 94, 11: {}}` | `Line 0` (初始重置) |
+| `1785413632.277` | `08a501105e5a021001` | `{1: 165, 2: 94, 11: {2: 1}}` | **`Line 1`** |
+| `1785413632.337` | `08a501105e5a021002` | `{1: 165, 2: 94, 11: {2: 2}}` | **`Line 2`** |
+| `1785413632.519` | `08a501105e5a021003` | `{1: 165, 2: 94, 11: {2: 3}}` | **`Line 3`** |
+| `1785413632.909` | `08a501105e5a021004` | `{1: 165, 2: 94, 11: {2: 4}}` | **`Line 4`** |
+
+### 17.4 APP 端数据处理逻辑与换算算子
+
+APP 接收到该 Notification 报文后的解调处理链如下：
+
+1. **数据包识别**：校验 Header `magic == 0xAA`，`type == 0x12`，`svc == 0x0601`。
+2. **提取 Protobuf 字段**：读取 Field 1 为 `165`，接着解包 Field 11 得到 `event_data.current_line`。
+3. **计算绝对行号与页码**：
+   - 绝对行号：$\text{currentLine} = \text{event\_data.current\_line}$
+   - 所在页码：$\text{pageId} = \lfloor \text{currentLine} / 10 \rfloor$
+   - 页内相对行号：$\text{rawLine} = \text{currentLine} \pmod{10}$
+4. **状态同步**：调起 `_handlePageAndLineInfoFromOS` 更新 UI 视口高亮行与定位进度条，保持 APP 界面与眼镜 HUD 屏幕的 100% 实时同步。
+
+---
+
+### 17.5 无法获取文本位置信息的 3 大排查方案 checklist
+
+若第三方 App 始终无法获取眼镜发出的位置信息，请按以下顺序排查：
+
+- [ ] **Check 1: CCCD Notify 描述符使能**  
+  确保 iOS `setNotifyValue(true, for: characteristic)` 或 Android `setCharacteristicNotification` 已为 UUID `00002760-08c2-11e1-9073-0e8ac72e5402` 正确执行。
+- [ ] **Check 2: Service ID 匹配规则**  
+  确认接收端未过滤 `Service 0x06-01` 数据包（注意：位置通知数据包的 Service ID 是 `0x0601`，而非发文本时的 `0x0620`）。
+- [ ] **Check 3: Protobuf Field 11 嵌套解析**  
+  确认数据解析器能正确拆解 Tag 11 嵌套消息（`0x5A`），取其中的 Tag 2 (`0x10`) 作为 `current_line`，而非在顶层查找。
+
+---
+
+## 18. 基于逆向工程规范的 iOS App 物理协议与业务单元测试用例全集 (XCTest & Mock Specs) 🆕
+
+为确保开发中的 iOS Gateway App 与 Even G2 物理硬件及官方协议 100% 兼容，基于前述逆向拆解与协议解密结论，制定以下 5 大核心模块的单元与集成测试用例：
+
+### 18.1 模块 1：CRC16 校验与 8-Byte Header 帧编码测试 (`G2ProtocolEncoderTests`)
+
+#### 用例 TC-BLE-001：单包 8-Byte Header 结构断言
+- **测试目的**：验证单包数据下发时的 Header 格式、Sequence 自增及 Len 计算正确性。
+- **输入数据**：`seq = 0x08`, `service_hi = 0x06`, `service_lo = 0x20`, `payload = [0x08, 0x01]` (2 字节)
+- **断言条件**：
+  1. `header[0] == 0xAA` (Magic)
+  2. `header[1] == 0x21` (Command Type)
+  3. `header[2] == 0x08` (Sequence ID)
+  4. `header[3] == 0x04` (`payload.count + 2` 字节)
+  5. `header[4] == 0x01` (`pktTot == 1`)
+  6. `header[5] == 0x01` (`pktSer == 1`)
+  7. `header[6..7] == [0x06, 0x20]` (Service ID)
+
+#### 用例 TC-BLE-002：单包 CRC16-CCITT 校验码追加断言
+- **测试目的**：验证单包模式下只对 Payload 计算 CRC16，并以 Little-Endian 追加于帧末尾。
+- **输入 Payload**：`[0x08, 0x01, 0x10, 0x14]`
+- **预期输出末尾 2 字节**：匹配 `crc16_ccitt([0x08, 0x01, 0x10, 0x14], init: 0xFFFF)` 的 Little-Endian 字节序。
+
+#### 用例 TC-BLE-003：多包切片 Payload-level CRC16 断言
+- **测试目的**：验证当 Payload 超过 232 字节时，启用多包切片规则：子包单包不含帧级 CRC，且全量 Protobuf CRC16 追加在消息末尾。
+- **输入 Payload**：500 字节的 Protobuf 文本数据。
+- **断言条件**：
+  1. 生成 3 个子包（`pktTot == 3`），各子包 `pktSer` 分别为 1, 2, 3。
+  2. 子包 1 与子包 2 的 `Len` 字段恰好为 `232` (`0xE8`)。
+  3. 最后一个子包末尾包含原始 Payload 计算所得的 2 字节 CRC-16/CCITT。
+
+---
+
+### 18.2 模块 2：TeleprompterInit 与 DisplayConfig 精确参数校验测试
+
+#### 用例 TC-CFG-001：TeleprompterInit 官方全屏排版参数校验
+- **测试目的**：防止代码错误回退到社区早期 644/230 视口模式，确保使用官方实测解封参数。
+- **输入构建**：调用 `G2ProtocolEncoder.buildTeleprompterInit()`
+- **断言条件**：
+  1. Field 4 (`display_width`) 必须为 **`59`**（非 644/267）。
+  2. Field 6 (`line_height`) 必须为 **`567`** (`0xB7 0x04`)。
+  3. Field 7 (`viewport_height`) 必须为 **`3113`** (`0xA9 0x18`)。
+  4. Field 8 (`font_size`) 必须为 **`0`**。
+  5. Field 10 (`render_mode`) 必须为 **`9`**。
+
+#### 用例 TC-CFG-002：DisplayConfig 物理 Region 0-9 边界校验
+- **测试目的**：验证屏幕布局配置包含 Region 9 且 Region 参数均被置零。
+- **断言条件**：
+  1. 编码输出必须包含 Region 2, 3, 4, 5, 6, 9 的定义。
+  2. 所有 Region 的 `width` 与 `height` float 值均等于 `0.0f`。
+
+---
+
+### 18.3 模块 3：14 页 140 行画卷缓冲补满与 28 汉字自动换行测试 (`HUDLayoutAdapterTests`)
+
+#### 用例 TC-TXT-001：28 中文字符（56 CJK 宽度）单行截断测试
+- **测试目的**：验证单行文本在超过 28 个中文字符时自动执行无破坏换行。
+- **输入文本**：`"今天我们召开《人机协同程序设计》课程全校统一数智化教学集体备课研讨会"` (35 字)
+- **断言条件**：
+  1. 拆分出的第一行恰好包含 28 个中文字符。
+  2. 剩余 7 个字符自动移至第二行。
+
+#### 用例 TC-TXT-002：文本前置 `\n` 空行剥离断言
+- **测试目的**：防止首行附带 `\n` 浪费视口 10 行之一的位置。
+- **输入文本**：`"\nhello world"`
+- **断言条件**：格式化后的首页内容不得包含前置 `\n`，`line_count` 恰好等于 `text.components(separatedBy: "\n").count`。
+
+#### 用例 TC-TXT-003：14 页 140 行画卷缓冲补满测试
+- **测试目的**：验证短文本（如仅 2 页）下发时自动填充空白行补满 14 页，防止眼镜显存未分配硬性黑屏。
+- **输入文本**：仅包含 5 行内容的短正文（1 页）。
+- **断言条件**：`formatTextToPages()` 输出的数组长度 `pages.count >= 14`，且所有补全页均包含 10 个换行符。
+
+---
+
+### 18.4 模块 4：眼镜位置通知解调与页码/行号换算测试 (`BLEPositionNotificationTests`)
+
+#### 用例 TC-NOTIFY-001：0x2902 CCCD Notify 订阅使能验证
+- **测试目的**：验证蓝牙连接成功后对 Notify 特征值 `00002760-08c2-11e1-9073-0e8ac72e5402` 执行订阅。
+- **Mock 环境**：传入 Mock `CBPeripheral`
+- **断言条件**：
+  1. 必须调用 `setNotifyValue(true, for: characteristic)`。
+  2. 特征值 UUID 必须等于 `0x5402` (监听通道)。
+
+#### 用例 TC-NOTIFY-002：Type 165 (0xA5) 位置 Notification 解析测试
+- **测试目的**：验证收到眼镜发出的 `0x0601` Notify 帧时，能提取 Tag 11 里的 `current_line`。
+- **模拟接收 Raw Hex**：`AA 12 47 0B 01 01 06 01 08 A5 01 10 5E 5A 02 10 03 64 D7`
+- **断言条件**：
+  1. 解密解析出 `event_type == 165`。
+  2. 解析出 `current_line == 3`。
+
+#### 用例 TC-NOTIFY-003：_handlePageAndLineInfoFromOS 行号与页码计算断言
+- **测试目的**：验证绝对行号到 App UI 页码与行高亮卡片定位的计算逻辑。
+- **输入行号**：`current_line = 23`
+- **断言条件**：
+  1. 计算出的页码 `pageId == 2` ($\lfloor 23 / 10 \rfloor$)。
+  2. 页内相对行号 `rawLine == 3` ($23 \pmod{10}$)。
+  3. UI 控制器激活的滑动卡片索引为 23。
+
+---
+
+### 18.5 模块 5：Apple Watch 手势防抖与设备控制测试 (`WatchGestureTests`)
+
+#### 用例 TC-WATCH-001：CoreMotion 手腕甩动与 Double Tap 1.5s 防抖窗口测试
+- **测试目的**：防止手腕快速晃动导致连发多次切页。
+- **输入序列**：在 0.2s 内连续触发 3 次手腕甩动手势事件。
+- **断言条件**：
+  1. 仅第 1 次手势成功向 BLE 队列发出 `PAGE_CONTROL(action: NEXT)` 指令。
+  2. 后续 2 次手势被防抖定时器拦截丢弃。
+  3. 手表端仅在第 1 次产生 `.click` 触觉震动反馈。
+
+#### 用例 TC-WATCH-002：HUD 显存休眠/唤醒指令响应测试
+- **测试目的**：验证在 Watch 点击 `👁️` 控件发送 `SLEEP_HUD` 指令时，BLE 侧及时下发屏显休眠帧。
+- **输入 Action**：`SLEEP_HUD`
+- **断言条件**：下发 `TeleprompterState(state: 4)` 停能屏显或下发 Display Sleep 特征帧，更新本地 HUD 激活状态标记 `isHUDActive == false`。
+
+
 

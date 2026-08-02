@@ -269,7 +269,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     @Published var rxPacketCount: Int = 0
     @Published var lastRawHex: String = "无"
     
-    /// 接收 G2 固件在 5402 Notify 通道上回发的 ACK 确认帧 (100% 对齐 teleprompter.py notify handler)
+    /// 接收 G2 固件在 Notify 通道上回发的 ACK 确认帧与位置 Notification (100% 对齐 teleprompter.py notify handler)
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
             addLog("❌ Rx 接收返回错误: \(error.localizedDescription)")
@@ -277,10 +277,14 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         guard let data = characteristic.value, !data.isEmpty else { return }
         
-        let rawHex = data.prefix(10).map { String(format: "%02X", $0) }.joined(separator: " ")
+        let uuidSuffix = String(characteristic.uuid.uuidString.suffix(4))
+        let hexStr = data.map { String(format: "%02X", $0) }.joined(separator: " ")
+        
+        addLog("📩 [Rx Notify] 通道 [\(uuidSuffix)] (\(data.count)B): \(hexStr)")
+        
         DispatchQueue.main.async {
             self.rxPacketCount += 1
-            self.lastRawHex = rawHex
+            self.lastRawHex = hexStr
         }
         
         processReceivedG2Data(data)
@@ -508,6 +512,13 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         self.teleprompterWorkItems.append(itemRoute)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemRoute)
+        delay += 0.1
+        
+        let itemComplete = DispatchWorkItem {
+            self.addLog("✅ [25/25] G2 物理屏显提词下发完成，全屏画卷渲染中")
+        }
+        self.teleprompterWorkItems.append(itemComplete)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemComplete)
         
         DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.1) {
             self.isTeleprompterSessionActive = true

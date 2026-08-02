@@ -410,4 +410,44 @@ class G2ProtocolEncoder {
         
         return pages
     }
+    
+    // MARK: - Position Notification Parser (Service 0x06-01 Type 165)
+    
+    struct PositionNotification {
+        let eventType: UInt32
+        let currentLine: Int
+        let pageId: Int
+        let rawLine: Int
+    }
+    
+    /// 从眼镜 Notify 数据帧中解调 0x0601 位置变更通知 (Type 165 / 0xA5)
+    static func parsePositionNotification(from rawFrame: Data) -> PositionNotification? {
+        guard rawFrame.count >= 10,
+              rawFrame[0] == 0xAA,
+              rawFrame[1] == 0x12,
+              rawFrame[6] == 0x06,
+              rawFrame[7] == 0x01 else {
+            return nil
+        }
+        
+        // Payload (去掉 8 字节 Header 与 2 字节 CRC)
+        let payload = rawFrame.subdata(in: 8..<(rawFrame.count - 2))
+        
+        // 校验 Tag 1 == 165 (0x08 0xA5 0x01)
+        guard payload.count >= 9,
+              payload[0] == 0x08,
+              payload[1] == 0xA5,
+              payload[2] == 0x01 else {
+            return nil
+        }
+        
+        // 提取 Tag 11 -> Tag 2 中的 current_line
+        let line = Int(payload[8])
+        return PositionNotification(
+            eventType: 165,
+            currentLine: line,
+            pageId: line / 10,
+            rawLine: line % 10
+        )
+    }
 }
