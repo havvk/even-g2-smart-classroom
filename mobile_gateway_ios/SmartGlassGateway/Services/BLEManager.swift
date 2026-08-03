@@ -379,19 +379,33 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     
     private var currentPages: [String] = []
     private var lastPhoneScrollTime: Date = Date.distantPast
+    private var lastGlassesRxScrollTime: Date = Date.distantPast
     private var lastScrollSyncSentTime: Date = Date.distantPast
     private var pendingSyncLineIndex: Int?
     private var scrollSyncThrottleWorkItem: DispatchWorkItem?
     
-    /// 发送双向滚动位置同步 (100ms 物理节流保护，下发 0x06-20 Type 165 报文至眼镜固件)
-    func sendScrollSync(lineIndex: Int) {
+    /// 当用户在手机端物理触摸屏幕滑动时，立即复位眼镜 Rx 屏障，确保手机端手势 100% 优先发包
+    func resetGlassesRxShield() {
+        self.lastGlassesRxScrollTime = Date.distantPast
+    }
+    
+    /// 发送双向滚动位置同步 (150ms 物理节流保护，下发 0x06-20 Type 165 报文至眼镜固件)
+    func sendScrollSync(lineIndex: Int, force: Bool = false) {
         guard isConnected else { return }
-        self.lastPhoneScrollTime = Date()
-        self.currentFocusPageLine = lineIndex
+        
+        // 🛡️ 双向防乒乓屏障：若当前滑动是由眼镜镜腿 Touchpad 触发的(1.0s内)，手机绝对禁止反向发包给眼镜，彻底打断乒乓死循环！
+        let timeSinceGlassesRx = Date().timeIntervalSince(lastGlassesRxScrollTime)
+        if !force && timeSinceGlassesRx < 1.0 {
+            return
+        }
+        
+        if !force {
+            self.lastPhoneScrollTime = Date()
+        }
         
         let elapsed = Date().timeIntervalSince(lastScrollSyncSentTime)
-        if elapsed < 0.100 {
-            // 🛡️ 100ms 物理节流防爆破: 记录最新目标行号，延迟补发最新帧
+        if !force && elapsed < 0.150 {
+            // 🛡️ 150ms 物理节流 (匹配眼镜 MCU 单行滚动动画周期，彻底消除屏显顿挫)
             self.pendingSyncLineIndex = lineIndex
             if scrollSyncThrottleWorkItem == nil {
                 let item = DispatchWorkItem { [weak self] in
@@ -400,7 +414,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                     self.sendScrollSync(lineIndex: targetLine)
                 }
                 self.scrollSyncThrottleWorkItem = item
-                DispatchQueue.main.asyncAfter(deadline: .now() + (0.100 - elapsed), execute: item)
+                DispatchQueue.main.asyncAfter(deadline: .now() + (0.150 - elapsed), execute: item)
             }
             return
         }
@@ -411,7 +425,17 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         let syncPkt = G2ProtocolEncoder.buildScrollSync(seq: &teleprompterSeq, msgId: teleprompterMsgId, lineIndex: lineIndex)
         teleprompterMsgId += 1
         sendRawData(syncPkt, channel: .content, logDesc: "双向位置同步 (Line \(lineIndex))")
-        addLog("📍 [双向同步] 已发送 0x06-20 Type 165 报文 (Line \(lineIndex))")
+        addLog("📍 [双向同步] 已发送 0x06-20 Type 165 报文 (Line \(lineIndex))\(force ? " [终点强制对齐]" : "")")
+    }
+    
+    /// 手势停顿/滑动结束时调用的终点同步闭环：强行刷新最新终点帧，并开放 Rx 校准通道
+    func flushFinalScrollSync(lineIndex: Int) {
+        guard isConnected else { return }
+        sendScrollSync(lineIndex: lineIndex, force: true)
+        // 延时 150ms 之后，解封主控屏障窗口，允许接收眼镜 Rx 确认包进行位置校验
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.150) {
+            self.lastPhoneScrollTime = Date.distantPast
+        }
     }
     
     // 自动补发队列
@@ -756,6 +780,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                             self.addLog("🛡️ [主控屏障] 手机滑动窗口期内(800ms)，屏蔽眼镜 Rx 回波 (Line \(line))，防止 UI 回弹")
                         }
                     } else {
+                        self.lastGlassesRxScrollTime = Date()
                         DispatchQueue.main.async {
                             self.currentFocusPageLine = line
                             self.lastGestureReceived = "\(eventTypeStr) -> L\(line)"

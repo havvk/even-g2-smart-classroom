@@ -22,6 +22,7 @@ struct TeleprompterPreviewView: View {
     @State private var timer = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
     
     @State private var widthChars: Double = 28.0
+    @State private var dragSettleWorkItem: DispatchWorkItem?
     let viewportLineCount = 10
     
     var wrappedLines: [String] {
@@ -218,6 +219,13 @@ struct TeleprompterPreviewView: View {
                     .padding(.vertical, 8)
                 }
                 .coordinateSpace(name: "teleprompter_scroll")
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 1)
+                        .onChanged { _ in
+                            self.isProgrammaticScrolling = false
+                            self.bleManager.resetGlassesRxShield()
+                        }
+                )
                 .onPreferenceChange(TeleprompterLineOffsetKey.self) { offsets in
                     guard !isProgrammaticScrolling else { return }
                     if let topCandidate = offsets.filter({ $0.value >= -35 && $0.value <= 100 }).min(by: { abs($0.value) < abs($1.value) }) {
@@ -228,6 +236,14 @@ struct TeleprompterPreviewView: View {
                                 self.syncLineToGlasses(lineIndex: newIndex)
                             }
                         }
+                        
+                        // 🎯 手势停顿/滑动结束闭环：取消之前倒计时，设置 200ms 终点强制刷帧与解封校验
+                        dragSettleWorkItem?.cancel()
+                        let item = DispatchWorkItem {
+                            self.bleManager.flushFinalScrollSync(lineIndex: newIndex)
+                        }
+                        self.dragSettleWorkItem = item
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20, execute: item)
                     }
                 }
                 .onReceive(bleManager.$currentFocusPageLine) { newGlassesLine in
@@ -235,11 +251,12 @@ struct TeleprompterPreviewView: View {
                     let clampedLine = max(0, min(wrappedLines.count - 1, newGlassesLine))
                     if clampedLine != activeLineIndex {
                         self.isProgrammaticScrolling = true
+                        self.dragSettleWorkItem?.cancel()
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
                             self.activeLineIndex = clampedLine
                             proxy.scrollTo(clampedLine, anchor: .top)
                         }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.80) {
                             self.isProgrammaticScrolling = false
                         }
                     }
