@@ -126,3 +126,84 @@ graph TD
 2. **`server_plugin` (智慧课堂服务端插件)**
    - 维护 Session 页码、幻灯片逐字稿与尾部关键词数据映射。
    - 提供 WebSocket 翻页广播与状态分发机制。
+
+---
+
+## 5. Even G2 物理通信层协议与发包控制规范 (v2.0.0 规范)
+
+### 5.1 1:1 物理点灯与初始化序列 (Setup Sequence)
+推送提词界面时，必须严格按顺序下发以下 Setup 指令帧，完成显存布局与光机供电：
+1. **Auth 绑定 (0x80-00 / 0x80-20)**：下发 7 包验证安全会话；
+2. **视口参数 (0x07-20)**：`08 0A 10 08 6A 06 08 00 10 50 20 00`；
+3. **画布布局 (0x03-20)**：定义 10 行文本阵列网格结构；
+4. **显存通道与光机供电 (0x0C-20)**：`08 02 10 msgId 22 04 08 01 10 00`；
+5. **系统模式与 MicroLED 点灯 (0x30-20)**：`08 01 10 msgId 1A 04 08 01 10 00`；
+6. **触控中断解绑定 (0x01-20)**：`22 0C 1A 0A 12 08 1A 06 08 00 10 00 20 01` (`20 01` 使能镜腿滑动中断)；
+7. **【关键禁令】绝不发送 22 02 08 01**：Setup 中严禁包含切回 Dashboard (`0x01`) 的指令，保证路由直通 `0x52 Teleprompter` 显存。
+
+### 5.2 发包序号单调递增 (Strict Monotonic Sequence)
+- **`seq` 字节与 `msgId` 约束**：从 `0x00` 起始，全量 Protobuf 帧的 `seq` 必须严格单调自增（`0, 1, 2, 3...`），严禁出现静态硬编码序号倒跳；
+- **回环保护**：`seq` 达到 255 后，使用 `seq = (seq + 1) & 0xFF` 进行显式溢出回环保护。
+
+### 5.3 120ms 物理发包间隔平滑保护 (Inter-packet Pacing)
+- **物理平滑节奏**：两包 `Tx` 发送物理间隔**不得少于 120ms**（收到 ACK 后延时 80ms~120ms 步进）；
+- **死锁防护**：严禁在 20ms~30ms 内高频连发爆破，防止撑爆 G2 蓝牙 RX Buffer 引发 MicroLED 显像芯片保护性死锁熄灭（黑屏）。
+
+---
+
+## 6. 系统健壮性与“推送新文本”架构规范
+
+```mermaid
+flowchart TD
+    A["推送新文本请求 (Push New Text)"] --> B{"眼镜当前状态判断"}
+    
+    B -- "状态 A: 全新讲稿 / 未在提词模式" --> C["全量覆盖流程 (Full Refresh)"]
+    B -- "状态 B: 已经在提词模式 / AI 增量文本" --> D["无缝追加流程 (Seamless Append)"]
+    
+    C --> C1["1. 取消挂起 Lock-Step 队列"]
+    C1 --> C2["2. 下发 State=4 Session 释放包"]
+    C2 --> C3["3. 150ms 强制物理平滑冷却"]
+    C3 --> C4["4. 重置 seq=0x00，下发 Setup + 全量 Pages"]
+    C4 --> C5["5. 重置视口至 Line 0"]
+    
+    D --> D1["1. 保持当前光机点灯与 0x52 路由 (严禁发 State=4)"]
+    D1 --> D2["2. 复用当前递增 seq & msgId"]
+    D2 --> D3["3. 仅下发增量 Page 切片包"]
+    D3 --> D4["4. 下发 HUD Mount (0x04-20) 刷新显存视口"]
+    D4 --> D5["5. 零闪烁、零黑屏无缝呈现在 MicroLED 屏幕"]
+```
+
+### 6.1 双模式推送新文本处理规范
+
+#### 1. 模式 A：全量讲稿覆盖 (Full Text Replacement)
+- **触发条件**：用户选择全新的讲稿文件，或者系统强制重置演讲。
+- **处理步骤**：
+  1. 调用 `cancelPendingTeleprompterTasks()` 清空挂起队列与超时定时器；
+  2. 下发 `Service 06-20 type=4 state=4` 释放包，清空 SRAM 环形缓冲区；
+  3. 执行 **150ms 强制物理平滑冷却**；
+  4. 重置 `seq = 0x00`，下发全量 Setup 指令帧与 Content Pages，完成重新挂载。
+
+#### 2. 模式 B：增量文本无缝追加/更新 (Incremental Seamless Refresh)
+- **触发条件**：眼镜处于提词模式下，AI 实时生成后续段落或 WebSocket 接收增量文本。
+- **处理步骤**：
+  1. **绝对禁止发送 `State=4 释放` 与 18 包 Setup**（避免引起 MicroLED 物理屏幕闪烁/黑屏）；
+  2. **复用当前 Session 递增的 `seq` 与 `msgId`**；
+  3. **仅生成并下发新增段落的 `Page X` 报文**；
+  4. **下发一包动态 `seq` 的 `HUD Mount (0x04-20)` 刷新显存视口**；
+  5. **效果**：MicroLED 屏幕 100% 零闪烁、零黑屏，新文本平滑追加到环形缓冲区与视口中。
+
+---
+
+### 6.2 系统 4 大防线健壮性设计规范
+
+1. **并发锁与防抖机制 (Anti-Reentrancy & Debounce)**
+   - 引入 `isPushingText` 并发锁，防止多源（WebSocket / UI 快速点击）并发冲撞；
+   - 针对高频实时文本流增加 **300ms 防抖 (Debounce)**，确保发包队列的有序性。
+2. **`UInt8` 序号回环保护 (Sequence Rollover Protection)**
+   - 在长时演讲场景下，发包数超过 255 时，使用 `seq = (seq + 1) & 0xFF`，保证 `UInt8` 不溢出 Crash。
+3. **蓝牙断开自愈与现场恢复 (BLE Reconnection State Recovery)**
+   - 蓝牙重连成功后，App 自动校验 `isTeleprompterSessionActive`；
+   - 根据记录的 `currentFocusPageLine` 自动恢复现场，重新下发 Setup + 对应行号，做到**断线无感恢复看屏**。
+4. **心跳保活与异常路由拉回 (Heartbeat & Route Auto-Revert)**
+   - 处于提词模式时，超过 10 秒无触控操作自动触发 `0x0D-20` 心跳查询；
+   - 若发现眼镜 MCU 误切回 Dashboard (`0x32`)，自动下发 `0x09-20` 将路由**拉回 `0x52 Teleprompter`**，保证持续看屏。
