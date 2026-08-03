@@ -482,7 +482,6 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         // 设置 200ms 超时保底，防止由于 ACK 未回发或丢包导致流程卡死
         let timeoutItem = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
-            print("⏱️ [Lock-step] 第 \(pktNum) 包 ACK 等待超时 (200ms)，保底触发下发下一包...")
             self.sendNextBt3PacketInLockstep()
         }
         self.bt3TimeoutWorkItem = timeoutItem
@@ -493,9 +492,9 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     private func onGlassAckReceivedForBt3Lockstep() {
         guard !bt3PendingPackets.isEmpty && bt3CurrentIndex < bt3PendingPackets.count else { return }
         bt3TimeoutWorkItem?.cancel()
-        // 收到 ACK 延时 20ms 下发下一包
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.020) {
-            self.sendNextBt3PacketInLockstep()
+        // 收到 ACK 延时 20ms 下发下一包 (多个 ACK 同时到达时允许多步进, G2 期望 burst-pair 节奏)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.020) { [weak self] in
+            self?.sendNextBt3PacketInLockstep()
         }
     }
     
@@ -562,12 +561,13 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             msgId += 1
         }
         
-        // [N-2] Pkt40 HUD 视口挂载 (Service 0x04-20, 对齐 §20.2)
+        
+        // Pkt40 HUD 视口挂载 (Service 0x04-20, 对齐 §20.2)
         packets.append(G2ProtocolEncoder.buildPkt40HUDMount(seq: &seq, msgId: msgId))
         descs.append("HUD Mount (0x04-20)")
         msgId += 1
         
-        // [N-1] Pkt41 Touchpad 三路路由绑定 (Service 0x09-20, 对齐 §20.2)
+        // Pkt41 Touchpad 三路路由绑定 (Service 0x09-20, 对齐 §20.2)
         packets.append(G2ProtocolEncoder.buildPkt41TouchpadRouter(seq: &seq, msgId: msgId))
         descs.append("Touchpad Router (0x09-20)")
         msgId += 1
@@ -672,8 +672,16 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             
             // 2. 显示眼镜返回的 ACK / 确认数据包
             if magic == 0x12 {
-                addLog("⬇️ [RX 确认接收] Svc \(svcStr) 确认包: [\(hexString)]")
-                onGlassAckReceivedForBt3Lockstep()
+                // 检测心跳回响: payload 含 "08 0E ... 6A" 特征 → 不触发 Lock-Step 步进
+                let isHeartbeatEcho = relativeData.count > 8 && relativeData[8] == 0x08 && relativeData[9] == 0x0E
+                    && relativeData.range(of: Data([0x6A, 0x00])) != nil
+                
+                if isHeartbeatEcho {
+                    addLog("💓 [RX 心跳回响] Svc \(svcStr) (不触发 Lock-Step): [\(hexString)]")
+                } else {
+                    addLog("⬇️ [RX 确认接收] Svc \(svcStr) 确认包: [\(hexString)]")
+                    onGlassAckReceivedForBt3Lockstep()
+                }
                 return
             }
         }
