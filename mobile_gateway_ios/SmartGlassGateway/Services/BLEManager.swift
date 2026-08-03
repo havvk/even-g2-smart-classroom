@@ -343,6 +343,11 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         teleprompterWorkItems.removeAll()
         bt3TimeoutWorkItem?.cancel()
+        rePushTimeoutWorkItem?.cancel()
+        rePushTimeoutWorkItem = nil
+        scrollSyncThrottleWorkItem?.cancel()
+        scrollSyncThrottleWorkItem = nil
+        pendingSyncLineIndex = nil
         bt3PendingPackets.removeAll()
         bt3CurrentIndex = 0
         isPushingText = false
@@ -387,6 +392,9 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     private var lastScrollSyncSentTime: Date = Date.distantPast
     private var pendingSyncLineIndex: Int?
     private var scrollSyncThrottleWorkItem: DispatchWorkItem?
+    private var pendingRePushTask: (() -> Void)?
+    private var rePushTimeoutWorkItem: DispatchWorkItem?
+    private var isWaitingForSessionTeardown: Bool = false
     
     /// 当用户在手机端物理触摸屏幕滑动时，立即复位眼镜 Rx 屏障，确保手机端手势 100% 优先发包
     func resetGlassesRxShield() {
@@ -395,7 +403,8 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     
     /// 发送双向滚动位置同步 (150ms 物理节流保护，下发 0x06-20 Type 165 报文至眼镜固件)
     func sendScrollSync(lineIndex: Int, force: Bool = false) {
-        guard isConnected else { return }
+        guard isConnected, isTeleprompterSessionActive else { return }
+        if isWaitingForSessionTeardown || isPushingText { return }
         
         // 🛡️ 双向防乒乓屏障：若当前滑动是由眼镜镜腿 Touchpad 触发的(1.0s内)，手机绝对禁止反向发包给眼镜，彻底打断乒乓死循环！
         let timeSinceGlassesRx = Date().timeIntervalSince(lastGlassesRxScrollTime)
@@ -524,9 +533,8 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             self.isTeleprompterSessionActive = true
             addLog("✅ G2 物理屏显提词与前台焦点已锁定，Touchpad 0x06-01 触控已唤醒")
             addLog("🎉 [Lock-step] \(totalCount) 包全部下发完成！视口对齐第 \(self.targetStartLine) 行。")
-            if self.targetStartLine > 0 {
-                self.sendScrollSync(lineIndex: self.targetStartLine)
-            }
+            // 🎯 强制视口刷新：每次讲稿下发完成，强制发送 1 包 Type 165 刷新眼镜屏显至目标对齐行 (解密不切换显示的根因)
+            self.sendScrollSync(lineIndex: self.targetStartLine, force: true)
             return
         }
         
@@ -582,9 +590,16 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             return
         }
         
-        // 临界保护：若当前正在发包，仅更新目标对齐行，禁止中途打断序列致使 MicroLED 死锁黑屏
-        if isPushingText {
-            self.targetStartLine = startLine
+        // 🎯 当处于活跃提词会话时：先下发 state=4 释放旧提词窗口，重置 Auth 鉴权 Token，并在 300ms 延时后执行全新冷启动挂载
+        if isTeleprompterSessionActive {
+            addLog("🔄 检测到活跃提词会话，下发 state=4 释放旧画布，重置 Auth 鉴权 Token，并在 300ms 后重新挂载新讲稿...")
+            self.sendExitTeleprompterMode()
+            self.hasAuthBeenDoneForCurrentConnection = false
+            self.isTeleprompterSessionActive = false
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.300) { [weak self] in
+                self?.sendTeleprompterText(rawText, targetWidthChars: targetWidthChars, scrollModeAI: scrollModeAI, startLine: startLine)
+            }
             return
         }
         
@@ -600,28 +615,33 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         let pages = G2ProtocolEncoder.formatTextToPages(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: 10)
         self.currentPages = pages
         
-        // 2. 构建完整的 Lock-Step 包队列 (替代固定延时盲发)
+        // 2. 构建 Lock-Step 包队列 (执行完整验证成功的冷启动挂载序列)
         var packets: [Data] = []
         var descs: [String] = []
         
-        // [1-7] Auth 7 包鉴权 (带动态 seq/msgId 0x01~0x07)
-        let authPackets = G2ProtocolEncoder.buildAuthPackets()
-        for (idx, pkt) in authPackets.enumerated() {
-            packets.append(pkt)
-            descs.append("Auth [\(idx + 1)/7]")
+        var seq: UInt8 = self.teleprompterSeq == 0 ? 0x01 : self.teleprompterSeq
+        var msgId: Int = self.teleprompterMsgId == 0 ? 0x01 : self.teleprompterMsgId
+        
+        // [1-7] 仅在蓝牙建立连接后首次推流时下发 Auth 7 包鉴权 (静态 7 包 Token，后续重推自动跳过防黑屏)
+        if !hasAuthBeenDoneForCurrentConnection {
+            let authPackets = G2ProtocolEncoder.buildAuthPackets()
+            for (idx, pkt) in authPackets.enumerated() {
+                packets.append(pkt)
+                descs.append("Auth [\(idx + 1)/7]")
+            }
+            self.hasAuthBeenDoneForCurrentConnection = true
+            seq = 0x08
+            msgId = 0x08
         }
         
-        var seq: UInt8 = 0x08
-        var msgId: Int = 0x08
-        
-        // [8-17] 动态 7 包前置 Setup 序列 (动态编码 seq/msgId，包含 0C-20 供电与 30-20 点灯，无 0x01 切主页包)
+        // 1. Setup 7 包序列 (Viewport 07-20 / Canvas 03-20 / Display Channel 0C-20 等初始化窗口)
         let setupPairs = G2ProtocolEncoder.buildOfficialSetupSequence(seq: &seq, msgId: &msgId)
         for (pkt, desc) in setupPairs {
             packets.append(pkt)
             descs.append(desc)
         }
         
-        // TeleprompterInit (0x06-20)
+        // 2. TeleprompterInit (0x06-20)
         let initPkts = G2ProtocolEncoder.buildTeleprompterInit(seq: &seq, msgId: msgId, scrollModeAI: scrollModeAI)
         for pkt in initPkts {
             packets.append(pkt)
@@ -629,7 +649,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         msgId += 1
         
-        // [18+] 动态内容 Pages Slice 灌入 MCU SRAM 环形缓冲区
+        // 3. Pages 灌入
         for (i, pageText) in pages.enumerated() {
             let pagePkts = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: msgId, pageNum: i, text: pageText)
             for pkt in pagePkts {
@@ -639,34 +659,60 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             msgId += 1
         }
         
-        // Pkt 40 (HUD Mount 0x04-20) 动态序号挂载视口
+        // 4. HUD Mount (0x04-20)
         packets.append(G2ProtocolEncoder.buildPkt40HUDMount(seq: &seq, msgId: msgId))
         descs.append("HUD Mount (0x04-20)")
         msgId += 1
         
-        // Pkt 41 (Touchpad Router 0x09-20) 动态序号锁定提词前台 (52 18)
+        // 5. Touchpad Router (0x09-20)
         packets.append(G2ProtocolEncoder.buildPkt41TouchpadRouter(seq: &seq, msgId: msgId))
         descs.append("Touchpad Router -> Teleprompter (0x09-20)")
         msgId += 1
         
+        // 6. 0x80-00 Flush Commit (显存双缓冲翻转点亮 MicroLED)
+        packets.append(G2ProtocolEncoder.buildFlushCommit(seq: &seq, msgId: msgId))
+        descs.append("0x80-00 Flush Commit (显存双缓存翻转)")
+        msgId += 1
+        
+        // 7. Line 0 ScrollSync (0x06-20 Type 165) 视口强行对齐第 0 行
+        let syncPkt = G2ProtocolEncoder.buildScrollSync(seq: &seq, msgId: msgId, lineIndex: 0)
+        packets.append(syncPkt)
+        descs.append("ScrollSync Line 0 (0x06-20 Type 165)")
+        msgId += 1
+        
         addLog("🚀 [Lock-Step 推屏序列] 开始发送 \(packets.count) 包提词报文 (ACK+200ms 超时保底, \(pages.count) 有效页)...")
         
-        // 3. 注入 Lock-Step 引擎并启动 (复用 §20.1 ACK 驱动 + 200ms 超时保底机制)
+        // 3. 注入 Lock-Step 引擎并启动 (同步更新全局 seq/msgId 保持单调递增，防止黑屏)
+        self.teleprompterSeq = seq
+        self.teleprompterMsgId = msgId
         self.bt3PendingPackets = packets
         self.lockStepDescs = descs
         self.bt3CurrentIndex = 0
         sendNextBt3PacketInLockstep()
     }
     
-    /// 手动发送退出提词器模式报文 (Service 0x06-20 type=4 state=4)
+    /// 手动发送退出提词器模式报文 (Service 0x06-20 type=4 state=4 + 0x80-00 Flush Commit 显存释放)
     func sendExitTeleprompterMode() {
         guard isConnected else { return }
-        var exitSeq: UInt8 = 0x00
-        let exitData = Data([0x08, 0x01, 0x10, 0x32, 0x1A, 0x02, 0x08, 0x04])
-        let pktExit = G2ProtocolEncoder.buildPacket(seq: &exitSeq, serviceHi: 0x06, serviceLo: 0x20, payload: exitData)
-        sendRawData(pktExit, channel: .content, logDesc: "退出提词器模式 (state=4)")
+        self.isWaitingForSessionTeardown = true
+        self.hasAuthBeenDoneForCurrentConnection = false
         self.isTeleprompterSessionActive = false
-        addLog("🛑 已发送 0x06-20 state=4 退出提词器模式指令")
+        var seq = self.teleprompterSeq == 0 ? 0x01 : self.teleprompterSeq
+        var msgId = self.teleprompterMsgId == 0 ? 0x01 : self.teleprompterMsgId
+        
+        let exitData = Data([0x08, 0x01, 0x10, 0x32, 0x1A, 0x02, 0x08, 0x04])
+        let pktExit = G2ProtocolEncoder.buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: exitData)
+        sendRawData(pktExit, channel: .content, logDesc: "退出提词器模式 (state=4)")
+        
+        let pktCommit = G2ProtocolEncoder.buildFlushCommit(seq: &seq, msgId: msgId)
+        msgId += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.050) {
+            self.sendRawData(pktCommit, channel: .content, logDesc: "0x80-00 Flush Commit 显存释放")
+        }
+        
+        self.teleprompterSeq = seq
+        self.teleprompterMsgId = msgId
+        addLog("🛑 已发送 0x06-20 state=4 及 0x80-00 Flush 显存释放指令")
     }
     
     /// 向眼镜下发 0x0D-20 状态查询信令，主动查询眼镜当前是否处于提词模式
@@ -697,27 +743,53 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     
     private func processReceivedG2Data(_ data: Data) {
         guard data.count >= 4 else { return }
-        let hexString = data.map { String(format: "%02X", $0) }.joined(separator: " ")
+        let fullHexString = data.map { String(format: "%02X", $0) }.joined(separator: " ")
         
-        // 动态扫描 0xAA 报文头
-        if let aaIndex = data.range(of: Data([0xAA]))?.lowerBound {
-            let relativeData = data.subdata(in: aaIndex..<data.count)
-            guard relativeData.count >= 8 else { return }
+        var pos = 0
+        while pos < data.count {
+            guard data[pos] == 0xAA else {
+                pos += 1
+                continue
+            }
+            guard pos + 4 <= data.count else { break }
+            let pktLen = Int(data[pos + 3])
+            let totalLen = pktLen + 6
+            guard pos + totalLen <= data.count else {
+                // 剩余字节不足一完整包，容错退出
+                break
+            }
             
+            let relativeData = data.subdata(in: pos..<(pos + totalLen))
+            pos += totalLen
+            
+            guard relativeData.count >= 8 else { continue }
+            
+            let hexString = relativeData.map { String(format: "%02X", $0) }.joined(separator: " ")
             let magic = relativeData[1]
             let sHi = relativeData[6]
             let sLo = relativeData[7]
             let svcStr = String(format: "%02X-%02X", sHi, sLo)
             
-            // 捕获眼镜端主动退出提词器模式通知 (精准匹配 0D-01 的 1A 00 会话终结包 与 01-01 08 03 镜腿长按手势)
-            let isSessionTerminated = (sHi == 0x0D && sLo == 0x01) && relativeData.contains(Data([0x1A, 0x00]))
+            // 捕获眼镜端主动退出提词器模式通知 (精准匹配 0D-01 在下发 Exit 后返回的 1A 00 会话终结包，或 01-01 08 03 镜腿长按手势)
+            let isExplicitExitAck = (sHi == 0x0D && sLo == 0x01) && relativeData.contains(Data([0x1A, 0x00])) && self.isWaitingForSessionTeardown
             let isGestureExit = (sHi == 0x01 && sLo == 0x01) && relativeData.contains(Data([0x08, 0x03]))
             let isSessionExit = relativeData.range(of: Data([0x22, 0x02, 0x08, 0x04])) != nil
             
-            if isSessionTerminated || isGestureExit || isSessionExit {
+            if isExplicitExitAck || isGestureExit || isSessionExit {
                 DispatchQueue.main.async {
+                    self.isWaitingForSessionTeardown = false
                     self.isTeleprompterSessionActive = false
-                    self.addLog("🛑 [眼镜端主动退出] 捕获到眼镜长按/双击手势退出提词模式 (Svc \(svcStr): Session Terminated)")
+                    self.addLog("🛑 [眼镜端退出/会话释放] (Svc \(svcStr): Session Terminated)")
+                    
+                    if let task = self.pendingRePushTask {
+                        self.rePushTimeoutWorkItem?.cancel()
+                        self.rePushTimeoutWorkItem = nil
+                        self.pendingRePushTask = nil
+                        self.addLog("⚡️ 捕获到 Session 注销完成通知，自动启动全新讲稿推流...")
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.150) {
+                            task()
+                        }
+                    }
                 }
             }
             
@@ -797,7 +869,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                     }
                 }
                 onG2TelemetryLog?("Rx", hexString, "06-01 Telemetry: \(eventTypeStr)")
-                return
+                continue
             }
             
             // 显示眼镜返回的 ACK / 确认数据包
@@ -817,11 +889,11 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                 } else {
                     addLog("📡 [RX 非 Session 包] Svc \(svcStr) (不触发 Lock-Step): [\(hexString)]")
                 }
-                return
+                continue
             }
         }
         
-        addLog("⬇️ [RX 接收] (\(data.count)b): [\(hexString)]")
+        addLog("⬇️ [RX 接收] (\(data.count)b): [\(fullHexString)]")
     }
     
     /// 模拟接收 G2 眼镜返回消息 (用于 Debug 界面调试及模拟器测试)

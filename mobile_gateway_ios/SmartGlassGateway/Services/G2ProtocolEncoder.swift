@@ -95,6 +95,7 @@ class G2ProtocolEncoder {
     
     // MARK: - 1. 7-Packet Session Authentication (Service 0x8000 & 0x8020)
     
+    /// 生成 7 包全链路静态 Token 鉴权序列 (100% 物理对齐 G2 官方首联鉴权规范)
     static func buildAuthPackets() -> [Data] {
         let timestamp = Int(Date().timeIntervalSince1970)
         let tsVarint = encodeVarint(timestamp)

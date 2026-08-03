@@ -1173,6 +1173,47 @@ AA 21 [Seq] [Len] 01 01 06 20 08 A5 01 10 [MsgId] 5A 04 08 [Page] 10 [Line] [CRC
    `AA 12 [Seq] 06 01 01 0D 01 08 01 1A 00 [CRC16]`
    ➔ 提词前台物理会话彻底注销，光机切回 Dashboard 桌面。
 
+---
 
+## 23. 官方连续推送文本 (Multi-Prompts Push) 与 Session 优雅销毁闭环 (基于 multiprompts.pklg 2026-08-04) 🆕
 
+本章解密了在提词会话处于活跃状态时，官方 APP 如何处理用户连续推送新文本/切换讲稿的协议细节：
 
+### 23.1 物理抓包事实证明：G2 MCU 不支持在活跃 Session 内直接覆写文本
+经 `multiprompts.pklg` 185 包蓝牙 GATT 数据分析证实：**官方 Even AI APP 也无法做到在不销毁当前会话的情况下直接覆写新文本**。
+当用户在官方 APP 中点按新文本推送时，官方 APP 绝不强行覆写，而是严格遵循 **“优雅销毁旧 Session ➔ 等待 MCU 物理注销 ➔ 冷启动全新 Session”** 闭环：
+
+### 23.2 连续推送全套 3 阶段信令闭环
+
+```text
+阶段 1：旧会话优雅销毁 (App ➔ Glass)
+────────────────────────────────────────────────────────────────
+AA 21 41 0A 01 01 06 20 08 01 10 41 1A 02 08 04 [CRC16]
+└─ Service 0x06-20 Type 4 State 4 (发送退出/释放会话指令)
+
+阶段 2：等待眼镜 MCU 销毁确认 (Glass ➔ App)
+────────────────────────────────────────────────────────────────
+AA 12 60 06 01 01 0D 01 08 01 1A 00 [CRC16]
+└─ Service 0x0D-01 Session Terminated Notify (眼镜物理注销完成)
+
+阶段 3：150ms 窗口后全新推流 (App ➔ Glass)
+────────────────────────────────────────────────────────────────
+1. Auth 7 包鉴权 (0x80-00, 0x80-20)
+2. Setup 7 包前置 (0x07-20, 0x03-20 Layout, 0x0C-20 供电, 0x30-20 点灯)
+3. Teleprompter Init (0x06-20 Type 1)
+4. Pages Data (0x06-20 Type 3 Page 0, Page 1...)
+5. HUD Mount (0x04-20) & Touchpad Router (0x09-20)
+6. Viewport Flush Line 0 (0x06-20 Type 165)
+```
+
+### 23.3 避坑指南：连续发包常见死锁与黑屏根因
+
+1. **强行在活跃 Session 下发 0x30-20 / Setup 信令**：
+   - 现象：MicroLED 光机瞬间**黑屏**；
+   - 根因：`0x30-20 System Mode` 会强行将硬件模式切回 Mode 1 初始电平，造成显存与光机芯片复位断电。
+2. **重推时漏重置 `isPushingText` 标记**：
+   - 现象：不关蓝牙无法第二次推送；
+   - 根因：首次发包完成后 `isPushingText` 锁未复位，后续推送全部被 `if isPushingText { return }` 拦截抛弃。
+3. **BLE Sequence 序列号倒退 (Rollback)**：
+   - 现象：推送第二篇讲稿时眼镜显示 `Session Terminated`；
+   - 根因：固件校验发现新包 Seq 小于上一包 Seq，触发底层断开防护。必须保持全局 `teleprompterSeq` 严格单调递增。
