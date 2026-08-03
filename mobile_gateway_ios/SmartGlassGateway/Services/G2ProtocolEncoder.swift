@@ -439,6 +439,83 @@ class G2ProtocolEncoder {
         return buildPacket(seq: &seq, serviceHi: 0x1F, serviceLo: 0x20, payload: payload)
     }
     
+    /// 生成 1:1 官方原装 11 包前置 Setup 信令 (对齐 bt3.pklg Pkts 5~15: 建立 10 行 Canvas 画布、App 容器与 Touchpad 中断)
+    static func buildOfficialSetupSequence(seq: inout UInt8, msgId: inout Int) -> [(data: Data, desc: String)] {
+        var result: [(Data, String)] = []
+        
+        // 1. Service 07-20 Viewport 容器
+        var p07 = Data([0x08, 0x0A, 0x10])
+        p07.append(encodeVarint(msgId))
+        p07.append(Data([0x6A, 0x06, 0x08, 0x00, 0x10, 0x50, 0x20, 0x00]))
+        result.append((buildPacket(seq: &seq, serviceHi: 0x07, serviceLo: 0x20, payload: p07), "Setup: Viewport (0x07-20)"))
+        msgId += 1
+        
+        // 2. Service 03-20 Canvas 画布参数 (59B, 包含全屏 10 行 Layout 规格)
+        var p03 = Data([0x08, 0x00, 0x10])
+        p03.append(encodeVarint(msgId))
+        let p03Body: [UInt8] = [
+            0x1A, 0x33, 0x08, 0x08, 0x12, 0x04, 0x08, 0x00, 0x20, 0x04, 0x12, 0x04,
+            0x08, 0x00, 0x20, 0x0B, 0x12, 0x04, 0x08, 0x00, 0x20, 0x06, 0x12, 0x04,
+            0x08, 0x00, 0x20, 0x05, 0x12, 0x04, 0x08, 0x00, 0x20, 0x08, 0x12, 0x04,
+            0x08, 0x00, 0x20, 0x07, 0x12, 0x04, 0x08, 0x00, 0x20, 0x01, 0x12, 0x05,
+            0x08, 0x00, 0x20, 0x8A, 0x02
+        ]
+        p03.append(contentsOf: p03Body)
+        result.append((buildPacket(seq: &seq, serviceHi: 0x03, serviceLo: 0x20, payload: p03), "Setup: Canvas Layout (0x03-20)"))
+        msgId += 1
+        
+        // 3. Service 0C-20 Display 显示通道激活
+        var p0C = Data([0x08, 0x02, 0x10])
+        p0C.append(encodeVarint(msgId))
+        p0C.append(Data([0x22, 0x04, 0x08, 0x01, 0x10, 0x00]))
+        result.append((buildPacket(seq: &seq, serviceHi: 0x0C, serviceLo: 0x20, payload: p0C), "Setup: Display Channel (0x0C-20)"))
+        msgId += 1
+        
+        // 4. Service 30-20 系统模式切换
+        var p30 = Data([0x08, 0x01, 0x10])
+        p30.append(encodeVarint(msgId))
+        p30.append(Data([0x1A, 0x04, 0x08, 0x01, 0x10, 0x00]))
+        result.append((buildPacket(seq: &seq, serviceHi: 0x30, serviceLo: 0x20, payload: p30), "Setup: System Mode (0x30-20)"))
+        msgId += 1
+        
+        // 5. Service 0D-20 状态同步指示
+        var p0D = Data([0x08, 0x00, 0x10])
+        p0D.append(encodeVarint(msgId))
+        p0D.append(Data([0x10, 0x05]))
+        result.append((buildPacket(seq: &seq, serviceHi: 0x0D, serviceLo: 0x20, payload: p0D), "Setup: Status Sync (0x0D-20)"))
+        msgId += 1
+        
+        // 6. Service 09-20 Touchpad Listener
+        var p09_1 = Data([0x08, 0x01, 0x10])
+        p09_1.append(encodeVarint(msgId))
+        p09_1.append(Data([0x1A, 0x0C, 0x4A, 0x0A, 0x08, 0x00, 0x10, 0x00, 0x18, 0x00, 0x20, 0x00, 0x28, 0x01]))
+        result.append((buildPacket(seq: &seq, serviceHi: 0x09, serviceLo: 0x20, payload: p09_1), "Setup: Touchpad Listener (0x09-20)"))
+        msgId += 1
+        
+        // 7. Service 1F-20 焦点状态绑定
+        var p1F = Data([0x08, 0x00, 0x10])
+        p1F.append(encodeVarint(msgId))
+        p1F.append(Data([0x1A, 0x02, 0x08, 0x01]))
+        result.append((buildPacket(seq: &seq, serviceHi: 0x1F, serviceLo: 0x20, payload: p1F), "Setup: Focus State (0x1F-20)"))
+        msgId += 1
+        
+        // 8. Service 10-20 App 界面挂载通知
+        var p10 = Data([0x08, 0x01, 0x10])
+        p10.append(encodeVarint(msgId))
+        p10.append(Data([0x1A, 0x02, 0x08, 0x04]))
+        result.append((buildPacket(seq: &seq, serviceHi: 0x10, serviceLo: 0x20, payload: p10), "Setup: App Mount (0x10-20)"))
+        msgId += 1
+        
+        // 9. Service 01-20 Touchpad Interrupt Enable (100% 对齐 Pkt 18: 22 0C 1A 0A 12 08 1A 06 08 00 10 00 20 01)
+        var p01 = Data([0x08, 0x02, 0x10])
+        p01.append(encodeVarint(msgId))
+        p01.append(Data([0x22, 0x0C, 0x1A, 0x0A, 0x12, 0x08, 0x1A, 0x06, 0x08, 0x00, 0x10, 0x00, 0x20, 0x01]))
+        result.append((buildPacket(seq: &seq, serviceHi: 0x01, serviceLo: 0x20, payload: p01), "Setup: Touchpad Interrupt (0x01-20)"))
+        msgId += 1
+        
+        return result
+    }
+    
     // MARK: - Legacy / UI Control Helpers
     
     /// 生成 0x06-20 Type 5 双向位置同步报文 (100% 对齐 teleprompter.py build_scroll_sync)
@@ -525,7 +602,7 @@ class G2ProtocolEncoder {
         return 1
     }
     
-    /// 将文本切分为 28 中文字符/行、10 行/页的数组 (短文本自动补齐至 14 页 Buffer 槽位)
+    /// 将文本切分为 28 中文字符/行、10 行/页的数组 (硬性填满 G2 固件要求的 14 页 Buffer 槽位)
     static func formatTextToPages(_ text: String, maxLineWidth: Int = 56, linesPerPage: Int = 10, targetPageCount: Int = 14) -> [String] {
         let cleanText = text.replacingOccurrences(of: "\\n", with: "\n")
         var wrappedLines = [String]()
@@ -568,7 +645,7 @@ class G2ProtocolEncoder {
             pages.append(chunk.joined(separator: "\n"))
         }
         
-        // G2 固件显存要求: 短文本必须填充补齐至 14 页 Buffer 槽位
+        // G2 固件 MCU 视口校验要求: 必须填满 14 页 Buffer 槽位后 HUD Mount (0x04-20) 方可正常 Commit 渲染
         let emptyPageText = Array(repeating: "", count: linesPerPage).joined(separator: "\n")
         while pages.count < targetPageCount {
             pages.append(emptyPageText)

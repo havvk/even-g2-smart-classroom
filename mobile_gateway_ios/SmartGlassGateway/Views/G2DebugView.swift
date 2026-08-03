@@ -285,6 +285,19 @@ AI 智慧课堂正在实时联动中
                                      .foregroundColor(.white)
                                      .cornerRadius(10)
                              }
+                             
+                             Button(action: {
+                                 bleManager.sendHardcodedOfficialBt3Pklg()
+                             }) {
+                                 Label("🚀 1:1 官方原装 bt3.pklg 提词与触控推屏 (41包)", systemImage: "bolt.horizontal.fill")
+                                     .font(.headline)
+                                     .fontWeight(.bold)
+                                     .frame(maxWidth: .infinity)
+                                     .padding(.vertical, 12)
+                                     .background(Color.orange)
+                                     .foregroundColor(.white)
+                                     .cornerRadius(10)
+                             }
                             
                             HStack(spacing: 10) {
                                 Button(action: {
