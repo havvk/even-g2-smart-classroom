@@ -374,6 +374,20 @@ class G2ProtocolEncoder {
         return buildPacket(seq: &seq, serviceHi: 0x01, serviceLo: 0x20, payload: payload)
     }
     
+    /// 生成 Service 0x01-20 前台活跃心跳锁 (100% 对齐 §16.2 物理抓包: 唤醒 Touchpad 物理中断并派发至 06-01 通道)
+    static func buildActiveFocusLock(seq: inout UInt8, msgId: Int) -> Data {
+        var payload = Data([0x08, 0x02, 0x10])
+        payload.append(encodeVarint(msgId))
+        let lockBytes: [UInt8] = [
+            0x22, 0x0A,
+            0x1A, 0x08,
+            0x12, 0x06,
+            0x12, 0x04, 0x08, 0x01
+        ]
+        payload.append(contentsOf: lockBytes)
+        return buildPacket(seq: &seq, serviceHi: 0x01, serviceLo: 0x20, payload: payload)
+    }
+    
     /// 100% 物理对齐 bt3.pklg 抓包包 #18: 生成 Touchpad 手势监听配置报文 (Service 0x01-20, msg_id=0x13)
     static func buildTouchpadEventListener(seq: inout UInt8, msgId: Int = 0x13) -> Data {
         var payload = Data([0x08, 0x02, 0x10])

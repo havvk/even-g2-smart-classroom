@@ -562,14 +562,20 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         
         
-        // Pkt40 HUD 视口挂载 (Service 0x04-20, 对齐 §20.2)
-        packets.append(G2ProtocolEncoder.buildPkt40HUDMount(seq: &seq, msgId: msgId))
-        descs.append("HUD Mount (0x04-20)")
+        // 100% 对齐 25 包历史成功日志的尾部心跳与前台焦点锁序列
+        // 1. Sync (0x80-00 dashboard sync)
+        packets.append(G2ProtocolEncoder.buildDashboardSync(seq: &seq, msgId: msgId))
+        descs.append("Sync (0x80-00 dashboard sync)")
         msgId += 1
         
-        // Pkt41 Touchpad 三路路由绑定 (Service 0x09-20, 对齐 §20.2)
-        packets.append(G2ProtocolEncoder.buildPkt41TouchpadRouter(seq: &seq, msgId: msgId))
-        descs.append("Touchpad Router (0x09-20)")
+        // 2. Route Switch (0x09-20 前台 UI 焦点锁)
+        packets.append(G2ProtocolEncoder.buildRouteSwitch(seq: &seq, msgId: msgId))
+        descs.append("Route Switch (0x09-20)")
+        msgId += 1
+        
+        // 3. 前台活跃心跳锁 (Svc 0x01-20 Touchpad 唤醒锁)
+        packets.append(G2ProtocolEncoder.buildActiveFocusLock(seq: &seq, msgId: msgId))
+        descs.append("前台活跃心跳锁 (Svc 0x01-20)")
         msgId += 1
         
         addLog("🚀 [Lock-Step 推屏序列] 开始发送 \(packets.count) 包提词报文 (ACK+200ms 超时保底, \(pages.count) 有效页)...")
