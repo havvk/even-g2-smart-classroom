@@ -518,15 +518,19 @@ class G2ProtocolEncoder {
     
     // MARK: - Legacy / UI Control Helpers
     
-    /// 生成 0x06-20 Type 5 双向位置同步报文 (100% 对齐 teleprompter.py build_scroll_sync)
+    /// 生成 0x06-20 Type 165 手机主动平移视口同步报文 (100% 物理对齐 app-control.pklg 官方 App 抓包 Pkts #065 ~ #119)
     static func buildScrollSync(seq: inout UInt8, msgId: Int = 0x50, lineIndex: Int) -> Data {
-        var inner = Data([0x08])
-        inner.append(encodeVarint(lineIndex))
-        inner.append(Data([0x10, 0x00, 0x18, 0x00]))
+        let page = lineIndex / 10
+        let line = lineIndex % 10
         
-        var payload = Data([0x08, 0x05, 0x10]) // Type 5: Teleprompter Scroll Sync Event
+        var inner = Data([0x08])
+        inner.append(encodeVarint(page))
+        inner.append(Data([0x10]))
+        inner.append(encodeVarint(line))
+        
+        var payload = Data([0x08, 0xA5, 0x01, 0x10]) // Type 165 (0xA5 0x01): Teleprompter App Scroll Sync
         payload.append(encodeVarint(msgId))
-        payload.append(Data([0x2A]))
+        payload.append(Data([0x5A]))                 // Tag 11 (0x5A) 视口定位负载
         payload.append(encodeVarint(inner.count))
         payload.append(inner)
         
@@ -535,9 +539,14 @@ class G2ProtocolEncoder {
     
     /// 生成 0x06-20 Type 6 AI 跟随模式位置同步报文
     static func buildAISync(seq: inout UInt8, msgId: Int = 0x50, lineIndex: Int) -> Data {
+        let page = lineIndex / 10
+        let line = lineIndex % 10
+        
         var inner = Data([0x08])
-        inner.append(encodeVarint(lineIndex))
-        inner.append(Data([0x10, 0x00, 0x18, 0x00]))
+        inner.append(encodeVarint(page))
+        inner.append(Data([0x10]))
+        inner.append(encodeVarint(line))
+        inner.append(Data([0x18, 0x00]))
         
         var payload = Data([0x08, 0x06, 0x10]) // Type 6: Teleprompter AI Sync Event
         payload.append(encodeVarint(msgId))

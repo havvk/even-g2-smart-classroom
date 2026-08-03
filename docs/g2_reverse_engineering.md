@@ -1127,6 +1127,52 @@ Pkt Hex: AA 12 [Seq] [Len] 01 01 06 01 08 A4 01 10 1C 52 02 08 [PageNum] [CRC16]
    - 解析 `Service 0D-01` (`1A 00` Session Terminated) 与 `01-01` (`08 03` 镜腿长按手势)；
    - 结果：App 毫秒级捕获眼镜端主动退出，更新 `isTeleprompterSessionActive = false`。
 
+---
+
+## 22. 官方 APP 手机端滑动信令与主动退出流程权威解调 (基于 app-control.pklg 2026-08-03) 🆕
+
+本章总结了对官方 APP 与 G2 眼镜真实交互抓包 `app-control.pklg`（130 包全量 GATT 帧）的物理解调结论：
+
+### 22.1 官方 APP 手机端主动滑动信令：`Service 0x06-20 Type 165 (08 A5 01)`
+抓包彻底澄清了第三方发包无响应的物理根因：**官方 APP 手机端拖拽滑动时，下发的并非 Type 5 (`08 05`)，而是 Type 165 (`08 A5 01`)**！
+
+**物理 Packet 结构**：
+```text
+AA 21 [Seq] [Len] 01 01 06 20 08 A5 01 10 [MsgId] 5A 04 08 [Page] 10 [Line] [CRC16]
+```
+- **Service ID**：`0x06-20` (提词器数据服务)
+- **Type 编码**：`08 A5 01` (Protobuf Varint 编码的 `Type 165`)
+- **Tag 11 (`0x5A`) 负载**：`5A 04 08 [Page] 10 [Line]`
+  - `08 [Page]` ➔ 页码索引（`Line / 10`）
+  - `10 [Line]` ➔ 页内相对行号（`Line % 10`）
+
+**抓包物理帧验证记录**（`app-control.pklg` Pkts #065 ~ #119）：
+- `Pkt #065`: `08 A5 01 10 35 5A 04 08 00 10 08` ➔ 手机驱动眼镜定位至 Page 0, Line 8
+- `Pkt #071`: `08 A5 01 10 37 5A 04 08 01 10 09` ➔ 手机驱动眼镜定位至 Page 1, Line 9
+- `Pkt #080`: `08 A5 01 10 3A 5A 04 08 03 10 02` ➔ 手机驱动眼镜定位至 Page 3, Line 2
+- `Pkt #090`: `08 A5 01 10 3D 5A 04 08 04 10 04` ➔ 手机驱动眼镜定位至 Page 4, Line 4
+- `Pkt #096`: `08 A5 01 10 3F 5A 04 08 05 10 03` ➔ 手机驱动眼镜定位至 Page 5, Line 3
+- `Pkt #103`: `08 A5 01 10 41 5A 04 08 06 10 04` ➔ 手机驱动眼镜定位至 Page 6, Line 4
+- `Pkt #109`: `08 A5 01 10 43 5A 04 08 07 10 09` ➔ 手机驱动眼镜定位至 Page 7, Line 9
+- `Pkt #119`: `08 A5 01 10 47 5A 04 08 08 10 05` ➔ 手机驱动眼镜定位至 Page 8, Line 5
+
+### 22.2 官方 APP 主动退出提词模式全套 4 步信令序列
+抓包归档了官方 APP 用户点击“退出提词”时，手机与眼镜间的标准 4 步优雅退出握手（Pkts #126 ~ #130）：
+
+1. **Step 1 (App ➔ Glass, Pkt #126)**：
+   App 发送 `Service 0x06-20 Type 1 (state=4)` 提词前台会话释放报文：
+   `AA 21 [Seq] 0B 01 01 06 20 08 01 10 [MsgId] 1A 02 08 04 [CRC16]`
+2. **Step 2 (Glass ➔ App, Pkt #127)**：
+   眼镜 MCU 回复 `Service 0x06-00 ACK` 确认包：
+   `AA 12 [Seq] 09 01 01 06 00 08 A6 01 10 [MsgId] 62 00 [CRC16]`
+3. **Step 3 (App ➔ Glass, Pkt #128)**：
+   App 发送 `Service 0x80-00 Flush Commit` 显存 Commit 报文（切回 Dashboard 界面）：
+   `AA 21 [Seq] 08 01 01 80 00 08 0E 10 [MsgId] 6A 00 [CRC16]`
+4. **Step 4 (Glass ➔ App, Pkt #130)**：
+   眼镜 MCU 主动上报 `Service 0D-01` 状态解除通知：
+   `AA 12 [Seq] 06 01 01 0D 01 08 01 1A 00 [CRC16]`
+   ➔ 提词前台物理会话彻底注销，光机切回 Dashboard 桌面。
+
 
 
 

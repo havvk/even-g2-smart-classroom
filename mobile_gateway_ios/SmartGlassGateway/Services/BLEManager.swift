@@ -378,18 +378,40 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     @Published var currentGlassesState: UInt8 = 0
     
     private var currentPages: [String] = []
-    private var syncSeq: UInt8 = 0x2A
-    private var syncMsgId: Int = 0x50
+    private var lastPhoneScrollTime: Date = Date.distantPast
+    private var lastScrollSyncSentTime: Date = Date.distantPast
+    private var pendingSyncLineIndex: Int?
+    private var scrollSyncThrottleWorkItem: DispatchWorkItem?
     
-    /// 发送双向滚动位置同步 (同时下发 0x06-20 Type 5 报文至眼镜固件，激活触控板 Notice 上报)
+    /// 发送双向滚动位置同步 (100ms 物理节流保护，下发 0x06-20 Type 165 报文至眼镜固件)
     func sendScrollSync(lineIndex: Int) {
         guard isConnected else { return }
+        self.lastPhoneScrollTime = Date()
         self.currentFocusPageLine = lineIndex
+        
+        let elapsed = Date().timeIntervalSince(lastScrollSyncSentTime)
+        if elapsed < 0.100 {
+            // 🛡️ 100ms 物理节流防爆破: 记录最新目标行号，延迟补发最新帧
+            self.pendingSyncLineIndex = lineIndex
+            if scrollSyncThrottleWorkItem == nil {
+                let item = DispatchWorkItem { [weak self] in
+                    guard let self = self, let targetLine = self.pendingSyncLineIndex else { return }
+                    self.scrollSyncThrottleWorkItem = nil
+                    self.sendScrollSync(lineIndex: targetLine)
+                }
+                self.scrollSyncThrottleWorkItem = item
+                DispatchQueue.main.asyncAfter(deadline: .now() + (0.100 - elapsed), execute: item)
+            }
+            return
+        }
+        
+        self.lastScrollSyncSentTime = Date()
+        self.pendingSyncLineIndex = nil
         
         let syncPkt = G2ProtocolEncoder.buildScrollSync(seq: &teleprompterSeq, msgId: teleprompterMsgId, lineIndex: lineIndex)
         teleprompterMsgId += 1
         sendRawData(syncPkt, channel: .content, logDesc: "双向位置同步 (Line \(lineIndex))")
-        addLog("📍 [双向同步] 已发送 0x06-20 Type 5 报文 (Line \(lineIndex))")
+        addLog("📍 [双向同步] 已发送 0x06-20 Type 165 报文 (Line \(lineIndex))")
     }
     
     // 自动补发队列
@@ -553,12 +575,6 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         // 2. 构建完整的 Lock-Step 包队列 (替代固定延时盲发)
         var packets: [Data] = []
         var descs: [String] = []
-        
-        // [0] State=4 前置会话释放 (物理对齐 §20.1 规范: 清除眼镜 MCU 残留旧 Session 状态与路由表)
-        var exitSeq: UInt8 = 0x00
-        let exitPayload = Data([0x08, 0x04, 0x10, 0x0C, 0x22, 0x02, 0x08, 0x04])
-        packets.append(G2ProtocolEncoder.buildPacket(seq: &exitSeq, serviceHi: 0x06, serviceLo: 0x20, payload: exitPayload))
-        descs.append("Session 释放 (State=4)")
         
         // [1-7] Auth 7 包鉴权 (带动态 seq/msgId 0x01~0x07)
         let authPackets = G2ProtocolEncoder.buildAuthPackets()
@@ -733,10 +749,18 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                 }
                 
                 if let line = rawLine, line >= 0 && line <= 200 {
-                    DispatchQueue.main.async {
-                        self.currentFocusPageLine = line
-                        self.lastGestureReceived = "\(eventTypeStr) -> L\(line)"
-                        self.addLog("🎯 👆 [RX 06-01 遥测/手势] \(eventTypeStr) | 视口位于第 \(line) 行")
+                    let timeSincePhoneScroll = Date().timeIntervalSince(self.lastPhoneScrollTime)
+                    if timeSincePhoneScroll < 0.800 {
+                        // 🛡️ 手机主控期: 800ms 内完全忽略眼镜发回的 Rx 回波位置，防止 App 端快滑回弹
+                        DispatchQueue.main.async {
+                            self.addLog("🛡️ [主控屏障] 手机滑动窗口期内(800ms)，屏蔽眼镜 Rx 回波 (Line \(line))，防止 UI 回弹")
+                        }
+                    } else {
+                        DispatchQueue.main.async {
+                            self.currentFocusPageLine = line
+                            self.lastGestureReceived = "\(eventTypeStr) -> L\(line)"
+                            self.addLog("🎯 👆 [RX 06-01 遥测/手势] \(eventTypeStr) | 视口位于第 \(line) 行")
+                        }
                     }
                 } else {
                     DispatchQueue.main.async {

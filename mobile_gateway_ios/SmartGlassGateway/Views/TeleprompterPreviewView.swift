@@ -1,5 +1,12 @@
 import SwiftUI
 
+struct TeleprompterLineOffsetKey: PreferenceKey {
+    static var defaultValue: [Int: CGFloat] = [:]
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
+
 /// 讲稿预览视图 (包含讲稿元信息卡片、当前行号/手势调试胶囊与 10 行视口预览)
 struct TeleprompterPreviewView: View {
     @EnvironmentObject var bleManager: BLEManager
@@ -11,6 +18,7 @@ struct TeleprompterPreviewView: View {
     @State private var showingEditor: Bool = false
     @State private var isPushing: Bool = false
     @State private var isPlaying: Bool = false
+    @State private var isProgrammaticScrolling: Bool = false
     @State private var timer = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
     
     @State private var widthChars: Double = 28.0
@@ -191,6 +199,14 @@ struct TeleprompterPreviewView: View {
                                     }
                                 }
                             )
+                            .background(
+                                GeometryReader { geo in
+                                    Color.clear.preference(
+                                        key: TeleprompterLineOffsetKey.self,
+                                        value: [index: geo.frame(in: .named("teleprompter_scroll")).minY]
+                                    )
+                                }
+                            )
                             .id(index)
                             .onTapGesture {
                                 updateFocusLine(index: index, scrollProxy: proxy)
@@ -201,12 +217,31 @@ struct TeleprompterPreviewView: View {
                     }
                     .padding(.vertical, 8)
                 }
+                .coordinateSpace(name: "teleprompter_scroll")
+                .onPreferenceChange(TeleprompterLineOffsetKey.self) { offsets in
+                    guard !isProgrammaticScrolling else { return }
+                    if let topCandidate = offsets.filter({ $0.value >= -35 && $0.value <= 100 }).min(by: { abs($0.value) < abs($1.value) }) {
+                        let newIndex = topCandidate.key
+                        if newIndex != activeLineIndex {
+                            DispatchQueue.main.async {
+                                self.activeLineIndex = newIndex
+                                self.syncLineToGlasses(lineIndex: newIndex)
+                            }
+                        }
+                    }
+                }
                 .onReceive(bleManager.$currentFocusPageLine) { newGlassesLine in
                     guard !wrappedLines.isEmpty else { return }
                     let clampedLine = max(0, min(wrappedLines.count - 1, newGlassesLine))
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
-                        self.activeLineIndex = clampedLine
-                        proxy.scrollTo(clampedLine, anchor: .top)
+                    if clampedLine != activeLineIndex {
+                        self.isProgrammaticScrolling = true
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                            self.activeLineIndex = clampedLine
+                            proxy.scrollTo(clampedLine, anchor: .top)
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                            self.isProgrammaticScrolling = false
+                        }
                     }
                 }
                 .onReceive(timer) { _ in
@@ -302,11 +337,15 @@ struct TeleprompterPreviewView: View {
     
     private func updateFocusLine(index: Int, scrollProxy: ScrollViewProxy?) {
         let clamped = max(0, min(wrappedLines.count - 1, index))
+        isProgrammaticScrolling = true
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
             activeLineIndex = clamped
             scrollProxy?.scrollTo(clamped, anchor: .top)
         }
         syncLineToGlasses(lineIndex: clamped)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            self.isProgrammaticScrolling = false
+        }
     }
     
     private func syncLineToGlasses(lineIndex: Int) {
