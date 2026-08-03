@@ -342,6 +342,10 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             item.cancel()
         }
         teleprompterWorkItems.removeAll()
+        bt3TimeoutWorkItem?.cancel()
+        bt3PendingPackets.removeAll()
+        bt3CurrentIndex = 0
+        isPushingText = false
     }
     
     /// 重置提词器会话状态并清空历史文本防抖 (若 clearHardwareState 为 true 则同步向眼镜下发物理退出/清屏指令)
