@@ -435,6 +435,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     private var bt3PendingPackets: [Data] = []
     private var bt3CurrentIndex: Int = 0
     private var bt3TimeoutWorkItem: DispatchWorkItem?
+    private var lockStepDescs: [String] = []
     
     /// 100% 零加工 1:1 原装 bt3.pklg 提词物理帧 39 包重发 (ACK 优先 + 200ms 超时保底 Lock-step 引擎)
     func sendHardcodedOfficialBt3Pklg() {
@@ -450,27 +451,33 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         cancelPendingTeleprompterTasks()
         let rawHexes = OfficialBt3Pkts.bt3TxRawHexes
         self.bt3PendingPackets = rawHexes.map { hexToData($0) }
+        self.lockStepDescs = []
         self.bt3CurrentIndex = 0
         
-        addLog("🚀 [1:1 Lock-step 步进引擎] 开始发送 OfficialBt3Pkts 41 个原装提词与触控使能 Raw 数据包 (ACK+200ms保底)...")
+        addLog("🚀 [1:1 Lock-step 步进引擎] 开始发送 OfficialBt3Pkts \(rawHexes.count) 个原装提词与触控使能 Raw 数据包 (ACK+200ms保底)...")
         sendNextBt3PacketInLockstep()
     }
     
-    /// 下发当前 Lock-step 队列中的下一包物理帧
+    /// 下发当前 Lock-step 队列中的下一包物理帧 (ACK 驱动 + 200ms 超时保底, 对齐 §20.1 规范)
     private func sendNextBt3PacketInLockstep() {
         bt3TimeoutWorkItem?.cancel()
         
-        guard bt3CurrentIndex < bt3PendingPackets.count else {
+        let totalCount = bt3PendingPackets.count
+        guard bt3CurrentIndex < totalCount else {
             self.isTeleprompterSessionActive = true
-            addLog("🎉 [Lock-step] 1:1 bt3 提词与触控使能 41 包全部下发完成！触控路由已激活，请尝试滑动镜腿 Touchpad！")
+            addLog("✅ G2 物理屏显提词与前台焦点已锁定，Touchpad 0x06-01 触控已唤醒")
+            addLog("🎉 [Lock-step] \(totalCount) 包全部下发完成！视口对齐第 0 行。")
             return
         }
         
         let pktData = bt3PendingPackets[bt3CurrentIndex]
         let pktNum = bt3CurrentIndex + 1
+        let desc = bt3CurrentIndex < lockStepDescs.count
+            ? "\(lockStepDescs[bt3CurrentIndex]) [\(pktNum)/\(totalCount)]"
+            : "步进帧 [\(pktNum)/\(totalCount)]"
         bt3CurrentIndex += 1
         
-        sendRawData(pktData, channel: .content, logDesc: "bt3 步进帧 [\(pktNum)/41]")
+        sendRawData(pktData, channel: .content, logDesc: desc)
         
         // 设置 200ms 超时保底，防止由于 ACK 未回发或丢包导致流程卡死
         let timeoutItem = DispatchWorkItem { [weak self] in
@@ -492,7 +499,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
     }
     
-    /// 动态编码并推送讲稿文本到 G2 眼镜 (100% 对齐 teleprompter.py 25 包推屏链路，前置 State=4 强行归位)
+    /// 动态编码并推送讲稿文本到 G2 眼镜 (Lock-Step ACK 驱动步进, 对齐 §20.1 规范)
     func sendTeleprompterText(_ rawText: String, targetWidthChars: Int = 28, scrollModeAI: Bool = true) {
         guard isConnected else {
             addLog("⚠️ 蓝牙未连接，请先连接 G2 眼镜")
@@ -503,117 +510,75 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             return
         }
         
-        // 1. 取消正在执行的倒计时任务与重置状态
+        // 1. 取消正在执行的任务与重置状态
         cancelPendingTeleprompterTasks()
         self.currentFocusPageLine = 0
         DispatchQueue.main.async {
             self.currentFocusPageLine = 0
         }
         
-        let pages = G2ProtocolEncoder.formatTextToPages(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: 10, targetPageCount: 14)
+        let pages = G2ProtocolEncoder.formatTextToPages(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: 10)
         self.currentPages = pages
-        addLog("🚀 [推屏序列] 开始发送对齐 teleprompter.py 的 25 包提词报文...")
         
-        var delay: Double = 0.05
+        // 2. 构建完整的 Lock-Step 包队列 (替代固定延时盲发)
+        var packets: [Data] = []
+        var descs: [String] = []
         
-        // 1. 动态生成下发 Pkt 1 ~ 7 基础 Auth (带有实时 Unix 时间戳, seq 0x01~0x07)
+        // [0] State=4 前置会话释放 (确保旧 session 被清除, 恢复 commit 31646790 删除的关键步骤)
+        var exitSeq: UInt8 = 0x00
+        let exitPayload = Data([0x08, 0x04, 0x10, 0x0C, 0x22, 0x02, 0x08, 0x04])
+        packets.append(G2ProtocolEncoder.buildPacket(seq: &exitSeq, serviceHi: 0x06, serviceLo: 0x20, payload: exitPayload))
+        descs.append("Session 释放 (State=4)")
+        
+        // [1-7] Auth 7 包 (hardcoded seq 0x01~0x07, 带实时 Unix 时间戳)
         let authPackets = G2ProtocolEncoder.buildAuthPackets()
         for (idx, pkt) in authPackets.enumerated() {
-            let pktIndex = idx + 1
-            let item = DispatchWorkItem {
-                self.sendRawData(pkt, channel: .content, logDesc: "Auth [\(pktIndex)/25]")
-            }
-            self.teleprompterWorkItems.append(item)
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
-            delay += 0.08
+            packets.append(pkt)
+            descs.append("Auth [\(idx + 1)/7]")
         }
-        delay += 0.4 // 对齐 teleprompter.py line 296
         
-        // 2. 动态下发 DisplayConfig (0x0E-20, seq 0x08, [8/25])
+        // [8] DisplayConfig (0x0E-20)
         var seq: UInt8 = 0x08
         var msgId: Int = 0x14
-        let pktDisplayConfig = G2ProtocolEncoder.buildDisplayConfig(seq: &seq, msgId: msgId)
+        packets.append(G2ProtocolEncoder.buildDisplayConfig(seq: &seq, msgId: msgId))
+        descs.append("DisplayConfig (0x0E-20)")
         msgId += 1
-        let itemCfg = DispatchWorkItem {
-            self.sendRawData(pktDisplayConfig, channel: .content, logDesc: "DisplayConfig [8/25] (0x0E-20)")
-        }
-        self.teleprompterWorkItems.append(itemCfg)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemCfg)
-        delay += 0.3 // 对齐 teleprompter.py line 308
         
-        // 3. 物理屏显提词器初始化 TeleprompterInit (0x06-20, seq 0x09, [9/25])
-        let initPackets = G2ProtocolEncoder.buildTeleprompterInit(seq: &seq, msgId: msgId, scrollModeAI: scrollModeAI)
+        // [9] TeleprompterInit (0x06-20)
+        let initPkts = G2ProtocolEncoder.buildTeleprompterInit(seq: &seq, msgId: msgId, scrollModeAI: scrollModeAI)
+        for pkt in initPkts {
+            packets.append(pkt)
+            descs.append("TeleprompterInit (0x06-20)")
+        }
         msgId += 1
-        for pkt in initPackets {
-            let itemInit = DispatchWorkItem {
-                self.sendRawData(pkt, channel: .content, logDesc: "TeleprompterInit [9/25] (0x06-20)")
-            }
-            self.teleprompterWorkItems.append(itemInit)
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemInit)
-            delay += 0.05
-        }
-        delay += 0.5 // 对齐 teleprompter.py line 314
         
-        // 4. 下发 14 页亮白全屏文本 Content Slices (seq 0x0A~, [10/25..23/25])
+        // [10+] 有效内容 Pages (仅发有效页, 不补齐空白, 对齐 §19.3 规范)
         for (i, pageText) in pages.enumerated() {
-            let pagePackets = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: msgId, pageNum: i, text: pageText)
-            msgId += 1
-            let currentPktIndex = 10 + i
-            for pkt in pagePackets {
-                let itemPkt = DispatchWorkItem {
-                    self.sendRawData(pkt, channel: .content, logDesc: "Page \(i) [\(currentPktIndex)/25]")
-                }
-                self.teleprompterWorkItems.append(itemPkt)
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemPkt)
-                delay += 0.04
+            let pagePkts = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: msgId, pageNum: i, text: pageText)
+            for pkt in pagePkts {
+                packets.append(pkt)
+                descs.append("Page \(i)")
             }
-            delay += 0.08
+            msgId += 1
         }
         
-        // 5. 触发 Sync Trigger (0x80-00)
-        let syncPkt = G2ProtocolEncoder.buildDashboardSync(seq: &seq, msgId: msgId)
-        msgId += 1
-        let itemSync = DispatchWorkItem {
-            self.sendRawData(syncPkt, channel: .content, logDesc: "Sync (0x06-20 dashboard sync)")
-        }
-        self.teleprompterWorkItems.append(itemSync)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemSync)
-        delay += 0.1
-        
-        // 6. UI Route Switch (0x09-20) 显存全亮切前台
-        let routePkt = G2ProtocolEncoder.buildRouteSwitch(seq: &seq, msgId: msgId)
-        msgId += 1
-        let itemRoute = DispatchWorkItem {
-            self.sendRawData(routePkt, channel: .content, logDesc: "Route Switch (0x09-20)")
-        }
-        self.teleprompterWorkItems.append(itemRoute)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemRoute)
-        delay += 0.15
-        
-        // 7. 补发 Svc 0x01-20 前台活跃心跳锁 (100% 对齐 bt3.pklg 抓包 Event #33, 强制激活 Touchpad 0x06-01 路由)
-        var heartbeatPkt = Data([0xAA, 0x21, seq, 0x12, 0x01, 0x01, 0x01, 0x20, 0x08, 0x02, 0x10, UInt8(msgId & 0x7F), 0x22, 0x0A, 0x1A, 0x08, 0x12, 0x06, 0x12, 0x04])
-        // 自动追加 2 字节尾部标记
-        heartbeatPkt.append(contentsOf: [0x08, 0x01])
-        seq = (seq + 1) & 0xFF
+        // [N-2] Pkt40 HUD 视口挂载 (Service 0x04-20, 对齐 §20.2)
+        packets.append(G2ProtocolEncoder.buildPkt40HUDMount(seq: &seq, msgId: msgId))
+        descs.append("HUD Mount (0x04-20)")
         msgId += 1
         
-        let itemHeartbeat = DispatchWorkItem {
-            self.sendRawData(heartbeatPkt, channel: .content, logDesc: "前台活跃心跳锁 (Svc 0x01-20)")
-        }
-        self.teleprompterWorkItems.append(itemHeartbeat)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemHeartbeat)
-        delay += 0.15
+        // [N-1] Pkt41 Touchpad 三路路由绑定 (Service 0x09-20, 对齐 §20.2)
+        packets.append(G2ProtocolEncoder.buildPkt41TouchpadRouter(seq: &seq, msgId: msgId))
+        descs.append("Touchpad Router (0x09-20)")
+        msgId += 1
         
-        let itemComplete = DispatchWorkItem {
-            self.addLog("✅ G2 物理屏显提词与前台焦点已锁定，Touchpad 0x06-01 触控已唤醒")
-        }
-        self.teleprompterWorkItems.append(itemComplete)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: itemComplete)
+        addLog("🚀 [Lock-Step 推屏序列] 开始发送 \(packets.count) 包提词报文 (ACK+200ms 超时保底, \(pages.count) 有效页)...")
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.1) {
-            self.isTeleprompterSessionActive = true
-            self.addLog("🎉 讲稿文本 1:1 标准推屏完成！视口对齐第 0 行。")
-        }
+        // 3. 注入 Lock-Step 引擎并启动 (复用 §20.1 ACK 驱动 + 200ms 超时保底机制)
+        self.bt3PendingPackets = packets
+        self.lockStepDescs = descs
+        self.bt3CurrentIndex = 0
+        sendNextBt3PacketInLockstep()
     }
     
     /// 手动发送退出提词器模式报文 (Service 0x06-20 type=4 state=4)

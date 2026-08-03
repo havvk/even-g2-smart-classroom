@@ -360,6 +360,30 @@ class G2ProtocolEncoder {
         return buildPacket(seq: &seq, serviceHi: 0x01, serviceLo: 0x20, payload: payload)
     }
     
+    // MARK: - Hardware Touch Activation (bt3.pklg Pkt 40/41)
+    
+    /// 生成 Service 0x04-20 HUD 视口渲染容器挂载报文 (100% 对齐 bt3.pklg Pkt 40)
+    static func buildPkt40HUDMount(seq: inout UInt8, msgId: Int) -> Data {
+        var payload = Data([0x08, 0x01, 0x10])
+        payload.append(encodeVarint(msgId))
+        payload.append(Data([0x1A, 0x08, 0x08, 0x00, 0x10, 0x00, 0x18, 0x00, 0x28, 0x01]))
+        return buildPacket(seq: &seq, serviceHi: 0x04, serviceLo: 0x20, payload: payload)
+    }
+    
+    /// 生成 Service 0x09-20 三路 Touchpad 手势路由绑定报文 (100% 对齐 bt3.pklg Pkt 41, 含完整 0/1/2 号路由表)
+    static func buildPkt41TouchpadRouter(seq: inout UInt8, msgId: Int) -> Data {
+        var payload = Data([0x08, 0x01, 0x10])
+        payload.append(encodeVarint(msgId))
+        // 完整 3 路 Touchpad 路由表 (将 0/1/2 号手势路由全部绑定到提词前台)
+        payload.append(Data([
+            0x1A, 0x1A, 0x52, 0x18,
+            0x0A, 0x06, 0x08, 0x00, 0x10, 0x00, 0x18, 0x00,
+            0x0A, 0x06, 0x08, 0x00, 0x10, 0x01, 0x18, 0x00,
+            0x0A, 0x06, 0x08, 0x00, 0x10, 0x02, 0x18, 0x00
+        ]))
+        return buildPacket(seq: &seq, serviceHi: 0x09, serviceLo: 0x20, payload: payload)
+    }
+    
     // MARK: - Legacy / UI Control Helpers
     
     /// 生成 0x06-20 Type 5 双向位置同步报文 (100% 对齐 teleprompter.py build_scroll_sync)
@@ -446,7 +470,7 @@ class G2ProtocolEncoder {
         return 1
     }
     
-    /// 将文本切分为 28 中文字符/行、10 行/页，并补齐为 14 页的数组
+    /// 将文本切分为 28 中文字符/行、10 行/页的数组 (短文本自动补齐至 14 页 Buffer 槽位)
     static func formatTextToPages(_ text: String, maxLineWidth: Int = 56, linesPerPage: Int = 10, targetPageCount: Int = 14) -> [String] {
         let cleanText = text.replacingOccurrences(of: "\\n", with: "\n")
         var wrappedLines = [String]()
@@ -489,7 +513,7 @@ class G2ProtocolEncoder {
             pages.append(chunk.joined(separator: "\n"))
         }
         
-        // 关键修补: G2 固件显存要求必须填充补齐至 14 页 Buffer 槽位，防止短文本丢页导致显存分配超时黑屏
+        // G2 固件显存要求: 短文本必须填充补齐至 14 页 Buffer 槽位
         let emptyPageText = Array(repeating: "", count: linesPerPage).joined(separator: "\n")
         while pages.count < targetPageCount {
             pages.append(emptyPageText)
