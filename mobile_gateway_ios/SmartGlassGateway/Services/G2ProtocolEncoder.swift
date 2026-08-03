@@ -231,7 +231,7 @@ class G2ProtocolEncoder {
         msgId += 1
         pkts.append(buildPacket(seq: &seq, serviceHi: 0x03, serviceLo: 0x20, payload: Data(s03Payload)))
         
-        // 3. Service 0x0C-20 (bt3.pklg 包 #07)
+        // 3. Service 0x0C-20 (bt3.pklg 包 #07) — 激活 Display 显示通道
         let s0cPayload: [UInt8] = [
             0x08, 0x02,
             0x10, UInt8(msgId & 0x7F),
@@ -239,6 +239,39 @@ class G2ProtocolEncoder {
         ]
         msgId += 1
         pkts.append(buildPacket(seq: &seq, serviceHi: 0x0C, serviceLo: 0x20, payload: Data(s0cPayload)))
+        
+        // 4. Service 0x30-20 (bt3.pklg 包 #08) — 系统模式切换与权限响应
+        let s30Payload: [UInt8] = [
+            0x08, 0x01,
+            0x10, UInt8(msgId & 0x7F),
+            0x1A, 0x04, 0x08, 0x01, 0x10, 0x00
+        ]
+        msgId += 1
+        pkts.append(buildPacket(seq: &seq, serviceHi: 0x30, serviceLo: 0x20, payload: Data(s30Payload)))
+        
+        // 5. Service 0x0D-20 (bt3.pklg 包 #09) — 状态同步指示
+        let s0dPayload: [UInt8] = [
+            0x08, 0x00
+        ]
+        pkts.append(buildPacket(seq: &seq, serviceHi: 0x0D, serviceLo: 0x20, payload: Data(s0dPayload)))
+        
+        // 6. Service 0x1F-20 (bt3.pklg 包 #10) — 系统焦点状态绑定 (注册触控中断)
+        let s1fPayload: [UInt8] = [
+            0x08, 0x00,
+            0x10, UInt8(msgId & 0x7F),
+            0x1A, 0x02, 0x08, 0x00
+        ]
+        msgId += 1
+        pkts.append(buildPacket(seq: &seq, serviceHi: 0x1F, serviceLo: 0x20, payload: Data(s1fPayload)))
+        
+        // 7. Service 0x10-20 (bt3.pklg 包 #11) — App 界面挂载通知
+        let s10Payload: [UInt8] = [
+            0x08, 0x01,
+            0x10, UInt8(msgId & 0x7F),
+            0x1A, 0x02, 0x08, 0x01
+        ]
+        msgId += 1
+        pkts.append(buildPacket(seq: &seq, serviceHi: 0x10, serviceLo: 0x20, payload: Data(s10Payload)))
         
         return pkts
     }
@@ -382,6 +415,14 @@ class G2ProtocolEncoder {
             0x0A, 0x06, 0x08, 0x00, 0x10, 0x02, 0x18, 0x00
         ]))
         return buildPacket(seq: &seq, serviceHi: 0x09, serviceLo: 0x20, payload: payload)
+    }
+    
+    /// 生成 Service 0x1F-20 触控板物理中断使能报文 (100% 对齐 bt3.pklg Pkt 10, enable=1)
+    static func buildPkt42TouchpadInterruptEnable(seq: inout UInt8, msgId: Int) -> Data {
+        var payload = Data([0x08, 0x00, 0x10])
+        payload.append(encodeVarint(msgId))
+        payload.append(Data([0x1A, 0x02, 0x08, 0x01]))
+        return buildPacket(seq: &seq, serviceHi: 0x1F, serviceLo: 0x20, payload: payload)
     }
     
     // MARK: - Legacy / UI Control Helpers

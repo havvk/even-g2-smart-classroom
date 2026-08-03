@@ -598,14 +598,13 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     }
     
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
-        let uuidSuffix = String(characteristic.uuid.uuidString.suffix(4))
         if let error = error {
-            addLog("❌ ⬆️ [TX 发送异常] [\(uuidSuffix)]: \(error.localizedDescription)")
-        } else {
-            addLog("✅ ⬆️ [TX 发送成功] G2 已确认 [\(uuidSuffix)]")
+            addLog("⚠️ 写特征回调返回 Error: \(error.localizedDescription)")
         }
     }
-    /// 接收并解析从 G2 眼镜收到的原始蓝牙数据帧 (100% 依据 bt2.pklg 精准解析 Service 06-01 触控切页 Notify 与 ACK 确认)
+    
+    // MARK: - G2 Protocol RX Parsing Logic
+    
     private func processReceivedG2Data(_ data: Data) {
         guard data.count >= 4 else { return }
         let hexString = data.map { String(format: "%02X", $0) }.joined(separator: " ")
@@ -620,67 +619,76 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             let sLo = relativeData[7]
             let svcStr = String(format: "%02X-%02X", sHi, sLo)
             
-        // 动态全量匹配 Svc 06-01 / Tag 0x52 / Tag 0x5A 触控与页码
-        var rawLine: Int? = nil
-        var isTouchGesture: Bool = false
-        var eventTypeStr: String = "📺 屏幕物理渲染对齐"
-        
-        // 1. 解析 Tag 0x52 (0x52 0x02 0x08 [Line]) -> 物理抓包铁证: 屏幕静止/自动滚动时的 rendering Telemetry 心跳
-        if let idx52 = data.range(of: Data([0x52, 0x02, 0x08]))?.lowerBound {
-            let lineIdx = idx52 + 3
-            if lineIdx < data.count {
-                rawLine = Int(data[lineIdx])
-            }
-        }
-        
-        // 2. 解析 Tag 0x5A -> 用户物理手指按压/滑动镜腿产生的手势中断 (两阶段上报)
-        if let idx5A = data.range(of: Data([0x5A]))?.lowerBound {
-            let after5A = idx5A + 1
-            if after5A < data.count {
-                let subLen = Int(data[after5A])
-                // Phase-2: 21B 长包 (5A 04 08 [Code] 10 [Line]) -> 手势位移结算对齐
-                if subLen >= 4 && after5A + 4 < data.count {
-                    let evt = data[after5A + 2]
-                    isTouchGesture = true
-                    eventTypeStr = "👆 镜腿手势(Code:\(evt))"
-                    if data[after5A + 3] == 0x10 {
-                        rawLine = Int(data[after5A + 4])
+            // 显式拦截并解析 Svc 06-01 提词遥测与 Touchpad 手势 Notify
+            if sHi == 0x06 && sLo == 0x01 {
+                var rawLine: Int? = nil
+                var isTouchGesture = false
+                var eventTypeStr = "📺 屏显对齐"
+                
+                // Tag 0x52 (Type 164 - 视口渲染/页面对齐) E.g. ... 52 [PageNum] ...
+                if let idx52 = data.range(of: Data([0x52]))?.lowerBound {
+                    if idx52 + 1 < data.count {
+                        let page = Int(data[idx52 + 1])
+                        rawLine = page * 10
+                        eventTypeStr = "📺 屏幕渲染对齐 (Page \(page))"
                     }
-                } 
-                // Phase-1: 19B 短包 (5A 02 08 [Code]) -> 手势动作发起通知
-                else if subLen == 2 && after5A + 2 < data.count {
-                    let evt = data[after5A + 2]
+                }
+                
+                // Tag 0x5A (Type 165 - Touchpad 滑动手势)
+                if let idx5A = data.range(of: Data([0x5A]))?.lowerBound {
                     isTouchGesture = true
-                    eventTypeStr = "👆 镜腿手势发起(Code:\(evt))"
+                    if idx5A + 4 < data.count && data[idx5A + 3] == 0x10 {
+                        rawLine = Int(data[idx5A + 4])
+                        eventTypeStr = "👆 镜腿手势滑动"
+                    } else if idx5A + 3 < data.count && data[idx5A + 2] == 0x10 {
+                        rawLine = Int(data[idx5A + 3])
+                        eventTypeStr = "👆 镜腿手势滑动"
+                    } else {
+                        eventTypeStr = "👆 镜腿手势触发"
+                    }
                 }
-            }
-        }
-        
-        if let line = rawLine, line >= 0 && line <= 200 {
-            DispatchQueue.main.async {
-                self.currentFocusPageLine = line
-                self.lastGestureReceived = "\(eventTypeStr) -> L\(line)"
-                if isTouchGesture {
-                    self.addLog("🎯 👆 [RX 镜腿手势触发] \(eventTypeStr) | 视口跳至第 \(line) 行")
+                
+                // Tag 0x72 (Type 167 - 页界拉取请求) E.g. ... 72 02 10 [PageNum] ...
+                if let idx72 = data.range(of: Data([0x72]))?.lowerBound {
+                    isTouchGesture = true
+                    if idx72 + 3 < data.count {
+                        let page = Int(data[idx72 + 3])
+                        rawLine = page * 10
+                        eventTypeStr = "📄 触及页界请求 (Page \(page))"
+                    }
+                }
+                
+                if let line = rawLine, line >= 0 && line <= 200 {
+                    DispatchQueue.main.async {
+                        self.currentFocusPageLine = line
+                        self.lastGestureReceived = "\(eventTypeStr) -> L\(line)"
+                        self.addLog("🎯 👆 [RX 06-01 遥测/手势] \(eventTypeStr) | 视口位于第 \(line) 行")
+                    }
                 } else {
-                    self.addLog("📺 ⬇️ [RX 屏显心跳对齐] 保持静止渲染 | 当前屏幕停留在第 \(line) 行")
+                    DispatchQueue.main.async {
+                        self.addLog("🎯 👆 [RX 06-01 遥测/手势] \(eventTypeStr) | [\(hexString)]")
+                    }
                 }
+                onG2TelemetryLog?("Rx", hexString, "06-01 Telemetry: \(eventTypeStr)")
+                return
             }
-            onG2TelemetryLog?("Rx", hexString, "Viewport Sync: \(eventTypeStr) Line \(line)")
-            return
-        }
             
-            // 2. 显示眼镜返回的 ACK / 确认数据包
+            // 显示眼镜返回的 ACK / 确认数据包
             if magic == 0x12 {
                 // 检测心跳回响: payload 含 "08 0E ... 6A" 特征 → 不触发 Lock-Step 步进
                 let isHeartbeatEcho = relativeData.count > 8 && relativeData[8] == 0x08 && relativeData[9] == 0x0E
                     && relativeData.range(of: Data([0x6A, 0x00])) != nil
                 
+                // Lock-Step 只响应 Svc 80-xx (Auth/Session 确认), 忽略 C7-01 股票等非 Session 包
+                let isSessionAck = sHi == 0x80
+                
                 if isHeartbeatEcho {
                     addLog("💓 [RX 心跳回响] Svc \(svcStr) (不触发 Lock-Step): [\(hexString)]")
-                } else {
+                } else if isSessionAck {
                     addLog("⬇️ [RX 确认接收] Svc \(svcStr) 确认包: [\(hexString)]")
                     onGlassAckReceivedForBt3Lockstep()
+                } else {
+                    addLog("📡 [RX 非 Session 包] Svc \(svcStr) (不触发 Lock-Step): [\(hexString)]")
                 }
                 return
             }
@@ -829,4 +837,3 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         // 静默禁用高频 HUD 全量重推
     }
 }
-
