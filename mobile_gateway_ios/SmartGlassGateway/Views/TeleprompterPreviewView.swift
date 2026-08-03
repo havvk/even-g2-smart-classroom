@@ -311,7 +311,15 @@ struct TeleprompterPreviewView: View {
     
     private func syncLineToGlasses(lineIndex: Int) {
         guard bleManager.isConnected else { return }
-        bleManager.sendScrollSync(lineIndex: lineIndex)
+        
+        if bleManager.isTeleprompterSessionActive {
+            // ✅ 场景 1：眼镜正处于提词模式 -> 极速发送 1 包位置同步 (0 延迟跟随)
+            bleManager.sendScrollSync(lineIndex: lineIndex)
+        } else if !bleManager.isPushingText {
+            // ⚠️ 场景 2：眼镜已被用户退出或处于桌面 -> 智能自动唤醒点屏，并直接跳转至 lineIndex
+            bleManager.addLog("💡 [智能唤醒] 检测到眼镜当前不在提词模式，手机滑动自动重新唤醒点亮 MicroLED 物理屏，并定位至第 \(lineIndex) 行...")
+            bleManager.sendTeleprompterText(script.content, targetWidthChars: Int(widthChars), scrollModeAI: false, startLine: lineIndex)
+        }
     }
     
     private func triggerPushToGlasses(scrollProxy: ScrollViewProxy?) {

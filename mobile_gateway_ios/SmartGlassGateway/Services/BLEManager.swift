@@ -326,7 +326,8 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     
     // 独立握手已废弃，统一由 sendTeleprompterText 自包含串行下发 Auth 鉴权序列
     
-    private var isTeleprompterSessionActive: Bool = false
+    @Published var isTeleprompterSessionActive: Bool = false
+    @Published var isPushingText: Bool = false
     private var teleprompterWorkItems: [DispatchWorkItem] = []
     @Published var lastSentTeleprompterText: String = ""
     
@@ -351,6 +352,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         lastSentTeleprompterText = ""
         isTeleprompterSessionActive = false
+        isPushingText = false
     }
     
     private func hexToData(_ hex: String) -> Data {
@@ -460,15 +462,21 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     
     private var lastBt3SendTime: Date = Date.distantPast
     
+    private var targetStartLine: Int = 0
+    
     /// 下发当前 Lock-step 队列中的下一包物理帧 (ACK 驱动 + 120ms 物理间隔保护 + 250ms 超时保底)
     private func sendNextBt3PacketInLockstep() {
         bt3TimeoutWorkItem?.cancel()
         
         let totalCount = bt3PendingPackets.count
         guard bt3CurrentIndex < totalCount else {
+            self.isPushingText = false
             self.isTeleprompterSessionActive = true
             addLog("✅ G2 物理屏显提词与前台焦点已锁定，Touchpad 0x06-01 触控已唤醒")
-            addLog("🎉 [Lock-step] \(totalCount) 包全部下发完成！视口对齐第 0 行。")
+            addLog("🎉 [Lock-step] \(totalCount) 包全部下发完成！视口对齐第 \(self.targetStartLine) 行。")
+            if self.targetStartLine > 0 {
+                self.sendScrollSync(lineIndex: self.targetStartLine)
+            }
             return
         }
         
@@ -514,7 +522,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     }
     
     /// 动态编码并推送讲稿文本到 G2 眼镜 (Lock-Step ACK 驱动步进, 对齐 §20.1 规范)
-    func sendTeleprompterText(_ rawText: String, targetWidthChars: Int = 28, scrollModeAI: Bool = true) {
+    func sendTeleprompterText(_ rawText: String, targetWidthChars: Int = 28, scrollModeAI: Bool = true, startLine: Int = 0) {
         guard isConnected else {
             addLog("⚠️ 蓝牙未连接，请先连接 G2 眼镜")
             return
@@ -524,11 +532,19 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             return
         }
         
+        // 临界保护：若当前正在发包，仅更新目标对齐行，禁止中途打断序列致使 MicroLED 死锁黑屏
+        if isPushingText {
+            self.targetStartLine = startLine
+            return
+        }
+        
         // 1. 取消正在执行的任务与重置状态
         cancelPendingTeleprompterTasks()
-        self.currentFocusPageLine = 0
+        self.isPushingText = true
+        self.targetStartLine = startLine
+        self.currentFocusPageLine = startLine
         DispatchQueue.main.async {
-            self.currentFocusPageLine = 0
+            self.currentFocusPageLine = startLine
         }
         
         let pages = G2ProtocolEncoder.formatTextToPages(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: 10)
@@ -667,37 +683,53 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                 var isTouchGesture = false
                 var eventTypeStr = "📺 屏显对齐"
                 
-                // Tag 0x52 (Type 164 - 视口渲染/页面对齐) E.g. ... 52 [PageNum] ...
-                if let idx52 = data.range(of: Data([0x52]))?.lowerBound {
-                    if idx52 + 1 < data.count {
-                        let page = Int(data[idx52 + 1])
-                        rawLine = page
-                        eventTypeStr = "📺 屏幕渲染对齐 (Page \(page) | 视口位于第 \(page) 行)"
+                // 嵌套二进制 Protobuf 字段解析助手: 从 payload 切片中提取 Tag 0x08 (Page 页码, 默认0) 与 Tag 0x10 (Line 页内行号, 默认0)
+                func parsePageAndLine(in slice: Data) -> (page: Int, line: Int) {
+                    var pageVal = 0
+                    var lineVal = 0
+                    
+                    if let idx08 = slice.range(of: Data([0x08]))?.lowerBound, idx08 + 1 < slice.count {
+                        pageVal = Int(slice[idx08 + 1])
                     }
+                    if let idx10 = slice.range(of: Data([0x10]))?.lowerBound, idx10 + 1 < slice.count {
+                        lineVal = Int(slice[idx10 + 1])
+                    }
+                    return (pageVal, lineVal)
+                }
+                
+                // Tag 0x52 (Type 164 - 视口渲染/页面对齐)
+                if let idx52 = data.range(of: Data([0x52]))?.lowerBound {
+                    let len = idx52 + 1 < data.count ? Int(data[idx52 + 1]) : 0
+                    let endIdx = min(data.count, idx52 + 2 + len)
+                    let sub = data.subdata(in: min(data.count, idx52 + 2)..<endIdx)
+                    let (page, line) = parsePageAndLine(in: sub)
+                    let totalLine = page * 10 + line
+                    rawLine = totalLine
+                    eventTypeStr = "📺 屏幕渲染对齐 (Page \(page), Line \(line))"
                 }
                 
                 // Tag 0x5A (Type 165 - Touchpad 滑动手势)
                 if let idx5A = data.range(of: Data([0x5A]))?.lowerBound {
                     isTouchGesture = true
-                    if idx5A + 4 < data.count && data[idx5A + 3] == 0x10 {
-                        rawLine = Int(data[idx5A + 4])
-                        eventTypeStr = "👆 镜腿手势滑动"
-                    } else if idx5A + 3 < data.count && data[idx5A + 2] == 0x10 {
-                        rawLine = Int(data[idx5A + 3])
-                        eventTypeStr = "👆 镜腿手势滑动"
-                    } else {
-                        eventTypeStr = "👆 镜腿手势触发"
-                    }
+                    let len = idx5A + 1 < data.count ? Int(data[idx5A + 1]) : 0
+                    let endIdx = min(data.count, idx5A + 2 + len)
+                    let sub = data.subdata(in: min(data.count, idx5A + 2)..<endIdx)
+                    let (page, line) = parsePageAndLine(in: sub)
+                    let totalLine = page * 10 + line
+                    rawLine = totalLine
+                    eventTypeStr = "👆 镜腿手势滑动 (Page \(page), Line \(line))"
                 }
                 
-                // Tag 0x72 (Type 167 - 页界拉取请求) E.g. ... 72 02 10 [PageNum] ...
+                // Tag 0x72 (Type 167 - 视口/页界拉取请求)
                 if let idx72 = data.range(of: Data([0x72]))?.lowerBound {
                     isTouchGesture = true
-                    if idx72 + 3 < data.count {
-                        let page = Int(data[idx72 + 3])
-                        rawLine = page
-                        eventTypeStr = "📄 触及页界请求 (Page \(page))"
-                    }
+                    let len = idx72 + 1 < data.count ? Int(data[idx72 + 1]) : 0
+                    let endIdx = min(data.count, idx72 + 2 + len)
+                    let sub = data.subdata(in: min(data.count, idx72 + 2)..<endIdx)
+                    let (page, line) = parsePageAndLine(in: sub)
+                    let totalLine = page * 10 + line
+                    rawLine = totalLine
+                    eventTypeStr = "📄 视口页界触及 (Line \(totalLine))"
                 }
                 
                 if let line = rawLine, line >= 0 && line <= 200 {
