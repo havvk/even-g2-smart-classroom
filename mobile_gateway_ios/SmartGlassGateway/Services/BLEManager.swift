@@ -590,16 +590,27 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             return
         }
         
-        // 🎯 当处于活跃提词会话时：先下发 state=4 释放旧提词窗口，重置 Auth 鉴权 Token，并在 300ms 延时后执行全新冷启动挂载
+        // 🎯 §23.2: 活跃 Session → 发 state=4 退出 → 等 0x0D-01 Session Terminated → 150ms 后全新推流
         if isTeleprompterSessionActive {
-            addLog("🔄 检测到活跃提词会话，下发 state=4 释放旧画布，重置 Auth 鉴权 Token，并在 300ms 后重新挂载新讲稿...")
-            self.sendExitTeleprompterMode()
-            self.hasAuthBeenDoneForCurrentConnection = false
-            self.isTeleprompterSessionActive = false
+            addLog("🔄 检测到活跃提词会话，下发 state=4 退出，等待眼镜 Session Terminated 确认后重推...")
+            cancelPendingTeleprompterTasks()
             
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.300) { [weak self] in
+            // 注册待推送任务 (收到 0x0D-01 后由 processReceivedG2Data L784 回调触发)
+            self.pendingRePushTask = { [weak self] in
                 self?.sendTeleprompterText(rawText, targetWidthChars: targetWidthChars, scrollModeAI: scrollModeAI, startLine: startLine)
             }
+            
+            // 1500ms 超时保底：如果眼镜没有回复 Session Terminated，强制推送
+            let timeoutItem = DispatchWorkItem { [weak self] in
+                guard let self = self, self.pendingRePushTask != nil else { return }
+                self.pendingRePushTask = nil
+                self.addLog("⚠️ 等待 Session Terminated 超时 (1500ms)，强制启动新推送...")
+                self.sendTeleprompterText(rawText, targetWidthChars: targetWidthChars, scrollModeAI: scrollModeAI, startLine: startLine)
+            }
+            self.rePushTimeoutWorkItem = timeoutItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.500, execute: timeoutItem)
+            
+            self.sendExitTeleprompterMode()
             return
         }
         

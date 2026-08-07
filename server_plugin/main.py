@@ -166,9 +166,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         # 静默过滤眼镜固件高频 IMU 姿态/ACK 采样上报
                         pass
                     elif direction == "Tx":
-                        print(f"\033[96m📤 [手机下发指令 (Tx)] {desc} | HEX: [{hex_bytes}]\033[0m")
+                        print(f"\033[96m📤 [手机下发指令 (Tx)] {desc} | HEX: [{hex_bytes}]\033[0m", flush=True)
                     else:
-                        print(f"\033[93mℹ️ [G2 BLE 系统日志] {desc}\033[0m")
+                        print(f"\033[93mℹ️ [G2 BLE 系统日志] {desc}\033[0m", flush=True)
                 elif msg_type == "PAGE_CONTROL":
                     action = data.get("action", "NEXT")
                     target_page = data.get("target_page")
