@@ -350,9 +350,9 @@ message DisplayPowerWakeSetup { // Service 0x04-20 (MicroLED 光学引擎总线�
 - **物理规范**：`TeleprompterContent` 按需下发实际页数（Page 0..N-1），每页包含最多 10 行 UTF-8 文本；`TeleprompterComplete` 中的 `total_pages` 与 `total_lines` 填入实际下发的页数与行数即可，无需填充假空行。
 - **渲染基准**：显示排版基准为 `display_width = 59` (全屏模式)，每行最多 28 汉字。
 
-### 5️⃣ 关键点五：GPU VSYNC Sync Trigger 物理刷屏脉冲 (`0x80-00` Type 14)
-- **根因**：MicroLED 显示芯片采用后台双缓冲，下发完文本后画面保存在后台 Buffer。
-- **解决方案**：在流水线末尾下发 `SyncMessage` (`0x80-00` Type 14)，触发 VSYNC 脉冲将后台 Buffer 翻转渲染至前台 MicroLED 屏上。
+### 5️⃣ 关键点五：Render Commit 渲染提交信号 (`0x80-00` Type 14)
+- **机制**：G2 MCU 为单会话不可覆写设计——内容只能在会话初始化阶段批量灌入，灌入完成后通过 `SyncMessage` (`0x80-00` Type 14) 发出渲染提交信号，MCU 收到后将已接收的全部 Page 数据一次性渲染至 MicroLED 屏上。
+- **⚠️ 勘误**：早期分析曾将此包描述为"双缓冲翻转"(framebuffer flip)，但实测与官方 APP 抓包 (§23) 证实 MCU 不支持在活跃 Session 内直接覆写或热替换文本内容——不存在"预填充后台 Buffer 再翻转"的能力。切换文本的唯一路径是完整的 Session 销毁→重建闭环 (§23.2)。
 
 ---
 
@@ -636,9 +636,10 @@ seq 68:    Teleprompter State (type=4, state=4) ← 🚨 物理退出/关闭提�
 
 ## 16. 双向滚动与位置同步实测突破归档 (2026-08-02 100% 完整实测版) 🆕
 
-### 16.1 屏显上电与 14 页显存 Buffer 硬性约束
-- **黑屏根因**：G2 眼镜固件在收到 `Service 0x09-20` 路由切页前台前，**强制要求显存必须收到 14 个完整 Content 页（14 Pages）** 的 Buffer 空间分配。
-- **物理填补规则**：若实际讲稿仅切分出 2~3 页，必须在末尾通过 `\n` 换行符填充补齐至 14 个物理 Page。缺失补齐会导致固件 MicroLED 渲染引擎等待显存分配而拒绝上电保持黑屏。
+### 16.1 屏显上电与 14 页 Content Buffer 硬性约束
+- **黑屏根因**：G2 眼镜固件在收到 `Service 0x09-20` 路由切页前台前，**强制要求 Session 初始化阶段必须收到 14 个完整 Content 页（14 Pages）** 的数据灌入。
+- **物理填补规则**：若实际讲稿仅切分出 2~3 页，必须在末尾通过 `\n` 换行符填充补齐至 14 个物理 Page。缺失补齐会导致固件 MicroLED 渲染引擎等待数据就绪而拒绝上电保持黑屏。
+- **⚠️ 注意**：此 Buffer 为 Session 级别的一次性数据接收区，非可热替换的显存缓冲区。一旦 Render Commit (`0x80-00`) 后进入活跃 Session，内容不可覆写 (§23.1)。
 
 ### 16.2 触控板激活与 `Svc 0x01-20` 前台活跃心跳锁 (关键突破)
 - **底层阻断机制**：在 BLE 物理连接正常且能收到 `6402` (PCM 语音流) 的情况下，若滑动镜腿完全收不到 `5402` (`0x06-01`) 的 Notify，是因为眼镜处于系统主菜单/语音交互态，固件未将 Touchpad 事件分发给提词应用。
@@ -1210,10 +1211,12 @@ AA 12 60 06 01 01 0D 01 08 01 1A 00 [CRC16]
 
 1. **强行在活跃 Session 下发 0x30-20 / Setup 信令**：
    - 现象：MicroLED 光机瞬间**黑屏**；
-   - 根因：`0x30-20 System Mode` 会强行将硬件模式切回 Mode 1 初始电平，造成显存与光机芯片复位断电。
+   - 根因：在旧 Session 尚未销毁时发送 `0x30-20 System Mode`，导致 MCU 状态机冲突（活跃渲染态与模式初始化态并发）。**核心问题是时序而非缓冲区** —— `0x30-20` 在 Session Terminated 之后发送完全正常。
+   - 正确做法：必须先等待 `0x0D-01 Session Terminated` 确认，再发送包含 `0x30-20` 的完整 Setup 序列 (§23.2)。
 2. **重推时漏重置 `isPushingText` 标记**：
    - 现象：不关蓝牙无法第二次推送；
    - 根因：首次发包完成后 `isPushingText` 锁未复位，后续推送全部被 `if isPushingText { return }` 拦截抛弃。
 3. **BLE Sequence 序列号倒退 (Rollback)**：
    - 现象：推送第二篇讲稿时眼镜显示 `Session Terminated`；
-   - 根因：固件校验发现新包 Seq 小于上一包 Seq，触发底层断开防护。必须保持全局 `teleprompterSeq` 严格单调递增。
+   - 根因：固件校验发现新包 Seq 小于上一包 Seq，触发底层断开防护。
+   - ⚠️ 补充：经 §23.2 验证，MCU 收到 `0x0D-01 Session Terminated` 后会重置 Seq 计数器，因此重推时从 Seq=1 重新开始是安全的（官方 APP 的 Auth 7 包即从 Seq=1 起始）。

@@ -680,9 +680,10 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         descs.append("Touchpad Router -> Teleprompter (0x09-20)")
         msgId += 1
         
-        // 6. 0x80-00 Flush Commit (显存双缓冲翻转点亮 MicroLED)
-        packets.append(G2ProtocolEncoder.buildFlushCommit(seq: &seq, msgId: msgId))
-        descs.append("0x80-00 Flush Commit (显存双缓存翻转)")
+        // 6. 0x80-00 Render Commit (渲染提交信号，触发 MicroLED 点亮)
+        let pktSync = G2ProtocolEncoder.buildFlushCommit(seq: &seq, msgId: msgId)
+        packets.append(pktSync)
+        descs.append("0x80-00 Render Commit")
         msgId += 1
         
         // 7. Line 0 ScrollSync (0x06-20 Type 165) 视口强行对齐第 0 行
@@ -702,7 +703,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         sendNextBt3PacketInLockstep()
     }
     
-    /// 手动发送退出提词器模式报文 (Service 0x06-20 type=4 state=4 + 0x80-00 Flush Commit 显存释放)
+    /// 手动发送退出提词器模式报文 (Service 0x06-20 type=4 state=4 + 0x80-00 Render Commit)
     func sendExitTeleprompterMode() {
         guard isConnected else { return }
         self.isWaitingForSessionTeardown = true
@@ -718,12 +719,12 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         let pktCommit = G2ProtocolEncoder.buildFlushCommit(seq: &seq, msgId: msgId)
         msgId += 1
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.050) {
-            self.sendRawData(pktCommit, channel: .content, logDesc: "0x80-00 Flush Commit 显存释放")
+            self.sendRawData(pktCommit, channel: .content, logDesc: "0x80-00 Render Commit")
         }
         
         self.teleprompterSeq = seq
         self.teleprompterMsgId = msgId
-        addLog("🛑 已发送 0x06-20 state=4 及 0x80-00 Flush 显存释放指令")
+        addLog("🛑 已发送 0x06-20 state=4 及 0x80-00 Render Commit 指令")
     }
     
     /// 向眼镜下发 0x0D-20 状态查询信令，主动查询眼镜当前是否处于提词模式

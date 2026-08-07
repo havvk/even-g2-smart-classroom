@@ -345,7 +345,7 @@ class G2ProtocolEncoder {
         return buildPacket(seq: &seq, serviceHi: 0x80, serviceLo: 0x00, payload: payload)
     }
     
-    /// 触发 Service 0x80-00 双缓冲区翻转与显存 Flush Commit 提交 (Pkt 42 对齐: 解决黑屏的根源)
+    /// 触发 Service 0x80-00 Render Commit 渲染提交信号 (Pkt 42 对齐: MCU 收到后将已接收的 Page 数据一次性渲染至 MicroLED)
     static func buildFlushCommit(seq: inout UInt8, msgId: Int) -> Data {
         let payload = Data([
             0x08, 0x0E,
