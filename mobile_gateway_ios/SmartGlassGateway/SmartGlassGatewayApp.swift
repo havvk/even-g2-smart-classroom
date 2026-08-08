@@ -45,22 +45,33 @@ struct SmartGlassGatewayApp: App {
                 self.bleManager.lastGestureReceived = "\(source): \(action)"
                 self.bleManager.addLog("⌚️ [Watch触控板/手势] 动作=\(action), 来源=\(source)")
                 
+                let ensureActiveSessionAndScroll: (Int) -> Void = { targetLine in
+                    if !self.bleManager.isTeleprompterSessionActive {
+                        let activeScript = self.webSocketClient.currentPayload?.scriptText ?? "Even G2 智慧课堂提词准备就绪\n第一行：滑动或单击手表滚动提词\n第二行：双击手表卡片切换显存休眠\n第三行：实时语音跟随中..."
+                        self.bleManager.sendTeleprompterText(activeScript, startLine: targetLine)
+                    } else {
+                        self.bleManager.sendScrollSync(lineIndex: targetLine)
+                    }
+                }
+                
                 switch action {
                 case "SINGLE_TAP":
                     // 单击：确认 / 推进提词器 1 行
                     let nextLine = self.bleManager.currentFocusPageLine + 1
                     self.bleManager.currentFocusPageLine = nextLine
                     if self.bleManager.isConnected {
-                        self.bleManager.sendScrollSync(lineIndex: nextLine)
+                        ensureActiveSessionAndScroll(nextLine)
                     }
                     
                 case "DOUBLE_TAP":
-                    // 双击：切换 HUD 屏幕显存休眠/唤醒
-                    let isActive = self.bleManager.isDebugOverrideMode
-                    if isActive {
-                        self.bleManager.sleepHUD()
-                    } else {
-                        self.bleManager.wakeHUD()
+                    // 双击：若当前处于提词 App 则退出回表盘；若在表盘则自动拉起提词 App！
+                    if self.bleManager.isConnected {
+                        if self.bleManager.isTeleprompterSessionActive {
+                            self.bleManager.sendExitTeleprompterMode()
+                        } else {
+                            let activeScript = self.webSocketClient.currentPayload?.scriptText ?? "Even G2 智慧课堂提词准备就绪\n第一行：滑动或单击手表滚动提词\n第二行：双击手表卡片切换显存休眠\n第三行：实时语音跟随中..."
+                            self.bleManager.sendTeleprompterText(activeScript, startLine: self.bleManager.currentFocusPageLine)
+                        }
                     }
                     
                 case "NEXT", "SWIPE_DOWN", "SWIPE_BACKWARD":
@@ -68,7 +79,7 @@ struct SmartGlassGatewayApp: App {
                     let nextLine = self.bleManager.currentFocusPageLine + 1
                     self.bleManager.currentFocusPageLine = nextLine
                     if self.bleManager.isConnected {
-                        self.bleManager.sendScrollSync(lineIndex: nextLine)
+                        ensureActiveSessionAndScroll(nextLine)
                     }
                     
                 case "PREV", "SWIPE_UP", "SWIPE_FORWARD":
@@ -76,7 +87,7 @@ struct SmartGlassGatewayApp: App {
                     let prevLine = max(0, self.bleManager.currentFocusPageLine - 1)
                     self.bleManager.currentFocusPageLine = prevLine
                     if self.bleManager.isConnected {
-                        self.bleManager.sendScrollSync(lineIndex: prevLine)
+                        ensureActiveSessionAndScroll(prevLine)
                     }
                     
                 default:
