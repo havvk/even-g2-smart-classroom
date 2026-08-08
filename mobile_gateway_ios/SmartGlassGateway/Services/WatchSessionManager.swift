@@ -57,13 +57,27 @@ class WatchSessionManager: NSObject, ObservableObject, WCSessionDelegate {
     var onAIChatTriggered: (() -> Void)?
     var onTranscribeTriggered: (() -> Void)?
     
-    /// 接收 Apple Watch 发来的翻页、显示控制与 AI 对话指令
+    // MARK: - WCSessionDelegate 消息/上下文 3 重可靠接收入口
     func session(_ session: WCSession, didReceiveMessage message: [String : Any]) {
-        guard let type = message["type"] as? String, type == "PAGE_CONTROL" else { return }
-        let action = message["action"] as? String ?? "NEXT"
-        let source = message["source"] as? String ?? "WATCH_TAP"
+        processIncomingWatchMessage(message)
+    }
+    
+    func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String : Any]) {
+        processIncomingWatchMessage(applicationContext)
+    }
+    
+    func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any]) {
+        processIncomingWatchMessage(userInfo)
+    }
+    
+    /// 统一解调 Apple Watch 发来的翻页、触控板模拟、显示控制与 AI 指令
+    private func processIncomingWatchMessage(_ data: [String: Any]) {
+        guard let type = data["type"] as? String, type == "PAGE_CONTROL" else { return }
+        let action = data["action"] as? String ?? "NEXT"
+        let source = data["source"] as? String ?? "WATCH_TAP"
         
         DispatchQueue.main.async {
+            NSLog("⌚️ [WatchSessionManager] Received Watch Gesture: %@ from %@", action, source)
             self.lastWatchGesture = "\(source): \(action)"
             
             if action == "SLEEP_HUD" {
