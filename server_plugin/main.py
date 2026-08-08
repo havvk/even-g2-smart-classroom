@@ -171,6 +171,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         print(f"\033[93mℹ️ [G2 BLE 系统日志] {desc}\033[0m", flush=True)
                 elif msg_type == "PAGE_CONTROL":
                     action = data.get("action", "NEXT")
+                    source = data.get("source", "UNKNOWN")
+                    print(f"\033[92m⌚️ [服务端收到手表/触控手势] 动作={action}, 来源={source}\033[0m", flush=True)
                     target_page = data.get("target_page")
                     # 执行翻页
                     slide_mgr.change_page(action, target_page)
