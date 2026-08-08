@@ -18,10 +18,16 @@ class WatchBLEGatewayService: NSObject, ObservableObject, WCSessionDelegate {
     }
     
     @Published var isHUDDisplayActive: Bool = true
+    @Published var currentTextSnippet: String = "眼镜提词器已准备就绪"
+    @Published var isTranscribing: Bool = false
     
     func sendDisplayToggle() {
         isHUDDisplayActive.toggle()
         sendPageControl(action: isHUDDisplayActive ? "WAKE_HUD" : "SLEEP_HUD", source: "WATCH_POWER_TOGGLE")
+    }
+    
+    func sendTouchpadEvent(gesture: String) {
+        sendPageControl(action: gesture, source: "WATCH_TOUCHPAD_SIMULATOR")
     }
     
     func sendAIChatTrigger() {
@@ -29,6 +35,7 @@ class WatchBLEGatewayService: NSObject, ObservableObject, WCSessionDelegate {
     }
     
     func sendTranscribeTrigger() {
+        isTranscribing.toggle()
         sendPageControl(action: "TOGGLE_TRANSCRIBE", source: "WATCH_TRANSCRIBE_BUTTON")
     }
     
@@ -42,7 +49,7 @@ class WatchBLEGatewayService: NSObject, ObservableObject, WCSessionDelegate {
         ]
         
         if WCSession.default.isReachable {
-            WCSession.default.sendMessage(message, replyHandler: nil, completionHandler: nil)
+            WCSession.default.sendMessage(message, replyHandler: nil, errorHandler: nil)
         } else {
             try? WCSession.default.updateApplicationContext(message)
         }
@@ -62,11 +69,27 @@ class WatchBLEGatewayService: NSObject, ObservableObject, WCSessionDelegate {
     }
     
     func session(_ session: WCSession, didReceiveMessage message: [String : Any]) {
-        guard let type = message["type"] as? String, type == "STATE_SYNC" else { return }
+        handleIncomingMessage(message)
+    }
+    
+    func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String : Any]) {
+        handleIncomingMessage(applicationContext)
+    }
+    
+    private func handleIncomingMessage(_ data: [String: Any]) {
         DispatchQueue.main.async {
-            self.currentPage = message["current_page"] as? Int ?? 1
-            self.totalPages = message["total_pages"] as? Int ?? 1
-            self.isServerOnline = message["is_connected"] as? Bool ?? false
+            if let page = data["current_page"] as? Int {
+                self.currentPage = page
+            }
+            if let total = data["total_pages"] as? Int {
+                self.totalPages = total
+            }
+            if let text = data["current_text"] as? String, !text.isEmpty {
+                self.currentTextSnippet = text
+            }
+            if let connected = data["is_connected"] as? Bool {
+                self.isServerOnline = connected
+            }
         }
     }
 }

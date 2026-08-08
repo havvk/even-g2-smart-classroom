@@ -10,3 +10,9 @@ mobile_gateway_ios/SmartGlassGateway.xcodeproj/project.xcworkspace/
 decompiled_app/
 extracted_assets/
 extracted_so/
+
+*.log
+diagnostics*
+mobile_gateway_ios/run_watch_tests
+mobile_gateway_ios/test_watch_runner.swift
+scripts/add_watch_target.py

@@ -21,14 +21,18 @@ class WatchSessionManager: NSObject, ObservableObject, WCSessionDelegate {
     
     /// 向 Apple Watch 推送当前 Slide 页码与状态
     func syncStateToWatch(currentPage: Int, totalPages: Int, isServerConnected: Bool) {
-        guard WCSession.isSupported(), WCSession.default.isReachable else { return }
+        guard WCSession.isSupported() else { return }
         let message: [String: Any] = [
             "type": "STATE_SYNC",
             "current_page": currentPage,
             "total_pages": totalPages,
             "is_connected": isServerConnected
         ]
-        WCSession.default.sendMessage(message, replyHandler: nil, errorHandler: nil)
+        if WCSession.default.isReachable {
+            WCSession.default.sendMessage(message, replyHandler: nil, errorHandler: nil)
+        } else {
+            try? WCSession.default.updateApplicationContext(message)
+        }
     }
     
     // MARK: - WCSessionDelegate

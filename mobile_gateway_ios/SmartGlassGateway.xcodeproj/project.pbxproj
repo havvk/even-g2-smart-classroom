@@ -8,50 +8,83 @@
 
 /* Begin PBXBuildFile section */
 		A10000012C50000100000001 /* SmartGlassGatewayApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000012C50000100000001 /* SmartGlassGatewayApp.swift */; };
-		A10000022C50000100000001 /* TeleprompterPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000022C50000100000001 /* TeleprompterPayload.swift */; };
-		A10000032C50000100000001 /* HUDLayoutAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000032C50000100000001 /* HUDLayoutAdapter.swift */; };
-		A10000042C50000100000001 /* BLEManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000042C50000100000001 /* BLEManager.swift */; };
-		A10000042C50000100000099 /* OfficialRawPkts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000042C50000100000099 /* OfficialRawPkts.swift */; };
-		A10000042C5000010000009A /* OfficialBt3Pkts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000042C5000010000009A /* OfficialBt3Pkts.swift */; };
-		A10000052C50000100000001 /* SpeechFollowEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000052C50000100000001 /* SpeechFollowEngine.swift */; };
-		A10000062C50000100000001 /* WebSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000062C50000100000001 /* WebSocketClient.swift */; };
-		A10000072C50000100000001 /* HUDPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000072C50000100000001 /* HUDPreviewView.swift */; };
-		A10000082C50000100000001 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000082C50000100000001 /* ContentView.swift */; };
-		A100000A2C50000100000001 /* WatchSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000A2C50000100000001 /* WatchSessionManager.swift */; };
-		A100000B2C50000100000001 /* ServerDiscoveryEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000B2C50000100000001 /* ServerDiscoveryEngine.swift */; };
+		A10000022C50000100000001 /* Models/TeleprompterPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000022C50000100000001 /* Models/TeleprompterPayload.swift */; };
+		A10000032C50000100000001 /* Services/HUDLayoutAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000032C50000100000001 /* Services/HUDLayoutAdapter.swift */; };
+		A10000042C50000100000001 /* Services/BLEManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000042C50000100000001 /* Services/BLEManager.swift */; };
+		A10000042C50000100000099 /* Services/OfficialRawPkts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000042C50000100000099 /* Services/OfficialRawPkts.swift */; };
+		A10000042C5000010000009A /* Services/OfficialBt3Pkts.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000042C5000010000009A /* Services/OfficialBt3Pkts.swift */; };
+		A10000052C50000100000001 /* Services/SpeechFollowEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000052C50000100000001 /* Services/SpeechFollowEngine.swift */; };
+		A10000062C50000100000001 /* Services/WebSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000062C50000100000001 /* Services/WebSocketClient.swift */; };
+		A10000072C50000100000001 /* Views/HUDPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000072C50000100000001 /* Views/HUDPreviewView.swift */; };
+		A10000082C50000100000001 /* Views/ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000082C50000100000001 /* Views/ContentView.swift */; };
+		A100000A2C50000100000001 /* Services/WatchSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000A2C50000100000001 /* Services/WatchSessionManager.swift */; };
+		A100000B2C50000100000001 /* Services/ServerDiscoveryEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000B2C50000100000001 /* Services/ServerDiscoveryEngine.swift */; };
 		A100000C2C50000100000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B100000C2C50000100000001 /* Assets.xcassets */; };
-		A100000D2C50000100000001 /* G2ProtocolEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000D2C50000100000001 /* G2ProtocolEncoder.swift */; };
-		A100000E2C50000100000001 /* G2DebugView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000E2C50000100000001 /* G2DebugView.swift */; };
-		A100000F2C50000100000001 /* ScriptItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000F2C50000100000001 /* ScriptItem.swift */; };
-		A10000102C50000100000001 /* ScriptStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000102C50000100000001 /* ScriptStorage.swift */; };
-		A10000112C50000100000001 /* ScriptEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000112C50000100000001 /* ScriptEditorView.swift */; };
-		A10000122C50000100000001 /* TeleprompterPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000122C50000100000001 /* TeleprompterPreviewView.swift */; };
-		A10000132C50000100000001 /* TeleprompterListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000132C50000100000001 /* TeleprompterListView.swift */; };
+		A100000D2C50000100000001 /* Services/G2ProtocolEncoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000D2C50000100000001 /* Services/G2ProtocolEncoder.swift */; };
+		A100000E2C50000100000001 /* Views/G2DebugView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000E2C50000100000001 /* Views/G2DebugView.swift */; };
+		A100000F2C50000100000001 /* SmartGlassGateway/Models/ScriptItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000F2C50000100000001 /* SmartGlassGateway/Models/ScriptItem.swift */; };
+		A10000102C50000100000001 /* SmartGlassGateway/Services/ScriptStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000102C50000100000001 /* SmartGlassGateway/Services/ScriptStorage.swift */; };
+		A10000112C50000100000001 /* SmartGlassGateway/Views/ScriptEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000112C50000100000001 /* SmartGlassGateway/Views/ScriptEditorView.swift */; };
+		A10000122C50000100000001 /* SmartGlassGateway/Views/TeleprompterPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000122C50000100000001 /* SmartGlassGateway/Views/TeleprompterPreviewView.swift */; };
+		A10000132C50000100000001 /* SmartGlassGateway/Views/TeleprompterListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000132C50000100000001 /* SmartGlassGateway/Views/TeleprompterListView.swift */; };
+		A20000012C50000100000001 /* SmartGlassWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000012C50000100000001 /* SmartGlassWatchApp.swift */; };
+		A20000022C50000100000001 /* Views/WatchContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000022C50000100000001 /* Views/WatchContentView.swift */; };
+		A20000032C50000100000001 /* Services/WatchBLEGatewayService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000032C50000100000001 /* Services/WatchBLEGatewayService.swift */; };
+		A20000042C50000100000001 /* SmartGlassWatch.app in CopyFiles */ = {isa = PBXBuildFile; fileRef = C20000002C50000100000001 /* SmartGlassWatch.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		A20000042C50000100000002 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B20000042C50000100000001 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		CR0000002C50000100000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = J10000002C50000100000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = G20000002C50000100000001;
+			remoteInfo = SmartGlassWatch;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		CP0000002C50000100000001 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				A20000042C50000100000001 /* SmartGlassWatch.app in CopyFiles */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
-		C10000002C50000100000001 /* SmartGlassGateway.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SmartGlassGateway.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B10000012C50000100000001 /* SmartGlassGatewayApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGatewayApp.swift; sourceTree = "<group>"; };
-		B10000022C50000100000001 /* TeleprompterPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/TeleprompterPayload.swift; sourceTree = "<group>"; };
-		B10000032C50000100000001 /* HUDLayoutAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/HUDLayoutAdapter.swift; sourceTree = "<group>"; };
-		B10000042C50000100000001 /* BLEManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/BLEManager.swift; sourceTree = "<group>"; };
-		B10000042C50000100000099 /* OfficialRawPkts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/OfficialRawPkts.swift; sourceTree = "<group>"; };
-		B10000042C5000010000009A /* OfficialBt3Pkts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/OfficialBt3Pkts.swift; sourceTree = "<group>"; };
-		B10000052C50000100000001 /* SpeechFollowEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/SpeechFollowEngine.swift; sourceTree = "<group>"; };
-		B10000062C50000100000001 /* WebSocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/WebSocketClient.swift; sourceTree = "<group>"; };
-		B10000072C50000100000001 /* HUDPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/HUDPreviewView.swift; sourceTree = "<group>"; };
-		B10000082C50000100000001 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ContentView.swift; sourceTree = "<group>"; };
-		B100000E2C50000100000001 /* G2DebugView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/G2DebugView.swift; sourceTree = "<group>"; };
-		B100000F2C50000100000001 /* ScriptItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGateway/Models/ScriptItem.swift; sourceTree = "<group>"; };
-		B10000102C50000100000001 /* ScriptStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGateway/Services/ScriptStorage.swift; sourceTree = "<group>"; };
-		B10000112C50000100000001 /* ScriptEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGateway/Views/ScriptEditorView.swift; sourceTree = "<group>"; };
-		B10000122C50000100000001 /* TeleprompterPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGateway/Views/TeleprompterPreviewView.swift; sourceTree = "<group>"; };
-		B10000132C50000100000001 /* TeleprompterListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGateway/Views/TeleprompterListView.swift; sourceTree = "<group>"; };
+		B10000022C50000100000001 /* Models/TeleprompterPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/TeleprompterPayload.swift; sourceTree = "<group>"; };
+		B10000032C50000100000001 /* Services/HUDLayoutAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/HUDLayoutAdapter.swift; sourceTree = "<group>"; };
+		B10000042C50000100000001 /* Services/BLEManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/BLEManager.swift; sourceTree = "<group>"; };
+		B10000042C50000100000099 /* Services/OfficialRawPkts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/OfficialRawPkts.swift; sourceTree = "<group>"; };
+		B10000042C5000010000009A /* Services/OfficialBt3Pkts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/OfficialBt3Pkts.swift; sourceTree = "<group>"; };
+		B10000052C50000100000001 /* Services/SpeechFollowEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/SpeechFollowEngine.swift; sourceTree = "<group>"; };
+		B10000062C50000100000001 /* Services/WebSocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/WebSocketClient.swift; sourceTree = "<group>"; };
+		B10000072C50000100000001 /* Views/HUDPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/HUDPreviewView.swift; sourceTree = "<group>"; };
+		B10000082C50000100000001 /* Views/ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ContentView.swift; sourceTree = "<group>"; };
 		B10000092C50000100000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		B100000A2C50000100000001 /* WatchSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/WatchSessionManager.swift; sourceTree = "<group>"; };
-		B100000B2C50000100000001 /* ServerDiscoveryEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/ServerDiscoveryEngine.swift; sourceTree = "<group>"; };
+		B100000A2C50000100000001 /* Services/WatchSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/WatchSessionManager.swift; sourceTree = "<group>"; };
+		B100000B2C50000100000001 /* Services/ServerDiscoveryEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/ServerDiscoveryEngine.swift; sourceTree = "<group>"; };
 		B100000C2C50000100000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		B100000D2C50000100000001 /* G2ProtocolEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/G2ProtocolEncoder.swift; sourceTree = "<group>"; };
+		B100000D2C50000100000001 /* Services/G2ProtocolEncoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/G2ProtocolEncoder.swift; sourceTree = "<group>"; };
+		B100000E2C50000100000001 /* Views/G2DebugView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/G2DebugView.swift; sourceTree = "<group>"; };
+		B100000F2C50000100000001 /* SmartGlassGateway/Models/ScriptItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGateway/Models/ScriptItem.swift; sourceTree = "<group>"; };
+		B10000102C50000100000001 /* SmartGlassGateway/Services/ScriptStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGateway/Services/ScriptStorage.swift; sourceTree = "<group>"; };
+		B10000112C50000100000001 /* SmartGlassGateway/Views/ScriptEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGateway/Views/ScriptEditorView.swift; sourceTree = "<group>"; };
+		B10000122C50000100000001 /* SmartGlassGateway/Views/TeleprompterPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGateway/Views/TeleprompterPreviewView.swift; sourceTree = "<group>"; };
+		B10000132C50000100000001 /* SmartGlassGateway/Views/TeleprompterListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGateway/Views/TeleprompterListView.swift; sourceTree = "<group>"; };
+		B20000012C50000100000001 /* SmartGlassWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassWatchApp.swift; sourceTree = "<group>"; };
+		B20000022C50000100000001 /* Views/WatchContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/WatchContentView.swift; sourceTree = "<group>"; };
+		B20000032C50000100000001 /* Services/WatchBLEGatewayService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/WatchBLEGatewayService.swift; sourceTree = "<group>"; };
+		B20000042C50000100000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C10000002C50000100000001 /* SmartGlassGateway.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SmartGlassGateway.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C20000002C50000100000001 /* SmartGlassWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SmartGlassWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -64,23 +97,15 @@
 		};
 /* End PBXFrameworksBuildPhase section */
 
-/* Begin PBXResourcesBuildPhase section */
-		D20000002C50000100000001 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				A100000C2C50000100000001 /* Assets.xcassets in Resources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXResourcesBuildPhase section */
-
 /* Begin PBXGroup section */
 		E10000002C50000100000001 = {
 			isa = PBXGroup;
 			children = (
 				F10000002C50000100000001 /* SmartGlassGateway */,
+				F20000002C50000100000001 /* SmartGlassWatch */,
+				C20000002C50000100000001 /* SmartGlassWatch.app */,
 				C10000002C50000100000001 /* SmartGlassGateway.app */,
+				FD7A76B13025C1CC008AD08D /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -88,23 +113,46 @@
 			isa = PBXGroup;
 			children = (
 				B10000012C50000100000001 /* SmartGlassGatewayApp.swift */,
-				B10000022C50000100000001 /* TeleprompterPayload.swift */,
-				B10000032C50000100000001 /* HUDLayoutAdapter.swift */,
-				B10000042C50000100000001 /* BLEManager.swift */,
-				B10000042C50000100000099 /* OfficialRawPkts.swift */,
-				B10000042C5000010000009A /* OfficialBt3Pkts.swift */,
-				B10000052C50000100000001 /* SpeechFollowEngine.swift */,
-				B10000062C50000100000001 /* WebSocketClient.swift */,
-				B100000A2C50000100000001 /* WatchSessionManager.swift */,
-				B100000B2C50000100000001 /* ServerDiscoveryEngine.swift */,
-				B100000D2C50000100000001 /* G2ProtocolEncoder.swift */,
-				B10000072C50000100000001 /* HUDPreviewView.swift */,
-				B10000082C50000100000001 /* ContentView.swift */,
-				B100000E2C50000100000001 /* G2DebugView.swift */,
+				B10000022C50000100000001 /* Models/TeleprompterPayload.swift */,
+				B10000032C50000100000001 /* Services/HUDLayoutAdapter.swift */,
+				B10000042C50000100000001 /* Services/BLEManager.swift */,
+				B10000042C50000100000099 /* Services/OfficialRawPkts.swift */,
+				B10000042C5000010000009A /* Services/OfficialBt3Pkts.swift */,
+				B10000052C50000100000001 /* Services/SpeechFollowEngine.swift */,
+				B10000062C50000100000001 /* Services/WebSocketClient.swift */,
+				B100000A2C50000100000001 /* Services/WatchSessionManager.swift */,
+				B100000B2C50000100000001 /* Services/ServerDiscoveryEngine.swift */,
+				B100000D2C50000100000001 /* Services/G2ProtocolEncoder.swift */,
+				B10000072C50000100000001 /* Views/HUDPreviewView.swift */,
+				B10000082C50000100000001 /* Views/ContentView.swift */,
+				B100000E2C50000100000001 /* Views/G2DebugView.swift */,
 				B100000C2C50000100000001 /* Assets.xcassets */,
 				B10000092C50000100000001 /* Info.plist */,
 			);
 			path = SmartGlassGateway;
+			sourceTree = "<group>";
+		};
+		F20000002C50000100000001 /* SmartGlassWatch */ = {
+			isa = PBXGroup;
+			children = (
+				B20000012C50000100000001 /* SmartGlassWatchApp.swift */,
+				B20000022C50000100000001 /* Views/WatchContentView.swift */,
+				B20000032C50000100000001 /* Services/WatchBLEGatewayService.swift */,
+				B20000042C50000100000001 /* Assets.xcassets */,
+			);
+			path = SmartGlassWatch;
+			sourceTree = "<group>";
+		};
+		FD7A76B13025C1CC008AD08D /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				B100000F2C50000100000001 /* SmartGlassGateway/Models/ScriptItem.swift */,
+				B10000102C50000100000001 /* SmartGlassGateway/Services/ScriptStorage.swift */,
+				B10000112C50000100000001 /* SmartGlassGateway/Views/ScriptEditorView.swift */,
+				B10000122C50000100000001 /* SmartGlassGateway/Views/TeleprompterPreviewView.swift */,
+				B10000132C50000100000001 /* SmartGlassGateway/Views/TeleprompterListView.swift */,
+			);
+			name = "Recovered References";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -115,16 +163,34 @@
 			buildConfigurationList = H10000002C50000100000001 /* Build configuration list for PBXNativeTarget "SmartGlassGateway" */;
 			buildPhases = (
 				I10000002C50000100000001 /* Sources */,
+				CP0000002C50000100000001 /* CopyFiles */,
 				D10000002C50000100000001 /* Frameworks */,
 				D20000002C50000100000001 /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				TD0000002C50000100000001 /* PBXTargetDependency */,
 			);
 			name = SmartGlassGateway;
 			productName = SmartGlassGateway;
 			productReference = C10000002C50000100000001 /* SmartGlassGateway.app */;
+			productType = "com.apple.product-type.application";
+		};
+		G20000002C50000100000001 /* SmartGlassWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = H20000002C50000100000001 /* Build configuration list for PBXNativeTarget "SmartGlassWatch" */;
+			buildPhases = (
+				I20000002C50000100000001 /* Sources */,
+				D20000002C50000100000002 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SmartGlassWatch;
+			productName = SmartGlassWatch;
+			productReference = C20000002C50000100000001 /* SmartGlassWatch.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -135,7 +201,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1500;
-				LastUpgradeCheck = 1500;
+				LastUpgradeCheck = 2660;
 				TargetAttributes = {
 					G10000002C50000100000001 = {
 						CreatedOnToolsVersion = 15.0;
@@ -156,9 +222,29 @@
 			projectRoot = "";
 			targets = (
 				G10000002C50000100000001 /* SmartGlassGateway */,
+				G20000002C50000100000001 /* SmartGlassWatch */,
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		D20000002C50000100000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A100000C2C50000100000001 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D20000002C50000100000002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A20000042C50000100000002 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		I10000002C50000100000001 /* Sources */ = {
@@ -166,28 +252,46 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000012C50000100000001 /* SmartGlassGatewayApp.swift in Sources */,
-				A10000022C50000100000001 /* TeleprompterPayload.swift in Sources */,
-				A10000032C50000100000001 /* HUDLayoutAdapter.swift in Sources */,
-				A10000042C50000100000001 /* BLEManager.swift in Sources */,
-				A10000042C50000100000099 /* OfficialRawPkts.swift in Sources */,
-				A10000042C5000010000009A /* OfficialBt3Pkts.swift in Sources */,
-				A10000052C50000100000001 /* SpeechFollowEngine.swift in Sources */,
-				A10000062C50000100000001 /* WebSocketClient.swift in Sources */,
-				A100000A2C50000100000001 /* WatchSessionManager.swift in Sources */,
-				A100000B2C50000100000001 /* ServerDiscoveryEngine.swift in Sources */,
-				A100000D2C50000100000001 /* G2ProtocolEncoder.swift in Sources */,
-				A10000072C50000100000001 /* HUDPreviewView.swift in Sources */,
-				A10000082C50000100000001 /* ContentView.swift in Sources */,
-				A100000E2C50000100000001 /* G2DebugView.swift in Sources */,
-				A100000F2C50000100000001 /* ScriptItem.swift in Sources */,
-				A10000102C50000100000001 /* ScriptStorage.swift in Sources */,
-				A10000112C50000100000001 /* ScriptEditorView.swift in Sources */,
-				A10000122C50000100000001 /* TeleprompterPreviewView.swift in Sources */,
-				A10000132C50000100000001 /* TeleprompterListView.swift in Sources */,
+				A10000022C50000100000001 /* Models/TeleprompterPayload.swift in Sources */,
+				A10000032C50000100000001 /* Services/HUDLayoutAdapter.swift in Sources */,
+				A10000042C50000100000001 /* Services/BLEManager.swift in Sources */,
+				A10000042C50000100000099 /* Services/OfficialRawPkts.swift in Sources */,
+				A10000042C5000010000009A /* Services/OfficialBt3Pkts.swift in Sources */,
+				A10000052C50000100000001 /* Services/SpeechFollowEngine.swift in Sources */,
+				A10000062C50000100000001 /* Services/WebSocketClient.swift in Sources */,
+				A100000A2C50000100000001 /* Services/WatchSessionManager.swift in Sources */,
+				A100000B2C50000100000001 /* Services/ServerDiscoveryEngine.swift in Sources */,
+				A100000D2C50000100000001 /* Services/G2ProtocolEncoder.swift in Sources */,
+				A10000072C50000100000001 /* Views/HUDPreviewView.swift in Sources */,
+				A10000082C50000100000001 /* Views/ContentView.swift in Sources */,
+				A100000E2C50000100000001 /* Views/G2DebugView.swift in Sources */,
+				A100000F2C50000100000001 /* SmartGlassGateway/Models/ScriptItem.swift in Sources */,
+				A10000102C50000100000001 /* SmartGlassGateway/Services/ScriptStorage.swift in Sources */,
+				A10000112C50000100000001 /* SmartGlassGateway/Views/ScriptEditorView.swift in Sources */,
+				A10000122C50000100000001 /* SmartGlassGateway/Views/TeleprompterPreviewView.swift in Sources */,
+				A10000132C50000100000001 /* SmartGlassGateway/Views/TeleprompterListView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		I20000002C50000100000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A20000012C50000100000001 /* SmartGlassWatchApp.swift in Sources */,
+				A20000022C50000100000001 /* Views/WatchContentView.swift in Sources */,
+				A20000032C50000100000001 /* Services/WatchBLEGatewayService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		TD0000002C50000100000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = G20000002C50000100000001 /* SmartGlassWatch */;
+			targetProxy = CR0000002C50000100000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		L10000002C50000100000001 /* Debug */ = {
@@ -195,7 +299,9 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = MT5RXPF557;
@@ -208,7 +314,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.1;
-				PRODUCT_BUNDLE_IDENTIFIER = edu.ncu.smartglass.SmartGlassGateway;
+				PRODUCT_BUNDLE_IDENTIFIER = edu.ncu.smartglass.gateway;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -223,7 +329,9 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = MT5RXPF557;
@@ -236,7 +344,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.1;
-				PRODUCT_BUNDLE_IDENTIFIER = edu.ncu.smartglass.SmartGlassGateway;
+				PRODUCT_BUNDLE_IDENTIFIER = edu.ncu.smartglass.gateway;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -245,10 +353,105 @@
 			};
 			name = Release;
 		};
+		L20000002C50000100000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = MT5RXPF557;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SmartGlassWatch/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = SmartGlassWatch;
+				INFOPLIST_KEY_CFBundleIconName = AppIcon;
+				INFOPLIST_KEY_WKApplication = YES;
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = edu.ncu.smartglass.gateway;
+				INFOPLIST_KEY_WKWatchKitApp = YES;
+				INFOPLIST_KEY_WKRunsIndependentlyOfCompanion = NO;
+				MARKETING_VERSION = 1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = edu.ncu.smartglass.gateway.watchkit;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				ARCHS = "$(ARCHS_STANDARD)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
+		L20000002C50000200000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = MT5RXPF557;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SmartGlassWatch/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = SmartGlassWatch;
+				INFOPLIST_KEY_CFBundleIconName = AppIcon;
+				INFOPLIST_KEY_WKApplication = YES;
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = edu.ncu.smartglass.gateway;
+				INFOPLIST_KEY_WKWatchKitApp = YES;
+				INFOPLIST_KEY_WKRunsIndependentlyOfCompanion = NO;
+				MARKETING_VERSION = 1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = edu.ncu.smartglass.gateway.watchkit;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				ARCHS = "$(ARCHS_STANDARD)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
 		M10000002C50000100000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -257,13 +460,42 @@
 		M10000002C50000200000001 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_COMPILATION_MODE = wholemodule;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
-/* End XCConfigurationList section */
+/* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
 		H10000002C50000100000001 /* Build configuration list for PBXNativeTarget "SmartGlassGateway" */ = {
@@ -271,6 +503,15 @@
 			buildConfigurations = (
 				L10000002C50000100000001 /* Debug */,
 				L10000002C50000200000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		H20000002C50000100000001 /* Build configuration list for PBXNativeTarget "SmartGlassWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				L20000002C50000100000001 /* Debug */,
+				L20000002C50000200000001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

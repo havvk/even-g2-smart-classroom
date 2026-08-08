@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# SmartGlassGateway iOS App 一键编译、部署与启动脚本
+# SmartGlassGateway iOS App 一键编译、部署与启动脚本 (Release 模式)
 # =============================================================================
 
 set -e
@@ -21,18 +21,18 @@ DEVICE_NAME=$(echo "${DEVICE_LINE}" | sed -n 's/.*name:\([^}]*\).*/\1/p')
 
 echo "📱 检测到设备: ${DEVICE_NAME} (ID: ${DEVICE_ID})"
 
-echo "🔨 [2/3] 正在编译 SmartGlassGateway App..."
+echo "🔨 [2/3] 正在编译 SmartGlassGateway App (Release 模式，剥离 Xcode Preview 校验干扰)..."
 xcodebuild -project "${PROJECT_DIR}/SmartGlassGateway.xcodeproj" \
            -scheme SmartGlassGateway \
+           -configuration Release \
            -destination "id=${DEVICE_ID}" \
            -derivedDataPath "${PROJECT_DIR}/build" \
-           -allowProvisioningUpdates \
            build
 
 echo "📲 [3/3] 正在部署 App 至 iPhone (${DEVICE_NAME})..."
-xcrun devicectl device install app --device "${DEVICE_ID}" "${PROJECT_DIR}/build/Build/Products/Debug-iphoneos/SmartGlassGateway.app"
+xcrun devicectl device install app --device "${DEVICE_ID}" "${PROJECT_DIR}/build/Build/Products/Release-iphoneos/SmartGlassGateway.app"
 
 echo "⚡️ 尝试拉起应用..."
-xcrun devicectl device process launch --device "${DEVICE_ID}" edu.ncu.smartglass.SmartGlassGateway || echo "⚠️ 如果手机处于锁屏状态，请解锁手机屏幕后手动点击 SmartGlassGateway 图标启动。"
+xcrun devicectl device process launch --device "${DEVICE_ID}" edu.ncu.smartglass.gateway || echo "⚠️ 如果手机处于锁屏状态，请解锁手机屏幕后手动点击 SmartGlassGateway 图标启动。"
 
 echo "✅ 部署完成！"
