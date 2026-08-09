@@ -382,6 +382,8 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     
     @Published var isTeleprompterSessionActive: Bool = false
     @Published var isPushingText: Bool = false
+    @Published var useV2OnDemandPadding: Bool = true // 开: V2 按需切分 (官方原装), 关: V1 14页补满
+    private var pushStartTime: Date?
     private var teleprompterWorkItems: [DispatchWorkItem] = []
     @Published var lastSentTeleprompterText: String = ""
     
@@ -585,9 +587,10 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         guard bt3CurrentIndex < totalCount else {
             self.isPushingText = false
             self.isTeleprompterSessionActive = true
+            let elapsedMs = pushStartTime != nil ? Int(Date().timeIntervalSince(pushStartTime!) * 1000) : 0
+            let modeStr = useV2OnDemandPadding ? "V2 按需切分 (官方原装)" : "V1 14页固定 Buffer 补满"
+            addLog("🎉 [Lock-step 下发完成] ⏱️ 物理发包总耗时: \(elapsedMs) ms | 策略: \(modeStr) | 下发: \(self.currentPages.count) 页")
             addLog("✅ G2 物理屏显提词与前台焦点已锁定，Touchpad 0x06-01 触控已唤醒")
-            addLog("🎉 [Lock-step] \(totalCount) 包全部下发完成！视口对齐第 \(self.targetStartLine) 行。")
-            // 🎯 Lock-Step 队列尾包 (Packet 23) 已天然包含 ScrollSync Line 0，此处无需再重复触发 sendScrollSync，防止连发碰撞黑屏
             return
         }
         
@@ -601,6 +604,10 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             self.bt3TimeoutWorkItem = item
             DispatchQueue.main.asyncAfter(deadline: .now() + waitTime, execute: item)
             return
+        }
+        
+        if bt3CurrentIndex == 0 {
+            self.pushStartTime = Date() // ⏱️ 记录物理传输 Packet #1 下发的绝对起始时间
         }
         
         lastBt3SendTime = Date()
@@ -634,6 +641,12 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     
     /// 动态编码并推送讲稿文本到 G2 眼镜 (Lock-Step ACK 驱动步进, 对齐 §20.1 规范)
     func sendTeleprompterText(_ rawText: String, targetWidthChars: Int = 28, scrollModeAI: Bool = true, startLine: Int = 0) {
+        // 🌟 开关开启时，自动路由至 V2 按需下发路径 (100% 官方原装)
+        if useV2OnDemandPadding {
+            sendTeleprompterTextV2(rawText, targetWidthChars: targetWidthChars, scrollModeAI: scrollModeAI, startLine: startLine)
+            return
+        }
+        
         guard isConnected else {
             addLog("⚠️ 蓝牙未连接，请先连接 G2 眼镜")
             return
@@ -776,7 +789,8 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         descs.append("0x80-00 Render Commit (显存翻转点亮屏显)")
         msgId += 1
         
-        addLog("🚀 [Lock-Step 推屏序列] 开始发送 \(packets.count) 包提词报文 (ACK+200ms 超时保底, \(pages.count) 有效页)...")
+        let modeTag = useV2OnDemandPadding ? "⚡️ [V2 按需切分 (100% 官方)]" : "📦 [V1 14页固定 Buffer 补满]"
+        addLog("\(modeTag) 开始发送 \(packets.count) 包报文 (\(pages.count) 页)...")
         
         // 3. 注入 Lock-Step 引擎并启动 (同步更新全局 seq/msgId 保持单调递增，防止黑屏)
         self.teleprompterSeq = seq
@@ -842,7 +856,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             self.currentFocusPageLine = startLine
         }
         
-        // §25: 按需切分页面 (不补满 14 页)
+        
         let (pages, totalLines) = G2ProtocolEncoder.formatTextToPagesOnDemand(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: 10)
         self.currentPages = pages
         let totalPages = pages.count
@@ -872,15 +886,24 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             addLog("⚡️ [V2 热重推] Auth 已完成，直接下发提词序列...")
         }
         
-        // §25.1: TeleprompterInit V2 参数区分 (冷启动用 59/585, 热重有用实际 totalPages/totalLines)
-        let initPages = isColdStart ? 59 : totalPages
-        let initLines = isColdStart ? 585 : totalLines
+        // §25.1: TeleprompterInit V2 参数：100% 官方原装 (切出几页填几页，对齐 multiprompts.pklg 帧 #1)
+        let initPages = totalPages
+        let initLines = totalLines
         
         let initPkts = G2ProtocolEncoder.buildTeleprompterInitV2(seq: &seq, msgId: msgId, totalPages: initPages, totalLines: initLines, scrollModeAI: scrollModeAI)
         for pkt in initPkts {
             packets.append(pkt)
-            descs.append("V2 TeleprompterInit (\(isColdStart ? "冷启动" : "热重推") pages=\(initPages), lines=\(initLines))")
+            descs.append("V2 TeleprompterInit (pages=\(initPages), lines=\(initLines))")
         }
+        msgId += 1
+        
+        // 100% 对齐 multiprompts.pklg 帧 #1: 补全 2 包 System Layout Config (0x01-20) 硬件视口开辟包
+        packets.append(G2ProtocolEncoder.buildSystemLayoutConfig(seq: &seq, msgId: msgId))
+        descs.append("System Layout Config 1 (0x01-20)")
+        msgId += 1
+        
+        packets.append(G2ProtocolEncoder.buildTouchpadEventListener(seq: &seq, msgId: msgId))
+        descs.append("System Layout Config 2 (0x01-20 Touchpad Listener)")
         msgId += 1
         
         // Pages 灌入 (仅实际内容页，不补满)
@@ -922,7 +945,8 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         descs.append("V2 Render Commit #2")
         msgId += 1
         
-        addLog("🚀 [V2 按需推屏] 开始发送 \(packets.count) 包 (\(totalPages) 有效页, \(totalLines) 总行) — 对齐 §25 官方协议...")
+        let modeTag = useV2OnDemandPadding ? "⚡️ [V2 按需切分 (100% 官方)]" : "📦 [V1 14页固定 Buffer 补满]"
+        addLog("\(modeTag) 开始下发 \(packets.count) 包 (\(totalPages) 有效页, \(totalLines) 总行) — 对齐官方物理信令...")
         
         self.teleprompterSeq = seq
         self.teleprompterMsgId = msgId
@@ -1072,7 +1096,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             
             // 捕获眼镜端主动退出提词器模式通知 (§22.2: 0D-01 含 1A 00 = Session Terminated，或镜腿长按手势 01-01 含 08 03)
             // ⚠️ 06-00 只是普通 RPC ACK，不代表 Session 已销毁
-            let isExplicitExitAck = (sHi == 0x0D && sLo == 0x01) && relativeData.contains(Data([0x1A, 0x00])) && self.isWaitingForSessionTeardown
+            let isExplicitExitAck = (sHi == 0x0D && sLo == 0x01) && self.isWaitingForSessionTeardown
             let isGestureExit = (sHi == 0x01 && sLo == 0x01) && relativeData.contains(Data([0x08, 0x03]))
             let isSessionExit = relativeData.range(of: Data([0x22, 0x02, 0x08, 0x04])) != nil && self.isWaitingForSessionTeardown
             

@@ -14,6 +14,33 @@ struct TeleprompterListView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
+                // 🌟 策略切换开关 Toggle
+                HStack {
+                    Image(systemName: "bolt.horizontal.circle.fill")
+                        .foregroundColor(bleManager.useV2OnDemandPadding ? .blue : .orange)
+                        .font(.system(size: 18))
+                    
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(bleManager.useV2OnDemandPadding ? "下发策略: V2 按需下发 (100% 官方)" : "下发策略: V1 14页固定补满")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(bleManager.useV2OnDemandPadding ? .blue : .orange)
+                        Text(bleManager.useV2OnDemandPadding ? "零多余空页填充，推屏更快" : "补满 14 页 Buffer 槽位")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    Spacer()
+                    
+                    Toggle("", isOn: $bleManager.useV2OnDemandPadding)
+                        .labelsHidden()
+                        .toggleStyle(SwitchToggleStyle(tint: .blue))
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color.blue.opacity(0.06))
+                
+                Divider()
+                
                 // MARK: - 排序与记录条数工具栏
                 HStack {
                     Text("\(storage.scripts.count) 记录")

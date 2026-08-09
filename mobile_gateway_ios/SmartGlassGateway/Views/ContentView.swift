@@ -52,6 +52,8 @@ struct ContentView: View {
             .padding(.vertical, 8)
             .background(Color(UIColor.tertiarySystemBackground))
             
+            Divider()
+            
             // 顶部眼镜 4 大工作模式 Segmented Picker (Glasses State Machine)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -502,6 +504,19 @@ struct DebugLogView: View {
                 .padding(8)
                 .background(Color.black.opacity(0.05))
                 .cornerRadius(8)
+                
+                Toggle(isOn: $bleManager.useV2OnDemandPadding) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("下发策略: \(bleManager.useV2OnDemandPadding ? "V2 按需切分 (官方原装)" : "V1 14页固定补满")")
+                            .font(.caption)
+                            .bold()
+                        Text(bleManager.useV2OnDemandPadding ? "按文本实际有效页数下发，极速点亮" : "不足14页时自动填充全空假页槽位")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .toggleStyle(SwitchToggleStyle(tint: .blue))
+                .padding(.vertical, 4)
                 
                 HStack(spacing: 12) {
                     Button(action: {
