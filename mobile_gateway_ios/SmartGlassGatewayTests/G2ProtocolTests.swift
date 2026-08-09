@@ -69,7 +69,7 @@ final class G2ProtocolTests: XCTestCase {
     
     func testTextFormatting_TC_TXT_001_003() {
         let sampleText = "今天我们召开《人机协同程序设计》课程全校统一数智化教学集体备课研讨会"
-        let pages = HUDLayoutAdapter.formatTextToPages(sampleText)
+        let pages = G2ProtocolEncoder.formatTextToPages(sampleText)
         
         // 14 页硬性缓冲区断言
         XCTAssertGreaterThanOrEqual(pages.count, 14, "短文本必须自动扩充补满 14 页缓冲区")

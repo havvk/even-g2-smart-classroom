@@ -624,7 +624,7 @@ class G2ProtocolEncoder {
             pages.append(chunk.joined(separator: "\n"))
         }
         
-        // G2 固件 MCU 视口校验要求: 必须填满 14 页 Buffer 槽位后 HUD Mount (0x04-20) 方可正常 Commit 渲染 (§16.1)
+        // 保守策略: 虽然固件接受按需下发 (§16.1/§19.3 真机验证)，但补满 14 页 Buffer 槽位可确保各固件版本最大兼容性
         let emptyPageText = Array(repeating: "", count: linesPerPage).joined(separator: "\n")
         while pages.count < targetPageCount {
             pages.append(emptyPageText)
