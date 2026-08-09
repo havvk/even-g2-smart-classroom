@@ -293,6 +293,50 @@ class G2ProtocolEncoder {
         return buildPackets(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
+    /// §25 官方按需下发 V2: 支持动态 field_4 (totalPages) 和 field_5 (totalLines)
+    /// 热重推时官方 APP 将 field_4/field_5 设为实际页数/行数，让固件预知内容边界
+    static func buildTeleprompterInitV2(seq: inout UInt8, msgId: Int, totalPages: Int, totalLines: Int, scrollModeAI: Bool = true) -> [Data] {
+        let modeByte: UInt8 = 0x01
+        
+        var display = Data([
+            0x08, 0x00,        // field 1
+            0x10, 0x00,        // field 2
+            0x18, 0x00         // field 3
+        ])
+        display.append(Data([0x20]))              // field 4: totalPages
+        display.append(encodeVarint(totalPages))
+        display.append(Data([0x28]))              // field 5: totalLines
+        display.append(encodeVarint(totalLines))
+        display.append(Data([0x30, 0xB7, 0x04]))  // field 6: line_height = 567
+        display.append(Data([0x38, 0xA9, 0x18]))  // field 7: viewport_height = 3113
+        display.append(Data([0x40, 0x00]))         // field 8: font_size = 0
+        display.append(Data([0x48, modeByte]))     // field 9: scroll_mode
+        display.append(Data([0x50, 0x09]))         // field 10: render_mode = 9
+        display.append(Data([0x58, 0x00]))         // field 11 = 0
+        
+        var settings = Data([0x08, 0x01, 0x12])
+        settings.append(encodeVarint(display.count))
+        settings.append(display)
+        
+        var payload = Data([0x08, 0x01, 0x10])
+        payload.append(encodeVarint(msgId))
+        payload.append(Data([0x1A]))
+        payload.append(encodeVarint(settings.count))
+        payload.append(settings)
+        
+        return buildPackets(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
+    }
+    
+    /// §25 官方按需下发 V2: 构建 TeleprompterComplete (type=255) 终止帧
+    /// 官方 APP 在所有 Content Page 发完后发送此帧，显式告知固件传输结束
+    /// multiprompts.pklg 物理抓包: 08 FF 01 10 [MsgId] 6A 04 08 00 10 04
+    static func buildTeleprompterComplete(seq: inout UInt8, msgId: Int) -> Data {
+        var payload = Data([0x08, 0xFF, 0x01, 0x10])  // type = 255 (varint: FF 01)
+        payload.append(encodeVarint(msgId))
+        payload.append(Data([0x6A, 0x04, 0x08, 0x00, 0x10, 0x04]))  // field_13 = {f1=0, f2=4}
+        return buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
+    }
+    
     // MARK: - 4. Teleprompter Content Page (Service 0x06-20 type=3)
     
     /// 生成单个 Content 页面分包列表 (无前导 \n, 严格等于实际行数)
@@ -631,6 +675,52 @@ class G2ProtocolEncoder {
         }
         
         return pages
+    }
+    
+    /// §25 官方按需下发 V2: 按实际内容切分页面，不补满 14 页
+    /// 最后一页的 line_count 反映真实行数（官方 APP 行为）
+    static func formatTextToPagesOnDemand(_ text: String, maxLineWidth: Int = 56, linesPerPage: Int = 10) -> (pages: [String], totalLines: Int) {
+        let cleanText = text.replacingOccurrences(of: "\\n", with: "\n")
+        var wrappedLines = [String]()
+        
+        let paragraphs = cleanText.components(separatedBy: "\n")
+        for para in paragraphs {
+            if para.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                wrappedLines.append("")
+                continue
+            }
+            var currentLine = ""
+            var currentWidth = 0
+            for char in para {
+                let w = getCharWidth(char)
+                if currentWidth + w > maxLineWidth {
+                    wrappedLines.append(currentLine)
+                    currentLine = String(char)
+                    currentWidth = w
+                } else {
+                    currentLine.append(char)
+                    currentWidth += w
+                }
+            }
+            if !currentLine.isEmpty {
+                wrappedLines.append(currentLine)
+            }
+        }
+        
+        if wrappedLines.isEmpty {
+            wrappedLines = [text]
+        }
+        
+        let totalLines = wrappedLines.count
+        var pages = [String]()
+        for i in stride(from: 0, to: wrappedLines.count, by: linesPerPage) {
+            let end = min(i + linesPerPage, wrappedLines.count)
+            let chunk = Array(wrappedLines[i..<end])
+            // 不补满到 linesPerPage — 最后一页保留真实行数
+            pages.append(chunk.joined(separator: "\n"))
+        }
+        
+        return (pages, totalLines)
     }
     
     // MARK: - Position Notification Parser (Service 0x06-01)

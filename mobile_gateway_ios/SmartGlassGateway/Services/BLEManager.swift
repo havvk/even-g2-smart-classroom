@@ -787,6 +787,151 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         sendNextBt3PacketInLockstep()
     }
     
+    /// §25 官方按需下发 V2: 100% 对齐 multiprompts.pklg 官方发包序列
+    /// 差异: 动态 Init 参数 + 按需页数(不补满) + type=255 Complete + 双 Render Commit
+    func sendTeleprompterTextV2(_ rawText: String, targetWidthChars: Int = 28, scrollModeAI: Bool = true, startLine: Int = 0) {
+        guard isConnected else {
+            addLog("⚠️ 蓝牙未连接，请先连接 G2 眼镜")
+            return
+        }
+        guard contentTxChar != nil else {
+            addLog("⚠️ 5401 通道未绑定")
+            return
+        }
+        
+        if isPushingText {
+            addLog("⚠️ 当前正在下发讲稿队列中，忽略并发重入请求")
+            return
+        }
+        
+        // 热重推: 先发 state=4 退出旧 Session (复用现有逻辑)
+        if isTeleprompterSessionActive {
+            addLog("🔄 [V2 热重推] 先发 state=4 退出旧 Session...")
+            
+            self.pendingRePushTask = { [weak self] in
+                guard let self = self else { return }
+                self.addLog("⚡️ [V2 Session Terminated 确认] 自动启动 V2 按需推流...")
+                self.sendTeleprompterTextV2(rawText, targetWidthChars: targetWidthChars, scrollModeAI: scrollModeAI, startLine: startLine)
+            }
+            
+            let timeoutItem = DispatchWorkItem { [weak self] in
+                guard let self = self else { return }
+                if self.isWaitingForSessionTeardown {
+                    self.addLog("⏱️ [V2 超时保底] 3s 未收到 Session Terminated，强制重推")
+                    self.isWaitingForSessionTeardown = false
+                    self.isTeleprompterSessionActive = false
+                    if let task = self.pendingRePushTask {
+                        self.pendingRePushTask = nil
+                        task()
+                    }
+                }
+            }
+            self.rePushTimeoutWorkItem = timeoutItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: timeoutItem)
+            
+            sendExitTeleprompterMode()
+            return
+        }
+        
+        // 冷启动路径
+        cancelPendingTeleprompterTasks()
+        self.isPushingText = true
+        self.targetStartLine = startLine
+        self.currentFocusPageLine = startLine
+        DispatchQueue.main.async {
+            self.currentFocusPageLine = startLine
+        }
+        
+        // §25: 按需切分页面 (不补满 14 页)
+        let (pages, totalLines) = G2ProtocolEncoder.formatTextToPagesOnDemand(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: 10)
+        self.currentPages = pages
+        let totalPages = pages.count
+        
+        var packets: [Data] = []
+        var descs: [String] = []
+        
+        var seq: UInt8 = self.teleprompterSeq == 0 ? 0x01 : self.teleprompterSeq
+        var msgId: Int = self.teleprompterMsgId == 0 ? 0x01 : self.teleprompterMsgId
+        
+        // [冷启动] Auth + Setup 判定
+        let isColdStart = !hasAuthBeenDoneForCurrentConnection
+        if isColdStart {
+            addLog("🔑 [V2 冷启动] 下发 Auth + Setup...")
+            let authPackets = G2ProtocolEncoder.buildAuthPackets(seq: &seq, msgId: &msgId)
+            for (idx, pkt) in authPackets.enumerated() {
+                packets.append(pkt)
+                descs.append("Auth [\(idx + 1)/4]")
+            }
+            let setupPairs = G2ProtocolEncoder.buildOfficialSetupSequence(seq: &seq, msgId: &msgId)
+            for (pkt, desc) in setupPairs {
+                packets.append(pkt)
+                descs.append(desc)
+            }
+            self.hasAuthBeenDoneForCurrentConnection = true
+        } else {
+            addLog("⚡️ [V2 热重推] Auth 已完成，直接下发提词序列...")
+        }
+        
+        // §25.1: TeleprompterInit V2 参数区分 (冷启动用 59/585, 热重有用实际 totalPages/totalLines)
+        let initPages = isColdStart ? 59 : totalPages
+        let initLines = isColdStart ? 585 : totalLines
+        
+        let initPkts = G2ProtocolEncoder.buildTeleprompterInitV2(seq: &seq, msgId: msgId, totalPages: initPages, totalLines: initLines, scrollModeAI: scrollModeAI)
+        for pkt in initPkts {
+            packets.append(pkt)
+            descs.append("V2 TeleprompterInit (\(isColdStart ? "冷启动" : "热重推") pages=\(initPages), lines=\(initLines))")
+        }
+        msgId += 1
+        
+        // Pages 灌入 (仅实际内容页，不补满)
+        for (i, pageText) in pages.enumerated() {
+            let pagePkts = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: msgId, pageNum: i, text: pageText)
+            for pkt in pagePkts {
+                packets.append(pkt)
+                descs.append("Page \(i)")
+            }
+            msgId += 1
+        }
+        
+        // §25.3: ScrollSync × 2 (对齐 multiprompts.pklg #4/#5: 在 Commit 前发)
+        let syncPkt1 = G2ProtocolEncoder.buildScrollSync(seq: &seq, msgId: msgId, lineIndex: startLine)
+        packets.append(syncPkt1)
+        descs.append("V2 ScrollSync #1 (line \(startLine))")
+        msgId += 1
+        
+        let syncPkt2 = G2ProtocolEncoder.buildScrollSync(seq: &seq, msgId: msgId, lineIndex: startLine)
+        packets.append(syncPkt2)
+        descs.append("V2 ScrollSync #2 (line \(startLine))")
+        msgId += 1
+        
+        // §25.3: Render Commit #1 (对齐 multiprompts.pklg #6)
+        let pktCommit1 = G2ProtocolEncoder.buildFlushCommit(seq: &seq, msgId: msgId)
+        packets.append(pktCommit1)
+        descs.append("V2 Render Commit #1")
+        msgId += 1
+        
+        // §25.2: TeleprompterComplete type=255 (对齐 multiprompts.pklg #7)
+        let pktComplete = G2ProtocolEncoder.buildTeleprompterComplete(seq: &seq, msgId: msgId)
+        packets.append(pktComplete)
+        descs.append("V2 TeleprompterComplete (type=255)")
+        msgId += 1
+        
+        // §25.3: Render Commit #2 (对齐 multiprompts.pklg #8)
+        let pktCommit2 = G2ProtocolEncoder.buildFlushCommit(seq: &seq, msgId: msgId)
+        packets.append(pktCommit2)
+        descs.append("V2 Render Commit #2")
+        msgId += 1
+        
+        addLog("🚀 [V2 按需推屏] 开始发送 \(packets.count) 包 (\(totalPages) 有效页, \(totalLines) 总行) — 对齐 §25 官方协议...")
+        
+        self.teleprompterSeq = seq
+        self.teleprompterMsgId = msgId
+        self.bt3PendingPackets = packets
+        self.lockStepDescs = descs
+        self.bt3CurrentIndex = 0
+        sendNextBt3PacketInLockstep()
+    }
+    
     /// 手动发送退出提词器模式报文 (Service 0x06-20 type=4 state=4, 100% 物理对齐 multiprompts.pklg Pkt #028)
     func sendExitTeleprompterMode() {
         guard isConnected else { return }
@@ -869,8 +1014,11 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     }
     
     /// 推送全屏满屏提词文本 (28字/行 x 10行/页)
+    /// §25 实测切换: V2 按需下发 (对齐官方 multiprompts.pklg 协议)
     func sendFullScreenTeleprompterText(_ text: String, targetWidthChars: Int = 28) {
-        sendTeleprompterText(text, targetWidthChars: targetWidthChars)
+        // V1 (14 页补满保守策略，如 V2 测试失败可快速回退):
+        // sendTeleprompterText(text, targetWidthChars: targetWidthChars)
+        sendTeleprompterTextV2(text, targetWidthChars: targetWidthChars)
     }
     
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
