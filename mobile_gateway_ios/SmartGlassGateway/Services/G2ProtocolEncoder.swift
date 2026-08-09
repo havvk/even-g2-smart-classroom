@@ -435,7 +435,25 @@ class G2ProtocolEncoder {
         return buildPacket(seq: &seq, serviceHi: 0x01, serviceLo: 0x20, payload: payload)
     }
     
-    // MARK: - Hardware Touch Activation (bt3.pklg Pkt 40/41)
+    // MARK: - Hardware Touch Activation (bt3.pklg / bt.pklg)
+    
+    /// 生成 Service 0x0E-20 GPU 显存纹理分配报文 (100% 对齐 bt.pklg 帧 #24/#28/#32)
+    static func buildPktTextureAlloc0E(seq: inout UInt8, msgId: Int) -> Data {
+        var payload = Data([0x08, 0x02, 0x10])
+        payload.append(encodeVarint(msgId))
+        let hexStr = "228a0108011215080210904e1d0000000025000000002800300038001215080310904e1d0000000025000000002800300038001215080410904e1d0000000025000000002800300038001215080510904e1d0000000025000000002800300038001215080610904e1d0000000025000000002800300038001215080910904e1d000000002500000000280030003800"
+        var hexData = Data()
+        var tempHex = hexStr
+        while !tempHex.isEmpty {
+            let sub = tempHex.prefix(2)
+            tempHex = String(tempHex.dropFirst(2))
+            if let b = UInt8(sub, radix: 16) {
+                hexData.append(b)
+            }
+        }
+        payload.append(hexData)
+        return buildPacket(seq: &seq, serviceHi: 0x0E, serviceLo: 0x20, payload: payload)
+    }
     
     /// 生成 Service 0x04-20 HUD 视口渲染容器挂载报文 (100% 对齐 bt3.pklg Pkt 40)
     static func buildPkt40HUDMount(seq: inout UInt8, msgId: Int) -> Data {
