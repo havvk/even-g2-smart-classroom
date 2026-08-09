@@ -294,7 +294,7 @@ class G2ProtocolEncoder {
     }
     
     /// §25 官方按需下发 V2: 支持动态 field_4 (totalPages) 和 field_5 (totalLines)
-    /// 热重推时官方 APP 将 field_4/field_5 设为实际页数/行数，让固件预知内容边界
+    /// 初始化时向 MCU 固件透传规范参数 (field 10 严格固定为 0x09 官方渲染模式)
     static func buildTeleprompterInitV2(seq: inout UInt8, msgId: Int, totalPages: Int, totalLines: Int, scrollModeAI: Bool = true) -> [Data] {
         let modeByte: UInt8 = 0x01
         
@@ -308,10 +308,10 @@ class G2ProtocolEncoder {
         display.append(Data([0x28]))              // field 5: totalLines
         display.append(encodeVarint(totalLines))
         display.append(Data([0x30, 0xB7, 0x04]))  // field 6: line_height = 567
-        display.append(Data([0x38, 0xA9, 0x18]))  // field 7: viewport_height = 3113
+        display.append(Data([0x38, 0xA9, 0x18]))  // field 7: viewport_height = 3113 (硬件物理屏幕视口高度 = 5.5 行 * 567)
         display.append(Data([0x40, 0x00]))         // field 8: font_size = 0
         display.append(Data([0x48, modeByte]))     // field 9: scroll_mode
-        display.append(Data([0x50, 0x09]))         // field 10: render_mode = 9
+        display.append(Data([0x50, 0x09]))         // field 10: render_mode = 9 (官方标准全屏渲染模式)
         display.append(Data([0x58, 0x00]))         // field 11 = 0
         
         var settings = Data([0x08, 0x01, 0x12])
@@ -339,7 +339,7 @@ class G2ProtocolEncoder {
     
     // MARK: - 4. Teleprompter Content Page (Service 0x06-20 type=3)
     
-    /// 生成单个 Content 页面分包列表 (无前导 \n, 严格等于实际行数)
+    /// 生成单个 Content 页面分包列表 (field_2 严格反映当前页面文本的实际行数)
     static func buildContentPagePackets(seq: inout UInt8, msgId: Int, pageNum: Int, text: String) -> [Data] {
         guard let textBytes = text.data(using: .utf8) else { return [] }
         let lineCount = text.filter({ $0 == "\n" }).count + 1
@@ -697,19 +697,21 @@ class G2ProtocolEncoder {
     
     /// §25 官方按需下发 V2: 按实际内容切分页面，不补满 14 页
     /// 最后一页的 line_count 反映真实行数（官方 APP 行为）
+    /// §25 官方按需下发 V2: 按硬件标准 8 行/页切分，防止 MCU 自动补齐引发文本截断
     static func formatTextToPagesOnDemand(_ text: String, maxLineWidth: Int = 56, linesPerPage: Int = 10) -> (pages: [String], totalLines: Int) {
-        let cleanText = text.replacingOccurrences(of: "\\n", with: "\n")
-        var wrappedLines = [String]()
+        let cleanText = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\\n", with: "\n")
         
+        var wrappedLines = [String]()
         let paragraphs = cleanText.components(separatedBy: "\n")
         for para in paragraphs {
-            if para.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                wrappedLines.append("")
-                continue
-            }
+            let trimmed = para.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue } // 过滤空段落，消除提词器屏幕空白行
+            
             var currentLine = ""
             var currentWidth = 0
-            for char in para {
+            for char in trimmed {
                 let w = getCharWidth(char)
                 if currentWidth + w > maxLineWidth {
                     wrappedLines.append(currentLine)
@@ -731,10 +733,10 @@ class G2ProtocolEncoder {
         
         let totalLines = wrappedLines.count
         var pages = [String]()
-        for i in stride(from: 0, to: wrappedLines.count, by: linesPerPage) {
-            let end = min(i + linesPerPage, wrappedLines.count)
+        let blePageCapacity = max(linesPerPage, 1)
+        for i in stride(from: 0, to: wrappedLines.count, by: blePageCapacity) {
+            let end = min(i + blePageCapacity, wrappedLines.count)
             let chunk = Array(wrappedLines[i..<end])
-            // 不补满到 linesPerPage — 最后一页保留真实行数
             pages.append(chunk.joined(separator: "\n"))
         }
         

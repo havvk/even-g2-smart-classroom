@@ -439,6 +439,8 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     
     /// 实时当前滚动的焦点行号回调 (用于 9 行所见即所得 View 高亮卡片)
     @Published var currentFocusPageLine: Int = 0
+    @Published var currentTotalLines: Int = 130
+    @Published var linesPerPage: Int = 10
     @Published var currentWrappedLines: [String] = []
     @Published var currentGlassesState: GlassesState = .dashboard
     
@@ -451,10 +453,55 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     private var pendingRePushTask: (() -> Void)?
     private var rePushTimeoutWorkItem: DispatchWorkItem?
     private var isWaitingForSessionTeardown: Bool = false
+    private var sessionKeepaliveTimer: Timer?
     
     /// 当用户在手机端物理触摸屏幕滑动时，立即复位眼镜 Rx 屏障，确保手机端手势 100% 优先发包
     func resetGlassesRxShield() {
         self.lastGlassesRxScrollTime = Date.distantPast
+    }
+    
+    // MARK: - 机制 A: 15 秒物理心跳保活 (防止 G2 固件闲置超时注销)
+    private func startSessionKeepaliveTimer() {
+        stopSessionKeepaliveTimer()
+        DispatchQueue.main.async { [weak self] in
+            // 每 5 秒轮询检查一次，确保闲置满 15s 立即无缝补发保活帧
+            let timer = Timer(timeInterval: 5.0, repeats: true) { [weak self] _ in
+                self?.sendSessionKeepaliveHeartbeat()
+            }
+            RunLoop.current.add(timer, forMode: .common)
+            self?.sessionKeepaliveTimer = timer
+        }
+    }
+    
+    private func stopSessionKeepaliveTimer() {
+        DispatchQueue.main.async { [weak self] in
+            self?.sessionKeepaliveTimer?.invalidate()
+            self?.sessionKeepaliveTimer = nil
+        }
+    }
+    
+    private func sendSessionKeepaliveHeartbeat() {
+        guard isConnected, isTeleprompterSessionActive, !isPushingText, !isWaitingForSessionTeardown else { return }
+        let timeSinceLastSync = Date().timeIntervalSince(lastScrollSyncSentTime)
+        guard timeSinceLastSync >= 10.0 else { return }
+        
+        addLog("💓 [10s 视口保活] 闲置满 10s，下发 ScrollSync (Line \(currentFocusPageLine)) 与 0x80-00 物理心跳刷新 G2 固件 120s 倒计时")
+        sendScrollSync(lineIndex: currentFocusPageLine, force: true)
+        
+        // 强行追加下发 0x80-00 Flush Commit 显存双缓冲翻转帧
+        var seq = teleprompterSeq
+        var msgId = teleprompterMsgId
+        let commitPkt = G2ProtocolEncoder.buildFlushCommit(seq: &seq, msgId: msgId)
+        teleprompterSeq = seq
+        teleprompterMsgId = msgId + 1
+        sendRawData(commitPkt, channel: .content, logDesc: "保活 0x80-00 物理心跳")
+    }
+    
+    /// 当前讲稿的最大可移动行号 (即滚动到底部时，视口顶部的行号 index: totalLines - viewportLines)
+    /// 物理 MicroLED 屏幕视口高度为 5 行 (viewport_height 3113 / line_height 567 = 5.48 行 ≈ 5 行)
+    var maxMovableLine: Int {
+        let viewportLines = 5
+        return max(currentTotalLines - viewportLines, 0)
     }
     
     /// 发送双向滚动位置同步 (150ms 物理节流保护，下发 0x06-20 Type 165 报文至眼镜固件)
@@ -491,10 +538,14 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         self.lastScrollSyncSentTime = Date()
         self.pendingSyncLineIndex = nil
         
-        let syncPkt = G2ProtocolEncoder.buildScrollSync(seq: &teleprompterSeq, msgId: teleprompterMsgId, lineIndex: lineIndex)
+        let maxLine = max(currentTotalLines - 3, 0)
+        let clampedLine = min(max(lineIndex, 0), maxLine)
+        self.currentFocusPageLine = clampedLine
+        
+        let syncPkt = G2ProtocolEncoder.buildScrollSync(seq: &teleprompterSeq, msgId: teleprompterMsgId, lineIndex: clampedLine)
         teleprompterMsgId += 1
-        sendRawData(syncPkt, channel: .content, logDesc: "双向位置同步 (Line \(lineIndex))")
-        addLog("📍 [双向同步] 已发送 0x06-20 Type 165 报文 (Line \(lineIndex))\(force ? " [终点强制对齐]" : "")")
+        sendRawData(syncPkt, channel: .content, logDesc: "双向位置同步 (Line \(clampedLine))")
+        addLog("📍 [双向同步] 已发送 0x06-20 Type 165 报文 (Line \(clampedLine))\(force ? " [终点强制对齐]" : "")")
     }
     
     /// 手势停顿/滑动结束时调用的终点同步闭环：强行刷新最新终点帧，并开放 Rx 校准通道
@@ -587,6 +638,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         guard bt3CurrentIndex < totalCount else {
             self.isPushingText = false
             self.isTeleprompterSessionActive = true
+            self.startSessionKeepaliveTimer()
             let elapsedMs = pushStartTime != nil ? Int(Date().timeIntervalSince(pushStartTime!) * 1000) : 0
             let modeStr = useV2OnDemandPadding ? "V2 按需切分 (官方原装)" : "V1 14页固定 Buffer 补满"
             addLog("🎉 [Lock-step 下发完成] ⏱️ 物理发包总耗时: \(elapsedMs) ms | 策略: \(modeStr) | 下发: \(self.currentPages.count) 页")
@@ -711,8 +763,9 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             self.currentFocusPageLine = startLine
         }
         
-        let pages = G2ProtocolEncoder.formatTextToPages(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: 10)
+        let (pages, totalLines) = G2ProtocolEncoder.formatTextToPagesOnDemand(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: self.linesPerPage)
         self.currentPages = pages
+        self.currentTotalLines = max(totalLines, 1)
         
         // 2. 构建 Lock-Step 包队列
         var packets: [Data] = []
@@ -857,8 +910,9 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         
         
-        let (pages, totalLines) = G2ProtocolEncoder.formatTextToPagesOnDemand(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: 10)
+        let (pages, totalLines) = G2ProtocolEncoder.formatTextToPagesOnDemand(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: self.linesPerPage)
         self.currentPages = pages
+        self.currentTotalLines = max(totalLines, 1)
         let totalPages = pages.count
         
         var packets: [Data] = []
@@ -959,6 +1013,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     /// 手动发送退出提词器模式报文 (Service 0x06-20 type=4 state=4, 100% 物理对齐 multiprompts.pklg Pkt #028)
     func sendExitTeleprompterMode() {
         guard isConnected else { return }
+        stopSessionKeepaliveTimer()
         self.isWaitingForSessionTeardown = true
         self.isTeleprompterSessionActive = false
         var seq = self.teleprompterSeq == 0 ? 0x01 : self.teleprompterSeq
@@ -1095,17 +1150,19 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             }
             
             // 捕获眼镜端主动退出提词器模式通知 (§22.2: 0D-01 含 1A 00 = Session Terminated，或镜腿长按手势 01-01 含 08 03)
-            // ⚠️ 06-00 只是普通 RPC ACK，不代表 Session 已销毁
-            let isExplicitExitAck = (sHi == 0x0D && sLo == 0x01) && self.isWaitingForSessionTeardown
+            // ⚠️ 0D-01 代表物理硬件会话已注销，必须无条件解封 isTeleprompterSessionActive 和 isPushingText
+            let isSessionTerminatedNotify = (sHi == 0x0D && sLo == 0x01)
             let isGestureExit = (sHi == 0x01 && sLo == 0x01) && relativeData.contains(Data([0x08, 0x03]))
-            let isSessionExit = relativeData.range(of: Data([0x22, 0x02, 0x08, 0x04])) != nil && self.isWaitingForSessionTeardown
+            let isSessionExit = relativeData.range(of: Data([0x22, 0x02, 0x08, 0x04])) != nil
             
-            if isExplicitExitAck || isGestureExit || isSessionExit {
+            if isSessionTerminatedNotify || isGestureExit || isSessionExit {
                 DispatchQueue.main.async {
                     self.isWaitingForSessionTeardown = false
                     self.isTeleprompterSessionActive = false
+                    self.isPushingText = false
+                    self.stopSessionKeepaliveTimer()
                     // §23.2: 已建立 BLE 连接的 Auth 保持有效，不重置 hasAuthBeenDoneForCurrentConnection 和 Seq/MsgId
-                    self.addLog("🛑 [眼镜端退出/会话释放] (Svc \(svcStr): Session Terminated) → Session 已注销，Auth 保持有效，下次直接切入提词层")
+                    self.addLog("🛑 [眼镜端退出/会话释放] (Svc \(svcStr): Session Terminated) → Session 已物理注销，状态位全量复位，下次直接切入提词层")
                     
                     if let task = self.pendingRePushTask {
                         self.rePushTimeoutWorkItem?.cancel()
@@ -1173,20 +1230,21 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                     rawLine = totalLine
                     eventTypeStr = "📄 视口页界触及 (Line \(totalLine))"
                 }
-                
                 if let line = rawLine, line >= 0 && line <= 200 {
+                    let maxLine = self.maxMovableLine
+                    let clampedLine = min(max(line, 0), maxLine)
                     let timeSincePhoneScroll = Date().timeIntervalSince(self.lastPhoneScrollTime)
-                    if timeSincePhoneScroll < 0.800 {
-                        // 🛡️ 手机主控期: 800ms 内完全忽略眼镜发回的 Rx 回波位置，防止 App 端快滑回弹
+                    if timeSincePhoneScroll < 0.800 || self.isPushingText {
+                        // 🛡️ 手机主控期/文本推送期间: 屏蔽眼镜 Rx 回波，防止 App 端在推送文本或手势滑动时回弹
                         DispatchQueue.main.async {
-                            self.addLog("🛡️ [主控屏障] 手机滑动窗口期内(800ms)，屏蔽眼镜 Rx 回波 (Line \(line))，防止 UI 回弹")
+                            self.addLog("🛡️ [主控屏障] 屏蔽眼镜 Rx 回波 (Line \(line))，防止 UI 回弹")
                         }
                     } else {
                         self.lastGlassesRxScrollTime = Date()
                         DispatchQueue.main.async {
-                            self.currentFocusPageLine = line
-                            self.lastGestureReceived = "\(eventTypeStr) -> L\(line)"
-                            self.addLog("🎯 👆 [RX 06-01 遥测/手势] \(eventTypeStr) | 视口位于第 \(line) 行")
+                            self.currentFocusPageLine = clampedLine
+                            self.lastGestureReceived = "\(eventTypeStr) -> L\(clampedLine)"
+                            self.addLog("🎯 👆 [RX 06-01 遥测/手势] \(eventTypeStr) | 视口位于第 \(clampedLine) 行 (原始 Rx: \(line), 已钳位上限 \(maxLine))")
                         }
                     }
                 } else {
@@ -1382,15 +1440,54 @@ extension BLEManager {
         }
     }
     
-    func handleWatchGesture(action: String, source: String) {
-        addLog("⌚️ 接收到 Watch 触控/手势 [\(action)] (Source: \(source))")
+    func handleWatchGesture(action: String, source: String = "Watch") {
+        guard isConnected, isTeleprompterSessionActive else { return }
+        
+        // 🎯 视口对齐：最大可移动行号为 (totalLines - 10)，使得滑动到底部时，最后一行恰好留在视野屏底
+        // 彻底消除视口沉没导致的 3 次反向滑动滞后死区！
+        let maxLine = self.maxMovableLine
+        
         switch action {
-        case "NEXT_PAGE", "SWIPE_LEFT", "SWIPE_DOWN":
-            let nextLine = min(currentFocusPageLine + 10, 130)
+        case "NEXT_PAGE", "SWIPE_LEFT", "SWIPE_UP":
+            // 1. 先将基准归位到合法区间：若当前处于越界状态，瞬间归位到 maxLine
+            let baseLine = min(max(currentFocusPageLine, 0), maxLine)
+            
+            // 2. 边缘锁死：若已在最底部，保持在 maxLine 并拦截发包
+            if baseLine >= maxLine {
+                self.currentFocusPageLine = maxLine
+                addLog("🛑 ⌚️ 已处于讲稿最底部 (Line \(maxLine))，位置锁死，拦截发包")
+                return
+            }
+            
+            addLog("⌚️ 接收到 Watch 触控/手势 [\(action)] (Source: \(source))")
+            self.lastPhoneScrollTime = Date()
+            self.lastGlassesRxScrollTime = Date.distantPast
+            
+            // 3. 基于归位后的基准行向下平滑步进 3 行
+            let nextLine = min(baseLine + 3, maxLine)
+            self.currentFocusPageLine = nextLine
             sendScrollSync(lineIndex: nextLine, force: true)
-        case "PREV_PAGE", "SWIPE_RIGHT", "SWIPE_UP":
-            let prevLine = max(currentFocusPageLine - 10, 0)
+            
+        case "PREV_PAGE", "SWIPE_RIGHT", "SWIPE_DOWN":
+            // 1. 核心归位逻辑：反向操作时，若当前位置处于外侧/越界（如 130 > maxLine），瞬间先归位到边缘线 maxLine
+            let baseLine = min(max(currentFocusPageLine, 0), maxLine)
+            
+            // 2. 边缘锁死：若已在最顶部，保持在 0 并拦截发包
+            if baseLine <= 0 {
+                self.currentFocusPageLine = 0
+                addLog("🛑 ⌚️ 已处于讲稿最顶部 (Line 0)，位置锁死，拦截发包")
+                return
+            }
+            
+            addLog("⌚️ 接收到 Watch 触控/手势 [\(action)] (Source: \(source))")
+            self.lastPhoneScrollTime = Date()
+            self.lastGlassesRxScrollTime = Date.distantPast
+            
+            // 3. 从边缘线 maxLine（或合法 baseLine）开始向上平滑步进减算
+            let prevLine = max(baseLine - 3, 0)
+            self.currentFocusPageLine = prevLine
             sendScrollSync(lineIndex: prevLine, force: true)
+            
         default:
             break
         }

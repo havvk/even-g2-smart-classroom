@@ -58,6 +58,8 @@ class WatchSessionManager: NSObject, ObservableObject, WCSessionDelegate {
     var onTranscribeTriggered: (() -> Void)?
     
     // MARK: - WCSessionDelegate 消息/上下文 3 重可靠接收入口
+    private var lastProcessedTimestamp: Int64 = 0
+    
     func session(_ session: WCSession, didReceiveMessage message: [String : Any]) {
         processIncomingWatchMessage(message)
     }
@@ -75,6 +77,16 @@ class WatchSessionManager: NSObject, ObservableObject, WCSessionDelegate {
         guard let type = data["type"] as? String, type == "PAGE_CONTROL" else { return }
         let action = data["action"] as? String ?? "NEXT"
         let source = data["source"] as? String ?? "WATCH_TAP"
+        let timestamp = data["timestamp"] as? Int64 ?? 0
+        
+        // 🛡️ 防重解调：同一毫秒时间戳的手势消息在 500ms 内绝对只响应一次
+        if timestamp > 0 && abs(timestamp - lastProcessedTimestamp) < 500 {
+            NSLog("🛡️ [WatchSessionManager] 拦截同源重复手势消息 (timestamp: %lld)", timestamp)
+            return
+        }
+        if timestamp > 0 {
+            lastProcessedTimestamp = timestamp
+        }
         
         DispatchQueue.main.async {
             NSLog("⌚️ [WatchSessionManager] Received Watch Gesture: %@ from %@", action, source)

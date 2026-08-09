@@ -7,6 +7,14 @@ struct TeleprompterLineOffsetKey: PreferenceKey {
     }
 }
 
+/// 视口与文本窗口解耦边界数据模型
+struct ViewportBounds {
+    let vStart: Int // 视口内文本上界 (0-indexed)
+    let vEnd: Int   // 视口内文本下界 (0-indexed)
+    let wStart: Int // 文本窗口上界 (0-indexed)
+    let wEnd: Int   // 文本窗口下界 (0-indexed)
+}
+
 /// 讲稿预览视图 (包含讲稿元信息卡片、当前行号/手势调试胶囊与 10 行视口预览)
 struct TeleprompterPreviewView: View {
     @EnvironmentObject var bleManager: BLEManager
@@ -22,41 +30,34 @@ struct TeleprompterPreviewView: View {
     @State private var timer = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
     
     @State private var widthChars: Double = 28.0
+    @State private var linesPerPageValue: Double = 10.0
     @State private var dragSettleWorkItem: DispatchWorkItem?
-    let viewportLineCount = 10
+    
+    var currentLinesPerPage: Int {
+        return Int(linesPerPageValue)
+    }
     
     var wrappedLines: [String] {
         let maxLineWidth = Int(widthChars) * 2
-        let cleanText = script.content.replacingOccurrences(of: "\\n", with: "\n")
-        var lines = [String]()
-        
-        let paragraphs = cleanText.components(separatedBy: "\n")
-        for para in paragraphs {
-            if para.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                lines.append("")
-                continue
-            }
-            var currentLine = ""
-            var currentWidth = 0
-            for char in para {
-                let w = G2ProtocolEncoder.getCharWidth(char)
-                if currentWidth + w > maxLineWidth {
-                    lines.append(currentLine)
-                    currentLine = String(char)
-                    currentWidth = w
-                } else {
-                    currentLine.append(char)
-                    currentWidth += w
-                }
-            }
-            if !currentLine.isEmpty {
-                lines.append(currentLine)
-            }
-        }
+        let (pages, _) = G2ProtocolEncoder.formatTextToPagesOnDemand(script.content, maxLineWidth: maxLineWidth, linesPerPage: currentLinesPerPage)
+        let lines = pages.flatMap { $0.components(separatedBy: "\n") }
         return lines.isEmpty ? ["暂无讲稿内容"] : lines
     }
     
+    var currentBounds: ViewportBounds {
+        let total = wrappedLines.count
+        let lpp = currentLinesPerPage
+        let maxMovable = max(total - lpp, 0)
+        let vStart = max(0, min(activeLineIndex, maxMovable))
+        let vEnd = min(vStart + lpp - 1, max(total - 1, 0))
+        let wStart = max(0, vStart - 4)
+        let wEnd = min(vEnd + 4, max(total - 1, 0))
+        return ViewportBounds(vStart: vStart, vEnd: vEnd, wStart: wStart, wEnd: wEnd)
+    }
+    
     var body: some View {
+        let bounds = currentBounds
+        
         VStack(spacing: 0) {
             // MARK: - 顶栏
             HStack {
@@ -89,7 +90,7 @@ struct TeleprompterPreviewView: View {
                         HStack(spacing: 12) {
                             Text(script.formattedDateString)
                             Text("•")
-                            Text("每行 \(Int(widthChars)) 字 / 视口 10 行")
+                            Text("每行 \(Int(widthChars)) 字 / 视口 \(currentLinesPerPage) 行")
                                 .foregroundColor(.purple)
                                 .fontWeight(.semibold)
                         }
@@ -165,15 +166,15 @@ struct TeleprompterPreviewView: View {
             .padding(.horizontal, 16)
             .padding(.top, 4)
             
-            // MARK: - 10 行视口预览区域
+            // MARK: - 动态行数解耦视口预览区域
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: true) {
                     VStack(spacing: 4) {
                         Spacer(minLength: 20)
                         
                         ForEach(Array(wrappedLines.enumerated()), id: \.offset) { index, lineText in
-                            let isInViewport = (index >= activeLineIndex && index < activeLineIndex + viewportLineCount)
-                            let isViewportTop = (index == activeLineIndex)
+                            let isInViewport = (index >= bounds.vStart && index <= bounds.vEnd)
+                            let isViewportTop = (index == bounds.vStart)
                             
                             HStack(alignment: .center, spacing: 8) {
                                 Text(String(format: "%02d", index + 1))
@@ -214,7 +215,7 @@ struct TeleprompterPreviewView: View {
                             }
                         }
                         
-                        Spacer(minLength: 500)
+                        Spacer(minLength: 120)
                     }
                     .padding(.vertical, 8)
                 }
@@ -228,8 +229,19 @@ struct TeleprompterPreviewView: View {
                 )
                 .onPreferenceChange(TeleprompterLineOffsetKey.self) { offsets in
                     guard !isProgrammaticScrolling else { return }
-                    if let topCandidate = offsets.filter({ $0.value >= -35 && $0.value <= 100 }).min(by: { abs($0.value) < abs($1.value) }) {
-                        let newIndex = topCandidate.key
+                    let maxLine = max(wrappedLines.count - currentLinesPerPage, 0)
+                    
+                    let candidateIndex: Int?
+                    if let topCandidate = offsets.filter({ $0.value >= -50 && $0.value <= 180 }).min(by: { abs($0.value) < abs($1.value) }) {
+                        candidateIndex = topCandidate.key
+                    } else if let fallbackCandidate = offsets.filter({ $0.value >= 0 }).min(by: { $0.value < $1.value }) {
+                        candidateIndex = fallbackCandidate.key
+                    } else {
+                        candidateIndex = nil
+                    }
+                    
+                    if let rawIndex = candidateIndex {
+                        let newIndex = max(0, min(rawIndex, maxLine))
                         if newIndex != activeLineIndex {
                             DispatchQueue.main.async {
                                 self.activeLineIndex = newIndex
@@ -237,7 +249,6 @@ struct TeleprompterPreviewView: View {
                             }
                         }
                         
-                        // 🎯 手势停顿/滑动结束闭环：取消之前倒计时，设置 200ms 终点强制刷帧与解封校验
                         dragSettleWorkItem?.cancel()
                         let item = DispatchWorkItem {
                             self.bleManager.flushFinalScrollSync(lineIndex: newIndex)
@@ -248,7 +259,8 @@ struct TeleprompterPreviewView: View {
                 }
                 .onReceive(bleManager.$currentFocusPageLine) { newGlassesLine in
                     guard !wrappedLines.isEmpty else { return }
-                    let clampedLine = max(0, min(wrappedLines.count - 1, newGlassesLine))
+                    let maxLine = max(wrappedLines.count - currentLinesPerPage, 0)
+                    let clampedLine = max(0, min(maxLine, newGlassesLine))
                     if clampedLine != activeLineIndex {
                         self.isProgrammaticScrolling = true
                         self.dragSettleWorkItem?.cancel()
@@ -289,16 +301,36 @@ struct TeleprompterPreviewView: View {
                             .foregroundColor(.purple)
                     }
                     
-                    Text("10字")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                    
-                    Slider(value: $widthChars, in: 10...28, step: 1)
-                        .accentColor(.purple)
-                    
-                    Text("28字")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+                    VStack(spacing: 8) {
+                        HStack(spacing: 8) {
+                            Text("10字")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            
+                            Slider(value: $widthChars, in: 10...28, step: 1)
+                                .accentColor(.purple)
+                            
+                            Text("28字")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        HStack(spacing: 8) {
+                            Text("3行")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            
+                            Slider(value: $linesPerPageValue, in: 3...10, step: 1)
+                                .accentColor(.purple)
+                                .onChange(of: linesPerPageValue) { newVal in
+                                    bleManager.linesPerPage = Int(newVal)
+                                }
+                            
+                            Text("10行")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
                 }
                 .padding(.horizontal, 24)
                 
@@ -346,6 +378,7 @@ struct TeleprompterPreviewView: View {
         .navigationBarHidden(true)
         .onAppear {
             widthChars = Double(script.targetWidthChars)
+            bleManager.linesPerPage = Int(linesPerPageValue)
         }
         .sheet(isPresented: $showingEditor) {
             ScriptEditorView(scriptToEdit: script)
@@ -353,7 +386,8 @@ struct TeleprompterPreviewView: View {
     }
     
     private func updateFocusLine(index: Int, scrollProxy: ScrollViewProxy?) {
-        let clamped = max(0, min(wrappedLines.count - 1, index))
+        let maxLine = max(wrappedLines.count - currentLinesPerPage, 0)
+        let clamped = max(0, min(maxLine, index))
         isProgrammaticScrolling = true
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
             activeLineIndex = clamped
@@ -369,13 +403,15 @@ struct TeleprompterPreviewView: View {
         guard bleManager.isConnected else { return }
         
         if bleManager.isTeleprompterSessionActive && !bleManager.isPushingText {
-            // ✅ 场景 1：眼镜处于活跃提词模式 -> 极速发送 1 包位置同步
-            bleManager.sendScrollSync(lineIndex: lineIndex)
+            let maxLine = max(wrappedLines.count - currentLinesPerPage, 0)
+            let safeLine = max(0, min(maxLine, lineIndex))
+            bleManager.sendScrollSync(lineIndex: safeLine)
         }
     }
     
     private func triggerPushToGlasses(scrollProxy: ScrollViewProxy?) {
         isPushing = true
+        bleManager.linesPerPage = currentLinesPerPage
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
             activeLineIndex = 0
             scrollProxy?.scrollTo(0, anchor: .top)

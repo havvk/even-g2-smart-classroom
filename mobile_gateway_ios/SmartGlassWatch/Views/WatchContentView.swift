@@ -189,15 +189,15 @@ struct WatchContentView: View {
                         let translation = value.translation
                         if abs(translation.height) > abs(translation.width) {
                             if translation.height < 0 {
-                                triggerTouchpadEvent("SWIPE_UP", label: "向上滑动：前翻")
+                                triggerTouchpadEvent("NEXT_PAGE", label: "向上滑动：下一页")
                             } else {
-                                triggerTouchpadEvent("SWIPE_DOWN", label: "向下滑动：后翻")
+                                triggerTouchpadEvent("PREV_PAGE", label: "向下滑动：上一页")
                             }
                         } else {
                             if translation.width < 0 {
-                                triggerTouchpadEvent("SWIPE_FORWARD", label: "向前滑动：前翻")
+                                triggerTouchpadEvent("NEXT_PAGE", label: "向前滑动：下一页")
                             } else {
-                                triggerTouchpadEvent("SWIPE_BACKWARD", label: "向后滑动：后翻")
+                                triggerTouchpadEvent("PREV_PAGE", label: "向后滑动：上一页")
                             }
                         }
                     }
@@ -252,7 +252,7 @@ struct WatchContentView: View {
                 // 翻页简单按键
                 HStack(spacing: 6) {
                     Button(action: {
-                        triggerTouchpadEvent("SWIPE_UP", label: "上一页")
+                        triggerTouchpadEvent("PREV_PAGE", label: "上一页")
                     }) {
                         Text("上一页")
                             .font(.system(size: 11, weight: .semibold))
@@ -263,7 +263,7 @@ struct WatchContentView: View {
                     .buttonStyle(PlainButtonStyle())
                     
                     Button(action: {
-                        triggerTouchpadEvent("SWIPE_DOWN", label: "下一页")
+                        triggerTouchpadEvent("NEXT_PAGE", label: "下一页")
                     }) {
                         Text("下一页")
                             .font(.system(size: 11, weight: .bold))
@@ -280,8 +280,14 @@ struct WatchContentView: View {
         }
     }
     
-    // MARK: - 触发手势与 Taptic 震动
+    // MARK: - 触发手势指令并发送给 iPhone (带 250ms 物理防抖节流)
+    @State private var lastGestureSentTime: Date = Date.distantPast
+    
     private func triggerTouchpadEvent(_ action: String, label: String) {
+        let now = Date()
+        guard now.timeIntervalSince(lastGestureSentTime) >= 0.250 else { return }
+        lastGestureSentTime = now
+        
         lastDetectedGesture = label
         gestureBadgeColor = (action == "DOUBLE_TAP") ? .purple : ((action == "SINGLE_TAP") ? .green : .cyan)
         

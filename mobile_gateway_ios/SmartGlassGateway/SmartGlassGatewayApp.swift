@@ -50,9 +50,11 @@ struct SmartGlassGatewayApp: App {
                 webSocketClient.sendPageControl(sessionId: "sess_demo", action: action, source: source)
                 
                 // 将最新行号/页码与状态同步回 Apple Watch
+                let calcPage = (bleManager.currentFocusPageLine / 10) + 1
+                let calcTotalPages = max((bleManager.currentTotalLines + 9) / 10, 1)
                 watchManager.syncStateToWatch(
-                    currentPage: bleManager.currentFocusPageLine + 1,
-                    totalPages: 24,
+                    currentPage: calcPage,
+                    totalPages: calcTotalPages,
                     isServerConnected: webSocketClient.isConnected
                 )
             }

@@ -45,7 +45,7 @@ class WatchBLEGatewayService: NSObject, ObservableObject, WCSessionDelegate {
             "type": "PAGE_CONTROL",
             "action": action,
             "source": source,
-            "timestamp": Int64(Date().timeIntervalSince1970)
+            "timestamp": Int64(Date().timeIntervalSince1970 * 1000)
         ]
         
         NSLog("⌚️ [SmartGlassWatch] Sending gesture: %@ from %@", action, source)
@@ -54,9 +54,9 @@ class WatchBLEGatewayService: NSObject, ObservableObject, WCSessionDelegate {
             WCSession.default.sendMessage(message, replyHandler: nil) { err in
                 NSLog("⚠️ sendMessage error: %@", err.localizedDescription)
             }
+        } else {
+            WCSession.default.transferUserInfo(message)
         }
-        WCSession.default.transferUserInfo(message)
-        try? WCSession.default.updateApplicationContext(message)
     }
     
     // MARK: - WCSessionDelegate
