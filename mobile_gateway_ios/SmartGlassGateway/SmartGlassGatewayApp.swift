@@ -39,60 +39,21 @@ struct SmartGlassGatewayApp: App {
         }
         
         // 2. 双指捏合 / 表冠 / 甩手 / 触控板滑动与点击
-        watchManager.onPageControlTriggered = { action, source in
+        watchManager.onPageControlTriggered = { [weak bleManager, weak webSocketClient] action, source in
             DispatchQueue.main.async {
-                NSLog("📱 [iPhone App] Watch 触控/手势收到: %@来自 %@，下发 BLE 与 WebSocket", action, source)
-                self.bleManager.lastGestureReceived = "\(source): \(action)"
-                self.bleManager.addLog("⌚️ [Watch触控板/手势] 动作=\(action), 来源=\(source)")
+                guard let bleManager = bleManager, let webSocketClient = webSocketClient else { return }
                 
-                switch action {
-                case "SINGLE_TAP":
-                    // 单击：推进提词器 1 行 (sendScrollSync)
-                    let nextLine = self.bleManager.currentFocusPageLine + 1
-                    self.bleManager.currentFocusPageLine = nextLine
-                    if self.bleManager.isConnected {
-                        self.bleManager.sendScrollSync(lineIndex: nextLine)
-                    }
-                    
-                case "DOUBLE_TAP":
-                    // 双击：根据 §2.2 规范触发 HUD 显存休眠/唤醒 (sleepHUD / wakeHUD)
-                    if self.bleManager.isConnected {
-                        let isHUDActive = self.bleManager.isDebugOverrideMode
-                        if isHUDActive {
-                            self.bleManager.sleepHUD()
-                        } else {
-                            self.bleManager.wakeHUD()
-                        }
-                    }
-                    
-                case "NEXT", "SWIPE_DOWN", "SWIPE_BACKWARD":
-                    // 下滑 / 向后滑 / 下一页：向后滚动提词器 1 行 (sendScrollSync)
-                    let nextLine = self.bleManager.currentFocusPageLine + 1
-                    self.bleManager.currentFocusPageLine = nextLine
-                    if self.bleManager.isConnected {
-                        self.bleManager.sendScrollSync(lineIndex: nextLine)
-                    }
-                    
-                case "PREV", "SWIPE_UP", "SWIPE_FORWARD":
-                    // 上滑 / 向前滑 / 上一页：向前滚动提词器 1 行 (sendScrollSync)
-                    let prevLine = max(0, self.bleManager.currentFocusPageLine - 1)
-                    self.bleManager.currentFocusPageLine = prevLine
-                    if self.bleManager.isConnected {
-                        self.bleManager.sendScrollSync(lineIndex: prevLine)
-                    }
-                    
-                default:
-                    break
-                }
+                NSLog("📱 [iPhone App] Watch 触控/手势收到: %@来自 %@，下发 BLE 与 WebSocket", action, source)
+                bleManager.handleWatchGesture(action: action, source: source)
                 
                 // 向 WebSocket 广播 PAGE_CONTROL 消息
-                self.webSocketClient.sendPageControl(sessionId: "sess_demo", action: action, source: source)
+                webSocketClient.sendPageControl(sessionId: "sess_demo", action: action, source: source)
                 
                 // 将最新行号/页码与状态同步回 Apple Watch
                 watchManager.syncStateToWatch(
-                    currentPage: self.bleManager.currentFocusPageLine + 1,
+                    currentPage: bleManager.currentFocusPageLine + 1,
                     totalPages: 24,
-                    isServerConnected: self.webSocketClient.isConnected
+                    isServerConnected: webSocketClient.isConnected
                 )
             }
         }

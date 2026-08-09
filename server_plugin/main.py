@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import asyncio
+from datetime import datetime
 from typing import Dict, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -132,8 +133,9 @@ class G2LogPayload(BaseModel):
 
 @app.post("/api/g2/log")
 async def report_g2_log(payload: G2LogPayload):
+    ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
     symbol = "📥 [G2 -> Phone Rx]" if payload.direction == "Rx" else "📤 [Phone -> G2 Tx]"
-    print(f"\033[93m👓 [G2 蓝牙实时日志] {symbol} | {payload.description} | HEX: [{payload.hex_bytes}]\033[0m")
+    print(f"\033[93m[{ts}] 👓 [G2 蓝牙实时日志] {symbol} | {payload.description} | HEX: [{payload.hex_bytes}]\033[0m")
     return {"status": "ok"}
 
 @app.get("/")
@@ -162,17 +164,18 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     direction = data.get("direction", "Rx")
                     hex_bytes = data.get("hex_bytes", "")
                     desc = data.get("description", "")
+                    ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                     if direction == "Rx":
-                        # 静默过滤眼镜固件高频 IMU 姿态/ACK 采样上报
-                        pass
+                        print(f"\033[93m[{ts}] ℹ️ [G2 BLE 系统日志] ⬇️ [RX 接收] {desc} | HEX: [{hex_bytes}]\033[0m", flush=True)
                     elif direction == "Tx":
-                        print(f"\033[96m📤 [手机下发指令 (Tx)] {desc} | HEX: [{hex_bytes}]\033[0m", flush=True)
+                        print(f"\033[96m[{ts}] 📤 [手机下发指令 (Tx)] {desc} | HEX: [{hex_bytes}]\033[0m", flush=True)
                     else:
-                        print(f"\033[93mℹ️ [G2 BLE 系统日志] {desc}\033[0m", flush=True)
+                        print(f"\033[93m[{ts}] ℹ️ [G2 BLE 系统日志] {desc}\033[0m", flush=True)
                 elif msg_type == "PAGE_CONTROL":
                     action = data.get("action", "NEXT")
                     source = data.get("source", "UNKNOWN")
-                    print(f"\033[92m⌚️ [服务端收到手表/触控手势] 动作={action}, 来源={source}\033[0m", flush=True)
+                    ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                    print(f"\033[92m[{ts}] ⌚️ [服务端收到手表/触控手势] 动作={action}, 来源={source}\033[0m", flush=True)
                     target_page = data.get("target_page")
                     # 执行翻页
                     slide_mgr.change_page(action, target_page)

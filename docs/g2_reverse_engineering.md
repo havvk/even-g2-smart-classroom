@@ -1199,20 +1199,20 @@ AA 12 60 06 01 01 0D 01 08 01 1A 00 [CRC16]
 
 阶段 3：150ms 窗口后全新推流 (App ➔ Glass)
 ────────────────────────────────────────────────────────────────
-1. Auth 7 包鉴权 (0x80-00, 0x80-20)
-2. Setup 7 包前置 (0x07-20, 0x03-20 Layout, 0x0C-20 供电, 0x30-20 点灯)
-3. Teleprompter Init (0x06-20 Type 1)
-4. Pages Data (0x06-20 Type 3 Page 0, Page 1...)
-5. HUD Mount (0x04-20) & Touchpad Router (0x09-20)
-6. Viewport Flush Line 0 (0x06-20 Type 165)
+（经 multiprompts.pklg 抓包证实：已建立的 BLE 连接无须重发 Auth 7 包及 0x30-20 系统模式重置包，直接切入 0x06-20 提词层）：
+1. Teleprompter Init (0x06-20 Type 1, 动态递增 MsgId)
+2. Pages Data (0x06-20 Type 3 Page 0 ~ 13, 每页动态递增 MsgId)
+3. HUD Mount (0x04-20) & Touchpad Router (0x09-20)
+4. Render Commit (0x80-00 提交渲染)
+5. ScrollSync Line 0 (0x06-20 Type 165 视口终点对齐)
 ```
 
 ### 23.3 避坑指南：连续发包常见死锁与黑屏根因
 
 1. **强行在活跃 Session 下发 0x30-20 / Setup 信令**：
    - 现象：MicroLED 光机瞬间**黑屏**；
-   - 根因：在旧 Session 尚未销毁时发送 `0x30-20 System Mode`，导致 MCU 状态机冲突（活跃渲染态与模式初始化态并发）。**核心问题是时序而非缓冲区** —— `0x30-20` 在 Session Terminated 之后发送完全正常。
-   - 正确做法：必须先等待 `0x0D-01 Session Terminated` 确认，再发送包含 `0x30-20` 的完整 Setup 序列 (§23.2)。
+   - 根因：在 BLE 链路已握手就绪时重复下发 `0x30-20 System Mode`，导致 MCU 将物理模式强制复位。
+   - 正确做法：必须先等待 `0x0D-01 Session Terminated` 确认，收到确认后跳过 Auth/Setup，直接发送 `0x06-20 TeleprompterInit` 进行新讲稿初始化。
 2. **重推时漏重置 `isPushingText` 标记**：
    - 现象：不关蓝牙无法第二次推送；
    - 根因：首次发包完成后 `isPushingText` 锁未复位，后续推送全部被 `if isPushingText { return }` 拦截抛弃。
@@ -1220,3 +1220,49 @@ AA 12 60 06 01 01 0D 01 08 01 1A 00 [CRC16]
    - 现象：推送第二篇讲稿时眼镜显示 `Session Terminated`；
    - 根因：固件校验发现新包 Seq 小于上一包 Seq，触发底层断开防护。
    - ⚠️ 补充：经 §23.2 验证，MCU 收到 `0x0D-01 Session Terminated` 后会重置 Seq 计数器，因此重推时从 Seq=1 重新开始是安全的（官方 APP 的 Auth 7 包即从 Seq=1 起始）。
+
+---
+
+## 24. 无状态硬件探针 (Stateless Probe) 与 Service Lo 响应位协议解调规范 🆕 (2026-08-08 成果)
+
+为了摆脱客户端对本地内存标记 (`hasAuthBeenDoneForCurrentConnection`) 的脆弱依赖，实现 100% 物理层驱动的无状态推屏，必须通过 `Service 0x0D-20` 物理探针主动解调 Glasses MCU 的真实硬件状态。
+
+### 24.1 8-Byte Header 中 `Service Lo` 响应方向位物理定义
+
+在 G2 智能眼镜 8-Byte BLE Header (`AA 12 ... SvcHi SvcLo`) 中，`Service Lo` 字节严格规定了通信双向路由的方向属性：
+
+| Service Lo (HEX) | 位掩码定义 | 协议路由含义 | 典型报文示例 |
+| :--- | :--- | :--- | :--- |
+| **`0x20`** | `0b0010_0000` | 📱 **Phone ➔ 👓 Glasses 请求/下发帧 (Request)** | `0x0D-20` (探针/配置), `0x06-20` (提词), `0x30-20` (模式) |
+| **`0x00`** | `0b0000_0000` | 👓 **Glasses ➔ 📱 Phone 即时物理响应 (Direct Response / ACK)** | **`0x0D-00`** (`AA 12 ... 0D 00 10 05 1A 02 08 01`), `0x09-00` |
+| **`0x01`** | `0b0000_0001` | 👓 **Glasses ➔ 📱 Phone 异步事件广播 (Async Notify)** | **`0x0D-01`** (Session Terminated), `0x06-01` (触控行号) |
+
+### 24.2 无状态探针 (Stateless Probe) 物理交互图
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as 📱 Gateway App (Stateless Engine)
+    participant BLE as 📡 BLE Channel 5401 / 5402
+    participant MCU as 👓 G2 Glass MCU
+
+    App->>BLE: 1. 下发 0x0D-20 物理探针包 (Status Query)
+    BLE-->>MCU: AA 21 00 08 01 01 0D 20 08 00 10 05 42 3E
+    
+    alt 物理鉴权有效 (Auth Active)
+        MCU-->>BLE: 2a. 10ms 极速返回 0x0D-00 Direct ACK
+        Note over BLE: AA 12 30 08 01 01 0D 00 10 05 1A 02 08 01
+        BLE-->>App: 3a. 探针捕获 0x0D-00 (含有 1A 02 08 01) -> 判定鉴权尚在
+        App->>BLE: 4a. 跳过 Auth 7 包，直接下发 Setup (7包) + Init + Pages + Commit
+        BLE-->>MCU: 画面瞬间正常上电点亮 ⚡
+    else 物理未鉴权 / 冷启动 / 从休眠唤醒 (Auth Invalid)
+        MCU-->>BLE: 2b. 返回 0x0D-00 (1A 00 / 无有效 Segment) 或超时
+        BLE-->>App: 3b. 探针判定硬件处在冷启动/鉴权失效态
+        App->>BLE: 4b. 自动插入 Auth (7包) + Setup (7包) + Init + Pages + Commit
+        BLE-->>MCU: 重新握手鉴权并上电点亮 ⚡
+    end
+```
+
+### 24.3 避坑核心：匹配拦截器必须兼容 `SLo == 0x00` 与 `SLo == 0x01`
+若探针解调拦截器仅限定 `sLo == 0x01`，则 MCU 返回的物理确认包 `0x0D-00` 会被拦截器遗漏抛弃，引发 300ms 假超时并强行误发 Auth 7 包造成黑屏。必须使拦截条件覆盖 `(sLo == 0x00 || sLo == 0x01)`。
+

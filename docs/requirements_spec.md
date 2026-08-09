@@ -9,9 +9,42 @@
 
 ---
 
-## 2. 核心功能规范
+## 2. 核心功能规范与眼镜状态机架构
 
-### 2.1 自研 AI 语音跟随 (Self-developed Voice-Driven Auto Scroll)
+### 2.0 智能眼镜全状态同步状态机 (Glasses State Machine Architecture - 核心底层架构)
+
+iOS 宿主 App (`SmartGlassGateway`) 必须维护一个全局可观测、双向同步的 **眼镜工作模式状态机 (`GlassesState`)**。移动网关必须根据当前工作模式在 App UI 上提供显式切换入口，并根据模式动态呈现专属的操控视图与遥测仪表盘。
+
+```mermaid
+stateDiagram-v2
+    [*] --> 未连接 : 蓝牙未配对 / 离线
+    未连接 --> 表盘待机 : 0x80-20 鉴权成功 (Dashboard)
+    
+    state 状态机工作模式 {
+        表盘待机 --> 提词器模式 : 切入 0x06-20 (Teleprompter)
+        提词器模式 --> 表盘待机 : 0x0D-01 Session Terminated / 手动退出
+        
+        表盘待机 --> AI对话同传 : 切入 0x0B-20 (Conversate / AI)
+        AI对话同传 --> 表盘待机 : 对话完成 / 手动退出
+        
+        表盘待机 --> 息屏休眠 : 0x04-20 显存关闭 (Sleeping)
+        息屏休眠 --> 表盘待机 : 0x04-20 显存唤醒 (Wake)
+    }
+```
+
+#### 2.0.1 状态机工作模式分类 (基于 100% 反编译验证的服务体系)
+1. **`.disconnected` (未连接)**：BLE 通道断开，UI 提示蓝牙连接引导。
+2. **`.dashboard` (主页仪表盘模式)**：眼镜停留在默认时钟、天气与功能主菜单 (`Service 0x07-20 Dashboard`)，UI 显示系统总览与主页控制项。
+3. **`.teleprompter` (提词前台模式)**：眼镜前台运行提词 App (`Service 0x06-20 Teleprompter`)，UI 呈现视口高亮卡片、行号滑块与滚屏控制。
+4. **`.conversate` (AI对话与实时同传模式)**：眼镜前台运行语音听写与 Even AI 对话 (`Service 0x0B-20 Conversate`)，UI 呈实时双语字幕流与 ASR 响应卡片。
+5. **`.sleeping` (显存息屏休眠态)**：MicroLED 光学引擎息屏省电 (`Service 0x04-20 Wake/Sleep`)，UI 显示醒目的唤醒激活按钮。
+
+#### 2.0.2 UI 响应与模式感知要求
+- **模式切换选择器 (UI Segmented Mode Picker)**：iOS App 顶部必须提供直观的模式切换 Bar，允许教师一键在 `[ 表盘待机 | 提词模式 | AI对话 | 息屏休眠 ]` 之间手动切换。
+- **实时 Notify 自动同步**：网关必须实时监听 `5402` 特征值的 `0x0D-01` (Session Terminated) 等硬件 Notify，当物理眼镜发生长按或状态变更时，App UI 与状态机必须**毫秒级自动同步更新**。
+- **模式感知的 Watch 手势路由**：当 Apple Watch 发来 1:1 触控手势时，网关必须根据当前 `GlassesState` 智能分发至对应模式的处理逻辑。
+
+---
 
 #### 2.1.1 官方 AI 模式已知缺陷
 | 缺陷 | 现象 | 影响 |
@@ -34,9 +67,12 @@
 ### 2.2 多模态翻页与控制消息 (Multi-modal Page & Device Control)
 系统支持三种外设手势源接入，发出的 WebSocket 消息要求在 **< 150ms** 内驱动教室大屏翻页或响应硬件动作：
 
-1. **Apple Watch 替代官方指环 (Smart Ring Alternative)**：
-   - **方式 1（捏手指 Double Tap / AssistiveTouch）**：捏合双指触发大屏翻页，误触率最低。
-   - **方式 2（数字表冠 Digital Crown）**：顺时针/逆时针扭动表冠微调逐字稿行高亮与翻页。
+1. **Apple Watch 1:1 完全替代眼镜物理触控板 (Touchpad Replacement - 最高优先级)**：
+   - **核心设计原则**：Apple Watch 手表端必须优先做到 **1:1 完全替代 Even G2 眼镜右侧镜腿的物理触控板 (Touchpad)**。这些触控手势必须无缝映射并透明透传，无论智能眼镜当前处于何种应用模式（提词模式、表盘待机、主菜单导航、通知查看等）：
+     - **单击 (Single Tap)**：1:1 映射镜腿物理单击（确认 / 推进 1 行 / 选中当前项）。
+     - **双击 (Double Tap)**：1:1 映射镜腿物理双击（返回 / 切换模式 / 唤醒休眠）。
+     - **滑动 (Swipe Up / Down / Forward / Backward)**：1:1 映射镜腿物理滑动（向上/向下滚动菜单、逐字稿或列表）。
+   - **方式 2（数字表冠 Digital Crown）**：顺时针/逆时针扭动表冠微调逐字稿行高亮与连续滚屏。
    - **方式 3（CoreMotion 手腕甩动 Wrist Flick）**：基于 50Hz IMU 角速度与加速度回弹比对算法（带 1.5s 防抖冷却），手腕快速向上甩动触发翻页。
    - **快捷触发 AI 对话与实时转录**：手表端提供 `🤖 AI对话` 与 `🎤 实时转录` 快捷触控卡片，100% 替代官方物理戒指的按键功能。
    - **watchOS 表盘组件 (Watch Complications)**：支持在 Apple Watch 表盘直接添加一键唤醒图标。

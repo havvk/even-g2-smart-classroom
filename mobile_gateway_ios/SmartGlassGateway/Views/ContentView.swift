@@ -52,13 +52,265 @@ struct ContentView: View {
             .padding(.vertical, 8)
             .background(Color(UIColor.tertiarySystemBackground))
             
-            // 主提词讲稿列表
-            TeleprompterListView()
+            // 顶部眼镜 4 大工作模式 Segmented Picker (Glasses State Machine)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(GlassesState.allCases.filter { $0 != .disconnected }) { state in
+                        Button(action: {
+                            bleManager.switchMode(to: state)
+                        }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: state.iconName)
+                                Text(state.rawValue)
+                            }
+                            .font(.system(size: 12, weight: .bold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(bleManager.currentGlassesState == state ? Color.blue : Color.gray.opacity(0.15))
+                            .foregroundColor(bleManager.currentGlassesState == state ? .white : .primary)
+                            .cornerRadius(14)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+            }
+            .background(Color(UIColor.secondarySystemBackground))
+            
+            // 根据 bleManager.currentGlassesState 呈现专属 UI 操控视图
+            currentModeView
         }
         .sheet(isPresented: $showingControlCenter) {
             ControlCenterSheetView()
                 .environmentObject(bleManager)
                 .environmentObject(webSocketClient)
+        }
+    }
+    
+    @ViewBuilder
+    private var currentModeView: some View {
+        if !bleManager.isConnected && !bleManager.isDebugOverrideMode {
+            DisconnectedModeView()
+                .environmentObject(bleManager)
+        } else {
+            switch bleManager.currentGlassesState {
+            case .dashboard, .disconnected:
+                DashboardModeView()
+                    .environmentObject(bleManager)
+                    .environmentObject(webSocketClient)
+                    
+            case .teleprompter:
+                TeleprompterListView()
+                    .environmentObject(bleManager)
+                    .environmentObject(webSocketClient)
+                    
+            case .conversate:
+                ConversateModeView()
+                    .environmentObject(bleManager)
+                    .environmentObject(webSocketClient)
+                    
+            case .sleeping:
+                SleepingModeView()
+                    .environmentObject(bleManager)
+            }
+        }
+    }
+}
+
+// MARK: - 模式 1：主页仪表盘专属视图 (Dashboard Mode)
+struct DashboardModeView: View {
+    @EnvironmentObject var bleManager: BLEManager
+    @EnvironmentObject var webSocketClient: WebSocketClient
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            Spacer()
+            
+            Image(systemName: "house.fill")
+                .font(.system(size: 56))
+                .foregroundColor(.blue)
+            
+            Text("Even G2 主页仪表盘")
+                .font(.headline)
+                .fontWeight(.bold)
+            
+            Text("眼镜当前处于初始表盘待机界面\n可查看时钟、天气与未读通知。可通过上方菜单切换拉起其他应用。")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+            
+            HStack(spacing: 16) {
+                Button(action: {
+                    bleManager.switchMode(to: .teleprompter)
+                }) {
+                    HStack {
+                        Image(systemName: "doc.text.fill")
+                        Text("拉起提词器")
+                    }
+                    .font(.subheadline)
+                    .fontWeight(.bold)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+                }
+                
+                Button(action: {
+                    bleManager.switchMode(to: .conversate)
+                }) {
+                    HStack {
+                        Image(systemName: "bubble.left.and.bubble.right.fill")
+                        Text("拉起 AI 同传")
+                    }
+                    .font(.subheadline)
+                    .fontWeight(.bold)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Color.purple)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+                }
+            }
+            .padding(.top, 8)
+            
+            Spacer()
+        }
+    }
+}
+
+// MARK: - 模式 3：AI对话与实时同传专属视图 (Conversate Mode)
+struct ConversateModeView: View {
+    @EnvironmentObject var bleManager: BLEManager
+    @EnvironmentObject var webSocketClient: WebSocketClient
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            HStack {
+                Label("AI 同传对话", systemImage: "bubble.left.and.bubble.right.fill")
+                    .font(.headline)
+                    .foregroundColor(.purple)
+                Spacer()
+                Text("🔴 监听中")
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .foregroundColor(.red)
+            }
+            .padding()
+            .background(Color.purple.opacity(0.1))
+            .cornerRadius(12)
+            .padding(.horizontal)
+            
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("🤖 Even AI 对话与听写字幕流已建立，眼镜前台正在实时渲染双语字幕...")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .padding()
+                }
+            }
+            
+            Button(action: {
+                bleManager.switchMode(to: .dashboard)
+            }) {
+                Text("结束对话回到主页")
+                    .font(.subheadline)
+                    .fontWeight(.bold)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.gray.opacity(0.2))
+                    .foregroundColor(.primary)
+                    .cornerRadius(10)
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 12)
+        }
+    }
+}
+
+// MARK: - 模式 4：显存息屏休眠视图 (Sleeping Mode)
+struct SleepingModeView: View {
+    @EnvironmentObject var bleManager: BLEManager
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            
+            Image(systemName: "eye.slash.fill")
+                .font(.system(size: 64))
+                .foregroundColor(.gray)
+            
+            Text("G2 MicroLED 显存处于息屏休眠状态")
+                .font(.headline)
+                .fontWeight(.bold)
+            
+            Text("屏幕电源已关闭。点击下方按钮唤醒屏幕。")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            
+            Button(action: {
+                bleManager.switchMode(to: .dashboard)
+            }) {
+                HStack {
+                    Image(systemName: "bolt.fill")
+                    Text("唤醒屏幕")
+                }
+                .font(.headline)
+                .fontWeight(.bold)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 14)
+                .background(Color.green)
+                .foregroundColor(.white)
+                .cornerRadius(12)
+            }
+            
+            Spacer()
+        }
+    }
+}
+
+// MARK: - 模式 0：未连接设备引导视图 (Disconnected View)
+struct DisconnectedModeView: View {
+    @EnvironmentObject var bleManager: BLEManager
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            
+            Image(systemName: "eyeglasses")
+                .font(.system(size: 64))
+                .foregroundColor(.blue)
+            
+            Text("Even G2 智能眼镜未连接")
+                .font(.title3)
+                .fontWeight(.bold)
+            
+            Text("请在上方控制中心扫描连接 G2 眼镜，或开启 Debug 调试模式体验模式切换。")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            
+            Button(action: {
+                bleManager.startScanning()
+            }) {
+                HStack {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                    Text("扫描连接 G2 眼镜")
+                }
+                .font(.headline)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+                .background(Color.blue)
+                .foregroundColor(.white)
+                .cornerRadius(10)
+            }
+            
+            Spacer()
         }
     }
 }

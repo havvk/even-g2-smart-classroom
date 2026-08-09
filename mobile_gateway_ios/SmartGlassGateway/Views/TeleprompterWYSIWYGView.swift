@@ -48,7 +48,7 @@ struct TeleprompterWYSIWYGView: View {
                     triggerPush()
                 }
                 
-                Text("物理字号恒定为 23px，改变显示宽度可容纳不同字数")
+                Text("字号恒定为 23px，改变显示宽度可容纳不同字数")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }

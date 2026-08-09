@@ -96,62 +96,45 @@ class G2ProtocolEncoder {
     // MARK: - 1. 7-Packet Session Authentication (Service 0x8000 & 0x8020)
     
     /// 生成 7 包全链路静态 Token 鉴权序列 (100% 物理对齐 G2 官方首联鉴权规范)
-    static func buildAuthPackets() -> [Data] {
+    /// 生成 100% 动态 Seq/MsgId 的 Auth 7 包序列 (彻底消除二次推送时 Seq 倒退回 1~7 导致的黑屏)
+    /// 100% 物理对齐 bt3.pklg Pkt #01-#04 真实官方 4 包鉴权序列
+    static func buildAuthPackets(seq: inout UInt8, msgId: inout Int) -> [Data] {
         let timestamp = Int(Date().timeIntervalSince1970)
         let tsVarint = encodeVarint(timestamp)
         let txid = Data([0xE8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01])
         
         var packets = [Data]()
         
-        // Auth 1 (seq=0x01)
-        packets.append(addCRC(Data([
-            0xAA, 0x21, 0x01, 0x0C, 0x01, 0x01, 0x80, 0x00,
-            0x08, 0x04, 0x10, 0x0C, 0x1A, 0x04, 0x08, 0x01, 0x10, 0x04
-        ])))
+        // Auth 1 (0x80-00) - bt3.pklg Pkt #01
+        var p1 = Data([0x08, 0x04, 0x10])
+        p1.append(encodeVarint(msgId))
+        p1.append(Data([0x1A, 0x04, 0x08, 0x01, 0x10, 0x03]))
+        packets.append(buildPacket(seq: &seq, serviceHi: 0x80, serviceLo: 0x00, payload: p1))
+        msgId += 1
         
-        // Auth 2 (seq=0x02)
-        packets.append(addCRC(Data([
-            0xAA, 0x21, 0x02, 0x0A, 0x01, 0x01, 0x80, 0x20,
-            0x08, 0x05, 0x10, 0x0E, 0x22, 0x02, 0x08, 0x02
-        ])))
+        // Auth 2 (0x80-20) - bt3.pklg Pkt #02
+        var p2 = Data([0x08, 0x05, 0x10])
+        p2.append(encodeVarint(msgId))
+        p2.append(Data([0x22, 0x02, 0x08, 0x01]))
+        packets.append(buildPacket(seq: &seq, serviceHi: 0x80, serviceLo: 0x20, payload: p2))
+        msgId += 1
         
-        // Auth 3 (seq=0x03)
-        var p3Payload = Data([0x08, 0x80, 0x01, 0x10, 0x0F, 0x82, 0x08, 0x11, 0x08])
-        p3Payload.append(tsVarint)
-        p3Payload.append(Data([0x10]))
-        p3Payload.append(txid)
-        let p3Len = UInt8((p3Payload.count + 2) & 0xFF)
-        var p3Header = Data([0xAA, 0x21, 0x03, p3Len, 0x01, 0x01, 0x80, 0x20])
-        p3Header.append(p3Payload)
-        packets.append(addCRC(p3Header))
+        // Auth 3 (0x80-20) - bt3.pklg Pkt #03
+        var p3 = Data([0x08, 0x80, 0x01, 0x10])
+        p3.append(encodeVarint(msgId))
+        p3.append(Data([0x82, 0x08, 0x08, 0x08]))
+        p3.append(tsVarint)
+        p3.append(Data([0x10]))
+        p3.append(txid)
+        packets.append(buildPacket(seq: &seq, serviceHi: 0x80, serviceLo: 0x20, payload: p3))
+        msgId += 1
         
-        // Auth 4 (seq=0x04)
-        packets.append(addCRC(Data([
-            0xAA, 0x21, 0x04, 0x0C, 0x01, 0x01, 0x80, 0x00,
-            0x08, 0x04, 0x10, 0x10, 0x1A, 0x04, 0x08, 0x01, 0x10, 0x04
-        ])))
-        
-        // Auth 5 (seq=0x05)
-        packets.append(addCRC(Data([
-            0xAA, 0x21, 0x05, 0x0C, 0x01, 0x01, 0x80, 0x00,
-            0x08, 0x04, 0x10, 0x11, 0x1A, 0x04, 0x08, 0x01, 0x10, 0x04
-        ])))
-        
-        // Auth 6 (seq=0x06)
-        packets.append(addCRC(Data([
-            0xAA, 0x21, 0x06, 0x0A, 0x01, 0x01, 0x80, 0x20,
-            0x08, 0x05, 0x10, 0x12, 0x22, 0x02, 0x08, 0x01
-        ])))
-        
-        // Auth 7 (seq=0x07)
-        var p7Payload = Data([0x08, 0x80, 0x01, 0x10, 0x13, 0x82, 0x08, 0x11, 0x08])
-        p7Payload.append(tsVarint)
-        p7Payload.append(Data([0x10]))
-        p7Payload.append(txid)
-        let p7Len = UInt8((p7Payload.count + 2) & 0xFF)
-        var p7Header = Data([0xAA, 0x21, 0x07, p7Len, 0x01, 0x01, 0x80, 0x20])
-        p7Header.append(p7Payload)
-        packets.append(addCRC(p7Header))
+        // Auth 4 (0x80-00) - bt3.pklg Pkt #04
+        var p4 = Data([0x08, 0x04, 0x10])
+        p4.append(encodeVarint(msgId))
+        p4.append(Data([0x1A, 0x04, 0x08, 0x01, 0x10, 0x03]))
+        packets.append(buildPacket(seq: &seq, serviceHi: 0x80, serviceLo: 0x00, payload: p4))
+        msgId += 1
         
         return packets
     }
@@ -472,12 +455,12 @@ class G2ProtocolEncoder {
         result.append((buildPacket(seq: &seq, serviceHi: 0x0C, serviceLo: 0x20, payload: p0C), "Setup: Display Channel (0x0C-20)"))
         msgId += 1
         
-        // 4. Service 30-20 系统模式切换
-        var p30 = Data([0x08, 0x01, 0x10])
-        p30.append(encodeVarint(msgId))
-        p30.append(Data([0x1A, 0x04, 0x08, 0x01, 0x10, 0x00]))
-        result.append((buildPacket(seq: &seq, serviceHi: 0x30, serviceLo: 0x20, payload: p30), "Setup: System Mode (0x30-20)"))
-        msgId += 1
+        // 4. Service 30-20 (跳过：发送 0x30-20 会导致眼镜 MCU 主动抛出 0x0D-01 Session Terminated 销毁画布)
+        // var p30 = Data([0x08, 0x01, 0x10])
+        // p30.append(encodeVarint(msgId))
+        // p30.append(Data([0x1A, 0x04, 0x08, 0x01, 0x10, 0x00]))
+        // result.append((buildPacket(seq: &seq, serviceHi: 0x30, serviceLo: 0x20, payload: p30), "Setup: System Mode (0x30-20)"))
+        // msgId += 1
         
         // 5. Service 0D-20 状态同步指示
         var p0D = Data([0x08, 0x00, 0x10])
@@ -498,20 +481,6 @@ class G2ProtocolEncoder {
         p1F.append(encodeVarint(msgId))
         p1F.append(Data([0x1A, 0x02, 0x08, 0x01]))
         result.append((buildPacket(seq: &seq, serviceHi: 0x1F, serviceLo: 0x20, payload: p1F), "Setup: Focus State (0x1F-20)"))
-        msgId += 1
-        
-        // 8. Service 10-20 App 界面挂载通知
-        var p10 = Data([0x08, 0x01, 0x10])
-        p10.append(encodeVarint(msgId))
-        p10.append(Data([0x1A, 0x02, 0x08, 0x04]))
-        result.append((buildPacket(seq: &seq, serviceHi: 0x10, serviceLo: 0x20, payload: p10), "Setup: App Mount (0x10-20)"))
-        msgId += 1
-        
-        // 9. Service 01-20 Touchpad Interrupt Enable (100% 对齐 Pkt 18: 22 0C 1A 0A 12 08 1A 06 08 00 10 00 20 01)
-        var p01 = Data([0x08, 0x02, 0x10])
-        p01.append(encodeVarint(msgId))
-        p01.append(Data([0x22, 0x0C, 0x1A, 0x0A, 0x12, 0x08, 0x1A, 0x06, 0x08, 0x00, 0x10, 0x00, 0x20, 0x01]))
-        result.append((buildPacket(seq: &seq, serviceHi: 0x01, serviceLo: 0x20, payload: p01), "Setup: Touchpad Interrupt (0x01-20)"))
         msgId += 1
         
         return result
@@ -612,7 +581,7 @@ class G2ProtocolEncoder {
         return 1
     }
     
-    /// 将文本切分为 28 中文字符/行、10 行/页的数组 (硬性填满 G2 固件要求的 14 页 Buffer 槽位)
+    /// 将文本切分为 28 中文字符/行、10 行/页的数组 (硬性填满 G2 固件要求的 14 页 Buffer 槽位 §16.1)
     static func formatTextToPages(_ text: String, maxLineWidth: Int = 56, linesPerPage: Int = 10, targetPageCount: Int = 14) -> [String] {
         let cleanText = text.replacingOccurrences(of: "\\n", with: "\n")
         var wrappedLines = [String]()
@@ -655,7 +624,7 @@ class G2ProtocolEncoder {
             pages.append(chunk.joined(separator: "\n"))
         }
         
-        // G2 固件 MCU 视口校验要求: 必须填满 14 页 Buffer 槽位后 HUD Mount (0x04-20) 方可正常 Commit 渲染
+        // G2 固件 MCU 视口校验要求: 必须填满 14 页 Buffer 槽位后 HUD Mount (0x04-20) 方可正常 Commit 渲染 (§16.1)
         let emptyPageText = Array(repeating: "", count: linesPerPage).joined(separator: "\n")
         while pages.count < targetPageCount {
             pages.append(emptyPageText)

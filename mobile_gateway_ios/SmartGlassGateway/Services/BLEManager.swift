@@ -2,6 +2,28 @@ import Foundation
 import CoreBluetooth
 import Combine
 
+
+
+enum GlassesState: String, CaseIterable, Identifiable {
+    case disconnected = "未连接"
+    case dashboard = "主页仪表盘"
+    case teleprompter = "提词前台"
+    case conversate = "AI同传"
+    case sleeping = "息屏休眠"
+    
+    var id: String { rawValue }
+    
+    var iconName: String {
+        switch self {
+        case .disconnected: return "eyeglasses"
+        case .dashboard: return "house.fill"
+        case .teleprompter: return "doc.text.fill"
+        case .conversate: return "bubble.left.and.bubble.right.fill"
+        case .sleeping: return "eye.slash.fill"
+        }
+    }
+}
+
 /// G2 眼镜返回消息数据模型 (Rx Debug Message)
 struct G2RxMessage: Identifiable, Hashable {
     let id = UUID()
@@ -66,6 +88,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     
     private var isManualDisconnect = false
     private var hasHandshakeExecuted = false
+    private var isGattSystemModeInitialized = false
     
     override init() {
         super.init()
@@ -199,6 +222,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             self.isConnected = false
             self.hasHandshakeExecuted = false
             self.hasAuthBeenDoneForCurrentConnection = false
+            self.isGattSystemModeInitialized = false
             self.teleprompterSeq = 0x01
             self.teleprompterMsgId = 0x14
             self.isTeleprompterSessionActive = false
@@ -283,6 +307,36 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                 }
             }
         }
+    }
+    
+    /// 蓝牙链路初次连接建立时，下发 1 次 Auth (7包) + Setup (7包，含 0x30-20)，将 MCU 从主菜单切换为提词系统模式
+    private func sendGattColdStartSetup() {
+        guard isConnected else { return }
+        addLog("🔑 [BLE 冷启动握手] 下发 Auth (7包) + Setup (7包)，初始化眼镜系统模式...")
+        var seq: UInt8 = self.teleprompterSeq == 0 ? 0x01 : self.teleprompterSeq
+        var msgId: Int = self.teleprompterMsgId == 0 ? 0x01 : self.teleprompterMsgId
+        
+        var packets: [Data] = []
+        var descs: [String] = []
+        
+        let authPackets = G2ProtocolEncoder.buildAuthPackets(seq: &seq, msgId: &msgId)
+        for (idx, pkt) in authPackets.enumerated() {
+            packets.append(pkt)
+            descs.append("Auth [\(idx + 1)/7]")
+        }
+        
+        let setupPairs = G2ProtocolEncoder.buildOfficialSetupSequence(seq: &seq, msgId: &msgId)
+        for (pkt, desc) in setupPairs {
+            packets.append(pkt)
+            descs.append(desc)
+        }
+        
+        self.teleprompterSeq = seq
+        self.teleprompterMsgId = msgId
+        self.bt3PendingPackets = packets
+        self.lockStepDescs = descs
+        self.bt3CurrentIndex = 0
+        sendNextBt3PacketInLockstep()
     }
     
     @Published var rxPacketCount: Int = 0
@@ -384,7 +438,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     /// 实时当前滚动的焦点行号回调 (用于 9 行所见即所得 View 高亮卡片)
     @Published var currentFocusPageLine: Int = 0
     @Published var currentWrappedLines: [String] = []
-    @Published var currentGlassesState: UInt8 = 0
+    @Published var currentGlassesState: GlassesState = .dashboard
     
     private var currentPages: [String] = []
     private var lastPhoneScrollTime: Date = Date.distantPast
@@ -533,8 +587,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             self.isTeleprompterSessionActive = true
             addLog("✅ G2 物理屏显提词与前台焦点已锁定，Touchpad 0x06-01 触控已唤醒")
             addLog("🎉 [Lock-step] \(totalCount) 包全部下发完成！视口对齐第 \(self.targetStartLine) 行。")
-            // 🎯 强制视口刷新：每次讲稿下发完成，强制发送 1 包 Type 165 刷新眼镜屏显至目标对齐行 (解密不切换显示的根因)
-            self.sendScrollSync(lineIndex: self.targetStartLine, force: true)
+            // 🎯 Lock-Step 队列尾包 (Packet 23) 已天然包含 ScrollSync Line 0，此处无需再重复触发 sendScrollSync，防止连发碰撞黑屏
             return
         }
         
@@ -590,29 +643,51 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             return
         }
         
-        // 🎯 §23.2: 活跃 Session → 发 state=4 退出 → 等 0x0D-01 Session Terminated → 150ms 后全新推流
-        if isTeleprompterSessionActive {
-            addLog("🔄 检测到活跃提词会话，下发 state=4 退出，等待眼镜 Session Terminated 确认后重推...")
-            cancelPendingTeleprompterTasks()
-            
-            // 注册待推送任务 (收到 0x0D-01 后由 processReceivedG2Data L784 回调触发)
-            self.pendingRePushTask = { [weak self] in
-                self?.sendTeleprompterText(rawText, targetWidthChars: targetWidthChars, scrollModeAI: scrollModeAI, startLine: startLine)
-            }
-            
-            // 1500ms 超时保底：如果眼镜没有回复 Session Terminated，强制推送
-            let timeoutItem = DispatchWorkItem { [weak self] in
-                guard let self = self, self.pendingRePushTask != nil else { return }
-                self.pendingRePushTask = nil
-                self.addLog("⚠️ 等待 Session Terminated 超时 (1500ms)，强制启动新推送...")
-                self.sendTeleprompterText(rawText, targetWidthChars: targetWidthChars, scrollModeAI: scrollModeAI, startLine: startLine)
-            }
-            self.rePushTimeoutWorkItem = timeoutItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.500, execute: timeoutItem)
-            
-            self.sendExitTeleprompterMode()
+        // 🎯 防并发重入保护: 如果当前正在下发 23 包 Lock-Step 队列，严禁二次调用重入造成 BLE 管道连发碰撞
+        if isPushingText {
+            addLog("⚠️ 当前正在下发讲稿队列中，忽略并发重入请求")
             return
         }
+        
+        // =====================================================================
+        // 2.0 [热重推 Push #2+ 专属] 先发 state=4 退出旧 Session，等眼镜确认后自动冷启动重推
+        // 对齐 multiprompts.pklg: state=4 → 等 0D-01 确认 → 新 TeleprompterInit
+        // =====================================================================
+        if isTeleprompterSessionActive {
+            addLog("🔄 [热重推 (Warm Push #2+)] 先发 state=4 退出旧 Session，等待眼镜 0D-01 确认后自动冷启动重推...")
+            
+            // 注册待执行的重推任务：收到 Session Terminated 后自动回调
+            self.pendingRePushTask = { [weak self] in
+                guard let self = self else { return }
+                self.addLog("⚡️ [Session Terminated 确认] 自动启动冷启动重推流程...")
+                self.sendTeleprompterText(rawText, targetWidthChars: targetWidthChars, scrollModeAI: scrollModeAI, startLine: startLine)
+            }
+            
+            // 设置 3 秒超时保底：如果眼镜没回 Session Terminated，强制冷启动重推
+            let timeoutItem = DispatchWorkItem { [weak self] in
+                guard let self = self else { return }
+                if self.isWaitingForSessionTeardown {
+                    self.addLog("⏱️ [超时保底] 3s 未收到 Session Terminated 确认，强制重推")
+                    self.isWaitingForSessionTeardown = false
+                    self.isTeleprompterSessionActive = false
+                    // §23.2: Auth 保持有效，不重置
+                    if let task = self.pendingRePushTask {
+                        self.pendingRePushTask = nil
+                        task()
+                    }
+                }
+            }
+            self.rePushTimeoutWorkItem = timeoutItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: timeoutItem)
+            
+            // 下发 state=4 退出指令
+            sendExitTeleprompterMode()
+            return  // ← 等待异步回调，不继续执行后续队列构建
+        }
+        
+        // =====================================================================
+        // 以下为冷启动路径 (Push #1 或 Session Terminated 后的重推)
+        // =====================================================================
         
         // 1. 取消正在执行的任务与重置状态
         cancelPendingTeleprompterTasks()
@@ -626,33 +701,32 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         let pages = G2ProtocolEncoder.formatTextToPages(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: 10)
         self.currentPages = pages
         
-        // 2. 构建 Lock-Step 包队列 (执行完整验证成功的冷启动挂载序列)
+        // 2. 构建 Lock-Step 包队列
         var packets: [Data] = []
         var descs: [String] = []
         
         var seq: UInt8 = self.teleprompterSeq == 0 ? 0x01 : self.teleprompterSeq
         var msgId: Int = self.teleprompterMsgId == 0 ? 0x01 : self.teleprompterMsgId
         
-        // [1-7] 仅在蓝牙建立连接后首次推流时下发 Auth 7 包鉴权 (静态 7 包 Token，后续重推自动跳过防黑屏)
+        // 2.1 [冷启动 Push #1 专属] 当次 BLE 连接的首次点按推屏：下发 Auth (4包) + Setup (11包) 完成 MCU 画布挂载 (100% 物理对齐 bt3.pklg Pkt #01-#15)
         if !hasAuthBeenDoneForCurrentConnection {
-            let authPackets = G2ProtocolEncoder.buildAuthPackets()
+            addLog("🔑 [BLE 冷启动推屏] 下发 Auth (4包) + Setup (11包) 挂载眼镜 MCU 提词画布...")
+            let authPackets = G2ProtocolEncoder.buildAuthPackets(seq: &seq, msgId: &msgId)
             for (idx, pkt) in authPackets.enumerated() {
                 packets.append(pkt)
-                descs.append("Auth [\(idx + 1)/7]")
+                descs.append("Auth [\(idx + 1)/4]")
+            }
+            let setupPairs = G2ProtocolEncoder.buildOfficialSetupSequence(seq: &seq, msgId: &msgId)
+            for (pkt, desc) in setupPairs {
+                packets.append(pkt)
+                descs.append(desc)
             }
             self.hasAuthBeenDoneForCurrentConnection = true
-            seq = 0x08
-            msgId = 0x08
+        } else {
+            addLog("⚡️ [热重推] Auth 已完成，跳过 Auth/Setup，直接下发提词序列...")
         }
         
-        // 1. Setup 7 包序列 (Viewport 07-20 / Canvas 03-20 / Display Channel 0C-20 等初始化窗口)
-        let setupPairs = G2ProtocolEncoder.buildOfficialSetupSequence(seq: &seq, msgId: &msgId)
-        for (pkt, desc) in setupPairs {
-            packets.append(pkt)
-            descs.append(desc)
-        }
-        
-        // 2. TeleprompterInit (0x06-20)
+        // 3. TeleprompterInit (0x06-20 type=1)
         let initPkts = G2ProtocolEncoder.buildTeleprompterInit(seq: &seq, msgId: msgId, scrollModeAI: scrollModeAI)
         for pkt in initPkts {
             packets.append(pkt)
@@ -660,7 +734,17 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         msgId += 1
         
-        // 3. Pages 灌入
+        // 3.1 0x01-20 系统窗口前台强行绑定 (100% 对齐 bt3.pklg 包 #17: 将画布挂上 MicroLED 屏显视口)
+        packets.append(G2ProtocolEncoder.buildSystemLayoutConfig(seq: &seq, msgId: msgId))
+        descs.append("System Layout Config 1 (0x01-20)")
+        msgId += 1
+        
+        // 3.2 0x01-20 触控板滑动中断使能 (100% 对齐 bt3.pklg 包 #18: 开启 06-01 通道中断)
+        packets.append(G2ProtocolEncoder.buildTouchpadEventListener(seq: &seq, msgId: msgId))
+        descs.append("System Layout Config 2 (0x01-20)")
+        msgId += 1
+        
+        // 2. Pages 灌入 (每页使用唯一单调递增 msgId，确保 MCU RPC 分发器识别为独立新命令)
         for (i, pageText) in pages.enumerated() {
             let pagePkts = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: msgId, pageNum: i, text: pageText)
             for pkt in pagePkts {
@@ -670,26 +754,26 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             msgId += 1
         }
         
-        // 4. HUD Mount (0x04-20)
+        // 3. HUD Mount (0x04-20)
         packets.append(G2ProtocolEncoder.buildPkt40HUDMount(seq: &seq, msgId: msgId))
         descs.append("HUD Mount (0x04-20)")
         msgId += 1
         
-        // 5. Touchpad Router (0x09-20)
+        // 4. Touchpad Router (0x09-20)
         packets.append(G2ProtocolEncoder.buildPkt41TouchpadRouter(seq: &seq, msgId: msgId))
         descs.append("Touchpad Router -> Teleprompter (0x09-20)")
         msgId += 1
         
-        // 6. 0x80-00 Render Commit (渲染提交信号，触发 MicroLED 点亮)
-        let pktSync = G2ProtocolEncoder.buildFlushCommit(seq: &seq, msgId: msgId)
-        packets.append(pktSync)
-        descs.append("0x80-00 Render Commit")
-        msgId += 1
-        
-        // 7. Line 0 ScrollSync (0x06-20 Type 165) 视口强行对齐第 0 行
+        // 5. Line 0 ScrollSync (0x06-20 Type 165) 视口强行对齐第 0 行 (对齐 multiprompts.pklg Pkt #06/#07: 必须在 Render Commit 前!)
         let syncPkt = G2ProtocolEncoder.buildScrollSync(seq: &seq, msgId: msgId, lineIndex: 0)
         packets.append(syncPkt)
         descs.append("ScrollSync Line 0 (0x06-20 Type 165)")
+        msgId += 1
+        
+        // 6. 0x80-00 Render Commit (对齐 multiprompts.pklg Pkt #08: 显存双缓冲翻转，终极点亮 MicroLED 屏显)
+        let pktCommit = G2ProtocolEncoder.buildFlushCommit(seq: &seq, msgId: msgId)
+        packets.append(pktCommit)
+        descs.append("0x80-00 Render Commit (显存翻转点亮屏显)")
         msgId += 1
         
         addLog("🚀 [Lock-Step 推屏序列] 开始发送 \(packets.count) 包提词报文 (ACK+200ms 超时保底, \(pages.count) 有效页)...")
@@ -703,28 +787,72 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         sendNextBt3PacketInLockstep()
     }
     
-    /// 手动发送退出提词器模式报文 (Service 0x06-20 type=4 state=4 + 0x80-00 Render Commit)
+    /// 手动发送退出提词器模式报文 (Service 0x06-20 type=4 state=4, 100% 物理对齐 multiprompts.pklg Pkt #028)
     func sendExitTeleprompterMode() {
         guard isConnected else { return }
         self.isWaitingForSessionTeardown = true
-        self.hasAuthBeenDoneForCurrentConnection = false
         self.isTeleprompterSessionActive = false
         var seq = self.teleprompterSeq == 0 ? 0x01 : self.teleprompterSeq
         var msgId = self.teleprompterMsgId == 0 ? 0x01 : self.teleprompterMsgId
         
-        let exitData = Data([0x08, 0x01, 0x10, 0x32, 0x1A, 0x02, 0x08, 0x04])
-        let pktExit = G2ProtocolEncoder.buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: exitData)
-        sendRawData(pktExit, channel: .content, logDesc: "退出提词器模式 (state=4)")
+        var payload = Data([0x08, 0x01, 0x10])
+        payload.append(G2ProtocolEncoder.encodeVarint(msgId))
+        payload.append(Data([0x1A, 0x02, 0x08, 0x04]))
         
-        let pktCommit = G2ProtocolEncoder.buildFlushCommit(seq: &seq, msgId: msgId)
+        let pktExit = G2ProtocolEncoder.buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
         msgId += 1
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.050) {
-            self.sendRawData(pktCommit, channel: .content, logDesc: "0x80-00 Render Commit")
-        }
         
         self.teleprompterSeq = seq
         self.teleprompterMsgId = msgId
-        addLog("🛑 已发送 0x06-20 state=4 及 0x80-00 Render Commit 指令")
+        
+        sendRawData(pktExit, channel: .content, logDesc: "退出提词器模式 (state=4)")
+        
+        // §22.2 Step 3: 紧跟发送 0x80-00 Render Commit (切回 Dashboard 界面)，触发 MCU 回发 0D-01 Session Terminated
+        let pktCommit = G2ProtocolEncoder.buildFlushCommit(seq: &seq, msgId: msgId)
+        msgId += 1
+        self.teleprompterSeq = seq
+        self.teleprompterMsgId = msgId
+        
+        // 延迟 100ms 发送 Render Commit (给 MCU 处理 state=4 的时间)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.100) { [weak self] in
+            guard let self = self else { return }
+            self.sendRawData(pktCommit, channel: .content, logDesc: "0x80-00 Render Commit (§22.2 Step 3 触发 Session Terminated)")
+        }
+        
+        addLog("🛑 已发送 0x06-20 state=4 + 0x80-00 Render Commit 退出序列 (Seq: \(seq-1), MsgId: \(msgId-1))")
+    }
+    
+    private var probeCompletionHandler: ((Bool) -> Void)?
+    
+    /// 向眼镜下发 0x0D-20 物理探针，并在 80ms 时间窗口内解调 Response 动态评估硬件鉴权与显存槽位状态 (无状态设计)
+    private func probeGlassesHardwareState(completion: @escaping (Bool) -> Void) {
+        guard isConnected else {
+            completion(false)
+            return
+        }
+        
+        var hasResponded = false
+        self.probeCompletionHandler = { isAuthValid in
+            guard !hasResponded else { return }
+            hasResponded = true
+            self.probeCompletionHandler = nil
+            completion(isAuthValid)
+        }
+        
+        var querySeq: UInt8 = 0x00
+        let queryData = Data([0x08, 0x00, 0x10, 0x05])
+        let pktQuery = G2ProtocolEncoder.buildPacket(seq: &querySeq, serviceHi: 0x0D, serviceLo: 0x20, payload: queryData)
+        sendRawData(pktQuery, channel: .content, logDesc: "0x0D-20 物理无状态探针")
+        
+        // 300ms 物理时间窗口：符合 iOS BLE GATT Notify 真实传输延迟 (实测耗时 ~110ms)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.300) {
+            if !hasResponded {
+                hasResponded = true
+                self.probeCompletionHandler = nil
+                self.addLog("⚠️ [无状态探针] 300ms 超时无 Notify 响应，判定硬件处于冷启动/未鉴权态")
+                completion(false)
+            }
+        }
     }
     
     /// 向眼镜下发 0x0D-20 状态查询信令，主动查询眼镜当前是否处于提词模式
@@ -782,16 +910,30 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             let sLo = relativeData[7]
             let svcStr = String(format: "%02X-%02X", sHi, sLo)
             
-            // 捕获眼镜端主动退出提词器模式通知 (精准匹配 0D-01 在下发 Exit 后返回的 1A 00 会话终结包，或 01-01 08 03 镜腿长按手势)
+            // 🎯 无状态探针解调: 捕获 0x0D-00/01, 0x09-00/01, 0x80-00/01 物理响应包，精准判定硬件鉴权状态
+            if let probeHandler = self.probeCompletionHandler {
+                if (sHi == 0x0D || sHi == 0x09 || sHi == 0x80) && (sLo == 0x00 || sLo == 0x01) {
+                    let hasActiveAuth = relativeData.contains(Data([0x1A, 0x02, 0x08, 0x01])) || relativeData.contains(Data([0x08, 0x01])) || !relativeData.contains(Data([0x1A, 0x00]))
+                    self.probeCompletionHandler = nil
+                    DispatchQueue.main.async {
+                        self.addLog("🎯 [无状态探针] 成功收到 Svc \(svcStr) ACK 响应，判定硬件鉴权: \(hasActiveAuth ? "有效 (Active)" : "失效 (Invalid)")")
+                        probeHandler(hasActiveAuth)
+                    }
+                }
+            }
+            
+            // 捕获眼镜端主动退出提词器模式通知 (§22.2: 0D-01 含 1A 00 = Session Terminated，或镜腿长按手势 01-01 含 08 03)
+            // ⚠️ 06-00 只是普通 RPC ACK，不代表 Session 已销毁
             let isExplicitExitAck = (sHi == 0x0D && sLo == 0x01) && relativeData.contains(Data([0x1A, 0x00])) && self.isWaitingForSessionTeardown
             let isGestureExit = (sHi == 0x01 && sLo == 0x01) && relativeData.contains(Data([0x08, 0x03]))
-            let isSessionExit = relativeData.range(of: Data([0x22, 0x02, 0x08, 0x04])) != nil
+            let isSessionExit = relativeData.range(of: Data([0x22, 0x02, 0x08, 0x04])) != nil && self.isWaitingForSessionTeardown
             
             if isExplicitExitAck || isGestureExit || isSessionExit {
                 DispatchQueue.main.async {
                     self.isWaitingForSessionTeardown = false
                     self.isTeleprompterSessionActive = false
-                    self.addLog("🛑 [眼镜端退出/会话释放] (Svc \(svcStr): Session Terminated)")
+                    // §23.2: 已建立 BLE 连接的 Auth 保持有效，不重置 hasAuthBeenDoneForCurrentConnection 和 Seq/MsgId
+                    self.addLog("🛑 [眼镜端退出/会话释放] (Svc \(svcStr): Session Terminated) → Session 已注销，Auth 保持有效，下次直接切入提词层")
                     
                     if let task = self.pendingRePushTask {
                         self.rePushTimeoutWorkItem?.cancel()
@@ -1038,13 +1180,72 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         onG2TelemetryLog?("Tx", hexString, logDesc ?? "发送 G2 帧 [\(uuidSuffix)]")
     }
-    
+}
+
+// MARK: - Compatibility Extensions for UI Views & WatchOS (Zero-touch on core 96b0a792 BLE logic)
+
+extension BLEManager {
     func commitRender() {
         // 已合并进 8 步推屏序列
     }
     
     /// 向 Even G2 发送 3 行 HUD 显存刷新数据帧 (不再误触发全量推屏)
-    func sendHUDFrame(chunk: HUDDisplayChunk, channel: G2Channel = .content) {
+    func sendHUDFrame(chunk: HUDDisplayChunk) {
         // 静默禁用高频 HUD 全量重推
     }
+
+    func resetTeleprompterSession() {
+        self.isTeleprompterSessionActive = false
+    }
+    
+    func switchMode(to mode: GlassesState) {
+        self.currentGlassesState = mode
+        switch mode {
+        case .dashboard, .disconnected, .conversate, .sleeping:
+            if isTeleprompterSessionActive {
+                sendExitTeleprompterMode()
+            }
+        case .teleprompter:
+            break
+        }
+    }
+    
+    func handleWatchGesture(action: String, source: String) {
+        addLog("⌚️ 接收到 Watch 触控/手势 [\(action)] (Source: \(source))")
+        switch action {
+        case "NEXT_PAGE", "SWIPE_LEFT", "SWIPE_DOWN":
+            let nextLine = min(currentFocusPageLine + 10, 130)
+            sendScrollSync(lineIndex: nextLine, force: true)
+        case "PREV_PAGE", "SWIPE_RIGHT", "SWIPE_UP":
+            let prevLine = max(currentFocusPageLine - 10, 0)
+            sendScrollSync(lineIndex: prevLine, force: true)
+        default:
+            break
+        }
+    }
+}
+
+extension G2ProtocolEncoder {
+    static let sampleTeleprompterText: String = """
+各位领导、各位老师，大家上午好！
+今天我们召开《人机协同程序设计》课程全校统一数智化教学集体备课研讨会，主要目的是为了贯彻落实教务处文件精神，面向全校各理工科学院及医学院负责该课程授课的全体老师，共同研讨教学规范，明确教学要求，并合力推进标准化教学资源的建设。
+我们这门课程定位为跨界通识课，将在 2026 年秋季学期，也就是今年 9 月份正式开课。课程设置可能是 2.0 或 3.0 学分，对应 32 或 48 学时。今天我将围绕本门课程的建设思路、教学策略、考核改革以及资源保障等方面，与各位老师进行深入的探讨与交流。
+
+首先，我们来看一下执行摘要的第一部分，关于课程的痛点与定位。为了响应全校“专业+AI”的培养大势，我们采用了每周“2+2”的理实一体课堂设置：包含 2 学时理论、2 学时实践，以及 2 学时课后协同大作业。这旨在通过“人机协同”与“人际协同”的双重训练，补足大一新生在传统应试教育中匮乏的核心沟通协作本领。
+我们针对两大痛点：非专业学生因为学习曲线陡峭，往往未入门即放弃；而专业学生偏重底层刷题，极易在未来被 AI 取代。
+
+因此，本课程重新确立了“人在回路上（HOTL）”的核心培养定位。这里我们引入了系统工程界人机回路控制理论的三种经典范式：传统手写代码的“人在回路中（HITL）”；AI 自主运行人类无需把关的“人在回路外（OOTL）”；以及本课程提倡的“人在回路旁（HOTL）”。在 HOTL 范式下，人类始终掌控输入规格与输出审计两端，而将具体的程序实现过程授权给智能体。这能让学生发挥非专业在“问题域定义”上的核心学识优势，以逻辑严密的 Markdown 规格文档为共同语言，培养主动驾驭 AI 并交付 MVP 原型系统的协同创造力。
+
+接下来是执行摘要的第二部分，主要介绍我们的教学策略、考核改革和资源部署。在策略上，我们基于 A/S/P 知识标记框架，实施了渐进式的脚手架拆除，并为不同专业设计了三级难度。在考核改革上，我们引入了与大模型评测同款的 ELO 竞技场两两比对算法，深度引入学生之间的随机盲评。这不仅能利用大数定律有效抵消个体打分主观偏差，还能在盲评的过程中，切实锻炼学生最核心的“AI成果质量审计与鉴别力”，让学生在开发与互评中形成完整认知闭环。（“ELO” /iːloʊ/，发音为“衣-洛”， 不是任何英文单词的缩写，而是以其发明者、美国物理学家兼国际象象棋大师 Arpad Elo 的名字命名的）
+在资源建设上，我们建议学校拨出专项算力资金在本地私有部署国产模型，为学生提供基础算力额度消除开销壁垒；同时诚邀各学院老师共建覆盖全学期的实践任务和大作业选题，让学生在真实的项目交付中真正激发创造力。
+
+这里是本次汇报的提纲。我们的汇报将分为五个部分：
+第一部分主要围绕基于 OBE 成果导向的反向教学设计展开，阐述外部行业趋势、开发范式转变以及我们的定位；
+第二部分是教学方法与策略，讲解每周“2+2”理实一体设置与 A/S/P 渐进式脚手架；
+第三部分是考核改革，重点介绍限时现场测试、双轨加权以及独创的 ELO 两两双盲互评机制；
+第四部分是资源标准化建设，包含智能编译教材、私有部署算力普惠与伴学导师；
+第五部分是试点教学成效，用真实的数据和图表，向大家展示试点班的实际表现。
+
+接下来，我们进入第一部分：反向教学设计。我们将从 OBE 成果...
+"""
 }

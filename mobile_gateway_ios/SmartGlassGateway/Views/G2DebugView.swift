@@ -194,7 +194,7 @@ struct G2DebugView: View {
                             Text("G2 硬件控制与显存下发")
                                 .font(.headline)
                             Spacer()
-                            Toggle("HUD 亮屏", isOn: $bleManager.isHUDDisplayActive)
+                            Toggle("HUD 亮屏", isOn: Binding(get: { bleManager.isHUDDisplayActive }, set: { bleManager.isHUDDisplayActive = $0 }))
                                 .labelsHidden()
                         }
                         
