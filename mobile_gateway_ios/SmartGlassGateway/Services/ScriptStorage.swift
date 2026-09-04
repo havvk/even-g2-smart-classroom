@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import SwiftUI
 
 enum ScriptSortOrder: String, CaseIterable, Identifiable {
     case dateDesc = "更新日期 ↓"

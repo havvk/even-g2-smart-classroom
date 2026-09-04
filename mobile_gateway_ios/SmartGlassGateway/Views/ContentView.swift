@@ -5,6 +5,7 @@ struct ContentView: View {
     @EnvironmentObject var bleManager: BLEManager
     @EnvironmentObject var webSocketClient: WebSocketClient
     @State private var showingControlCenter: Bool = false
+    @State private var showingSmartClass: Bool = false
     
     var body: some View {
         VStack(spacing: 0) {
@@ -14,20 +15,27 @@ struct ContentView: View {
                     Circle()
                         .fill(bleManager.isNotifyReady ? Color.green : (bleManager.isConnected ? Color.orange : Color.red))
                         .frame(width: 8, height: 8)
-                    Text(bleManager.isNotifyReady ? "🟢 G2 就绪" : (bleManager.isConnected ? "🟡 蓝牙握手中" : "🔴 眼镜未连"))
+                    Text(bleManager.isNotifyReady ? "🟢 G2 就绪" : (bleManager.isConnected ? "🟡 握手中" : "🔴 眼镜未连"))
                         .font(.caption)
                         .fontWeight(.semibold)
                 }
                 
                 Spacer()
                 
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(webSocketClient.isConnected ? Color.purple : Color.gray)
-                        .frame(width: 8, height: 8)
-                    Text(webSocketClient.isConnected ? "💜 服务端已连" : "⚪️ 服务端未连")
-                        .font(.caption)
-                        .fontWeight(.semibold)
+                Button(action: {
+                    showingSmartClass.toggle()
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "graduationcap.fill")
+                        Text("智慧课堂")
+                    }
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.purple.opacity(0.15))
+                    .foregroundColor(.purple)
+                    .cornerRadius(6)
                 }
                 
                 Spacer()
@@ -41,7 +49,7 @@ struct ContentView: View {
                     }
                     .font(.caption)
                     .fontWeight(.bold)
-                    .padding(.horizontal, 10)
+                    .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(Color.blue.opacity(0.15))
                     .foregroundColor(.blue)
@@ -87,6 +95,14 @@ struct ContentView: View {
             ControlCenterSheetView()
                 .environmentObject(bleManager)
                 .environmentObject(webSocketClient)
+        }
+        .sheet(isPresented: $showingSmartClass) {
+            NavigationView {
+                SmartClassControlView()
+                    .environmentObject(bleManager)
+                    .environmentObject(webSocketClient)
+                    .navigationBarItems(trailing: Button("完成") { showingSmartClass = false })
+            }
         }
     }
     

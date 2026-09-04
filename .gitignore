@@ -15,4 +15,7 @@ extracted_so/
 diagnostics*
 mobile_gateway_ios/run_watch_tests
 mobile_gateway_ios/test_watch_runner.swift
+mobile_gateway_ios/run_smart_class_tests
+mobile_gateway_ios/test_smart_class_runner.swift
 scripts/add_watch_target.py
+

@@ -14,6 +14,7 @@ struct SmartGlassGatewayApp: App {
                 .environmentObject(webSocketClient)
                 .onAppear {
                     bleManager.setupWebSocketTelemetryBinding(webSocketClient)
+                    LectureSessionManager.shared.setup(webSocketClient: webSocketClient, bleManager: bleManager)
                     setupWatchSessionBinding()
                 }
         }
@@ -34,7 +35,7 @@ struct SmartGlassGatewayApp: App {
                     self.bleManager.sleepHUD()
                 }
                 self.bleManager.addLog("⌚️ [Watch] 显存控制: \(action)")
-                self.webSocketClient.sendPageControl(sessionId: "sess_demo", action: action, source: "WATCH_POWER_TOGGLE")
+                self.webSocketClient.sendPageControl(sessionId: LectureSessionManager.shared.sessionId, action: action, source: "WATCH_POWER_TOGGLE")
             }
         }
         
@@ -46,15 +47,23 @@ struct SmartGlassGatewayApp: App {
                 NSLog("📱 [iPhone App] Watch 触控/手势收到: %@来自 %@，下发 BLE 与 WebSocket", action, source)
                 bleManager.handleWatchGesture(action: action, source: source)
                 
-                // 向 WebSocket 广播 PAGE_CONTROL 消息
-                webSocketClient.sendPageControl(sessionId: "sess_demo", action: action, source: source)
+                // 联动生产级 LectureSessionManager 反向切页
+                if action == "NEXT" {
+                    LectureSessionManager.shared.gotoNextSlide()
+                } else if action == "PREV" {
+                    LectureSessionManager.shared.gotoPrevSlide()
+                }
+                
+                // 向 WebSocket 广播 PAGE_CONTROL 兼容旧链路
+                webSocketClient.sendPageControl(sessionId: LectureSessionManager.shared.sessionId, action: action, source: source)
                 
                 // 将最新行号/页码与状态同步回 Apple Watch
-                let calcPage = (bleManager.currentFocusPageLine / 10) + 1
-                let calcTotalPages = max((bleManager.currentTotalLines + 9) / 10, 1)
+                let lecture = LectureSessionManager.shared
+                let displayPage = lecture.currentSlideIndex + 1
+                let displayTotal = max(lecture.totalSlides, 1)
                 watchManager.syncStateToWatch(
-                    currentPage: calcPage,
-                    totalPages: calcTotalPages,
+                    currentPage: displayPage,
+                    totalPages: displayTotal,
                     isServerConnected: webSocketClient.isConnected
                 )
             }
@@ -66,7 +75,7 @@ struct SmartGlassGatewayApp: App {
                 NSLog("📱 [iPhone App] Watch AI对话触发收到，下发 WebSocket")
                 self.bleManager.lastGestureReceived = "WATCH_AI_BUTTON: TRIGGER_AI_CHAT"
                 self.bleManager.addLog("🤖 [Watch] 点击 AI 对话按钮")
-                self.webSocketClient.sendPageControl(sessionId: "sess_demo", action: "TRIGGER_AI_CHAT", source: "WATCH_AI_BUTTON")
+                self.webSocketClient.sendPageControl(sessionId: LectureSessionManager.shared.sessionId, action: "TRIGGER_AI_CHAT", source: "WATCH_AI_BUTTON")
             }
         }
         
@@ -76,7 +85,7 @@ struct SmartGlassGatewayApp: App {
                 NSLog("📱 [iPhone App] Watch 实时转录触发收到，下发 WebSocket")
                 self.bleManager.lastGestureReceived = "WATCH_TRANSCRIBE_BUTTON: TOGGLE_TRANSCRIBE"
                 self.bleManager.addLog("🎤 [Watch] 点击实时转录按钮")
-                self.webSocketClient.sendPageControl(sessionId: "sess_demo", action: "TOGGLE_TRANSCRIBE", source: "WATCH_TRANSCRIBE_BUTTON")
+                self.webSocketClient.sendPageControl(sessionId: LectureSessionManager.shared.sessionId, action: "TOGGLE_TRANSCRIBE", source: "WATCH_TRANSCRIBE_BUTTON")
             }
         }
     }

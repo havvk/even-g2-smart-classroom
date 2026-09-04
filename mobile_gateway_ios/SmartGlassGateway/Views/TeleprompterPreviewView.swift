@@ -30,26 +30,23 @@ struct TeleprompterPreviewView: View {
     @State private var timer = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
     
     @State private var widthChars: Double = 28.0
-    @State private var linesPerPageValue: Double = 10.0
     @State private var dragSettleWorkItem: DispatchWorkItem?
     
-    var currentLinesPerPage: Int {
-        return Int(linesPerPageValue)
-    }
+    /// Even G2 智能眼镜物理视口固定显示 9 行文本 (与官方 App 保持一致)
+    static let physicalViewportLines: Int = 9
     
     var wrappedLines: [String] {
         let maxLineWidth = Int(widthChars) * 2
-        let (pages, _) = G2ProtocolEncoder.formatTextToPagesOnDemand(script.content, maxLineWidth: maxLineWidth, linesPerPage: currentLinesPerPage)
+        let (pages, _) = G2ProtocolEncoder.formatTextToPagesOnDemand(script.content, maxLineWidth: maxLineWidth, linesPerPage: 10)
         let lines = pages.flatMap { $0.components(separatedBy: "\n") }
         return lines.isEmpty ? ["暂无讲稿内容"] : lines
     }
     
     var currentBounds: ViewportBounds {
         let total = wrappedLines.count
-        let lpp = currentLinesPerPage
-        let maxMovable = max(total - lpp, 0)
-        let vStart = max(0, min(activeLineIndex, maxMovable))
-        let vEnd = min(vStart + lpp - 1, max(total - 1, 0))
+        let vp = TeleprompterPreviewView.physicalViewportLines
+        let vStart = max(0, min(activeLineIndex, max(total - 1, 0)))
+        let vEnd = min(vStart + vp - 1, max(total - 1, 0))
         let wStart = max(0, vStart - 4)
         let wEnd = min(vEnd + 4, max(total - 1, 0))
         return ViewportBounds(vStart: vStart, vEnd: vEnd, wStart: wStart, wEnd: wEnd)
@@ -90,7 +87,7 @@ struct TeleprompterPreviewView: View {
                         HStack(spacing: 12) {
                             Text(script.formattedDateString)
                             Text("•")
-                            Text("每行 \(Int(widthChars)) 字 / 视口 \(currentLinesPerPage) 行")
+                            Text("每行 \(Int(widthChars)) 字 • 视口固定 9 行")
                                 .foregroundColor(.purple)
                                 .fontWeight(.semibold)
                         }
@@ -182,10 +179,13 @@ struct TeleprompterPreviewView: View {
                                     .foregroundColor(isInViewport ? Color.purple : Color.gray.opacity(0.3))
                                     .frame(width: 22, alignment: .trailing)
                                 
+                                let dynamicSize = min(15.0, max(10.5, 310.0 / CGFloat(widthChars)))
                                 Text(lineText.isEmpty ? " " : lineText)
-                                    .font(.system(size: isInViewport ? 15 : 13.5, weight: isInViewport ? .medium : .regular))
-                                    .foregroundColor(isInViewport ? Color.primary : Color.secondary.opacity(0.3))
+                                    .font(.system(size: isInViewport ? dynamicSize : dynamicSize * 0.95, weight: isInViewport ? .medium : .regular))
+                                    .foregroundColor(isInViewport ? Color.primary : Color.secondary.opacity(0.35))
                                     .lineLimit(1)
+                                    .minimumScaleFactor(0.70)
+                                    .allowsTightening(true)
                                 
                                 Spacer()
                             }
@@ -215,7 +215,7 @@ struct TeleprompterPreviewView: View {
                             }
                         }
                         
-                        Spacer(minLength: 120)
+                        Spacer(minLength: 16)
                     }
                     .padding(.vertical, 8)
                 }
@@ -228,20 +228,21 @@ struct TeleprompterPreviewView: View {
                         }
                 )
                 .onPreferenceChange(TeleprompterLineOffsetKey.self) { offsets in
+                    // 🛡️ 只有程序自动滚动期间才忽略 offset
                     guard !isProgrammaticScrolling else { return }
-                    let maxLine = max(wrappedLines.count - currentLinesPerPage, 0)
+                    let maxLine = max(wrappedLines.count - 1, 0)
                     
                     let candidateIndex: Int?
-                    if let topCandidate = offsets.filter({ $0.value >= -50 && $0.value <= 180 }).min(by: { abs($0.value) < abs($1.value) }) {
+                    // 精确对齐 ScrollView 容器顶部 (minY ≈ 0)
+                    if let topCandidate = offsets.filter({ $0.value >= -35 && $0.value <= 100 }).min(by: { abs($0.value) < abs($1.value) }) {
                         candidateIndex = topCandidate.key
-                    } else if let fallbackCandidate = offsets.filter({ $0.value >= 0 }).min(by: { $0.value < $1.value }) {
-                        candidateIndex = fallbackCandidate.key
                     } else {
                         candidateIndex = nil
                     }
                     
                     if let rawIndex = candidateIndex {
                         let newIndex = max(0, min(rawIndex, maxLine))
+                        // 1. 本地 UI 实时跟随（包含松手后的惯性滑动）
                         if newIndex != activeLineIndex {
                             DispatchQueue.main.async {
                                 self.activeLineIndex = newIndex
@@ -249,6 +250,7 @@ struct TeleprompterPreviewView: View {
                             }
                         }
                         
+                        // 2. 🎯 手势停顿/滑动结束终点闭环：取消旧倒计时，200ms 后强制刷帧与解封校验
                         dragSettleWorkItem?.cancel()
                         let item = DispatchWorkItem {
                             self.bleManager.flushFinalScrollSync(lineIndex: newIndex)
@@ -259,18 +261,21 @@ struct TeleprompterPreviewView: View {
                 }
                 .onReceive(bleManager.$currentFocusPageLine) { newGlassesLine in
                     guard !wrappedLines.isEmpty else { return }
-                    let maxLine = max(wrappedLines.count - currentLinesPerPage, 0)
+                    let maxLine = max(wrappedLines.count - 1, 0)
                     let clampedLine = max(0, min(maxLine, newGlassesLine))
-                    if clampedLine != activeLineIndex {
-                        self.isProgrammaticScrolling = true
-                        self.dragSettleWorkItem?.cancel()
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
-                            self.activeLineIndex = clampedLine
-                            proxy.scrollTo(clampedLine, anchor: .top)
-                        }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.80) {
-                            self.isProgrammaticScrolling = false
-                        }
+                    
+                    // 🛡️ 消除乒乓效应: 若眼镜回波行号与手机当前已停靠的 activeLineIndex 完全一致，
+                    // 说明手机本身已处于该位置，严禁重复触发 proxy.scrollTo 引起弹簧震荡与界面弹跳！
+                    guard clampedLine != activeLineIndex else { return }
+                    
+                    self.isProgrammaticScrolling = true
+                    self.dragSettleWorkItem?.cancel()
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                        self.activeLineIndex = clampedLine
+                        proxy.scrollTo(clampedLine, anchor: .top)
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.40) {
+                        self.isProgrammaticScrolling = false
                     }
                 }
                 .onReceive(timer) { _ in
@@ -301,7 +306,18 @@ struct TeleprompterPreviewView: View {
                             .foregroundColor(.purple)
                     }
                     
-                    VStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("每行字数")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text("\(Int(widthChars)) 字 / 行")
+                                .font(.caption2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.purple)
+                        }
+                        
                         HStack(spacing: 8) {
                             Text("10字")
                                 .font(.caption2)
@@ -311,22 +327,6 @@ struct TeleprompterPreviewView: View {
                                 .accentColor(.purple)
                             
                             Text("28字")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        HStack(spacing: 8) {
-                            Text("3行")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                            
-                            Slider(value: $linesPerPageValue, in: 3...10, step: 1)
-                                .accentColor(.purple)
-                                .onChange(of: linesPerPageValue) { newVal in
-                                    bleManager.linesPerPage = Int(newVal)
-                                }
-                            
-                            Text("10行")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                         }
@@ -378,7 +378,12 @@ struct TeleprompterPreviewView: View {
         .navigationBarHidden(true)
         .onAppear {
             widthChars = Double(script.targetWidthChars)
-            bleManager.linesPerPage = Int(linesPerPageValue)
+            if bleManager.isTeleprompterSessionActive {
+                let target = min(bleManager.currentFocusPageLine, max(wrappedLines.count - 1, 0))
+                self.activeLineIndex = target
+            } else {
+                self.activeLineIndex = 0
+            }
         }
         .sheet(isPresented: $showingEditor) {
             ScriptEditorView(scriptToEdit: script)
@@ -386,14 +391,15 @@ struct TeleprompterPreviewView: View {
     }
     
     private func updateFocusLine(index: Int, scrollProxy: ScrollViewProxy?) {
-        let maxLine = max(wrappedLines.count - currentLinesPerPage, 0)
+        let maxLine = max(wrappedLines.count - 1, 0)
         let clamped = max(0, min(maxLine, index))
         isProgrammaticScrolling = true
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
             activeLineIndex = clamped
             scrollProxy?.scrollTo(clamped, anchor: .top)
         }
-        syncLineToGlasses(lineIndex: clamped)
+        bleManager.resetGlassesRxShield()
+        bleManager.flushFinalScrollSync(lineIndex: clamped)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             self.isProgrammaticScrolling = false
         }
@@ -403,7 +409,7 @@ struct TeleprompterPreviewView: View {
         guard bleManager.isConnected else { return }
         
         if bleManager.isTeleprompterSessionActive && !bleManager.isPushingText {
-            let maxLine = max(wrappedLines.count - currentLinesPerPage, 0)
+            let maxLine = max(wrappedLines.count - 1, 0)
             let safeLine = max(0, min(maxLine, lineIndex))
             bleManager.sendScrollSync(lineIndex: safeLine)
         }
@@ -411,12 +417,12 @@ struct TeleprompterPreviewView: View {
     
     private func triggerPushToGlasses(scrollProxy: ScrollViewProxy?) {
         isPushing = true
-        bleManager.linesPerPage = currentLinesPerPage
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
             activeLineIndex = 0
             scrollProxy?.scrollTo(0, anchor: .top)
         }
         bleManager.currentFocusPageLine = 0
+        bleManager.resetGlassesRxShield()
         bleManager.sendTeleprompterText(script.content, targetWidthChars: Int(widthChars), scrollModeAI: false)
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {

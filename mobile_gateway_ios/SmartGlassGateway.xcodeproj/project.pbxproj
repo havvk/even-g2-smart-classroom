@@ -27,6 +27,11 @@
 		A10000112C50000100000001 /* SmartGlassGateway/Views/ScriptEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000112C50000100000001 /* SmartGlassGateway/Views/ScriptEditorView.swift */; };
 		A10000122C50000100000001 /* SmartGlassGateway/Views/TeleprompterPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000122C50000100000001 /* SmartGlassGateway/Views/TeleprompterPreviewView.swift */; };
 		A10000132C50000100000001 /* SmartGlassGateway/Views/TeleprompterListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000132C50000100000001 /* SmartGlassGateway/Views/TeleprompterListView.swift */; };
+		A10000142C50000100000001 /* SmartClassProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000142C50000100000001 /* SmartClassProtocol.swift */; };
+		A10000152C50000100000001 /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000152C50000100000001 /* AuthService.swift */; };
+		A10000162C50000100000001 /* SmartClassAPIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000162C50000100000001 /* SmartClassAPIService.swift */; };
+		A10000172C50000100000001 /* LectureSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000172C50000100000001 /* LectureSessionManager.swift */; };
+		A10000182C50000100000001 /* SmartClassControlView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000182C50000100000001 /* SmartClassControlView.swift */; };
 		A20000012C50000100000001 /* SmartGlassWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000012C50000100000001 /* SmartGlassWatchApp.swift */; };
 		A20000022C50000100000001 /* Views/WatchContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000022C50000100000001 /* Views/WatchContentView.swift */; };
 		A20000032C50000100000001 /* Services/WatchBLEGatewayService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000032C50000100000001 /* Services/WatchBLEGatewayService.swift */; };
@@ -79,6 +84,11 @@
 		B10000112C50000100000001 /* SmartGlassGateway/Views/ScriptEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGateway/Views/ScriptEditorView.swift; sourceTree = "<group>"; };
 		B10000122C50000100000001 /* SmartGlassGateway/Views/TeleprompterPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGateway/Views/TeleprompterPreviewView.swift; sourceTree = "<group>"; };
 		B10000132C50000100000001 /* SmartGlassGateway/Views/TeleprompterListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGateway/Views/TeleprompterListView.swift; sourceTree = "<group>"; };
+		B10000142C50000100000001 /* SmartClassProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/SmartClassProtocol.swift; sourceTree = "<group>"; };
+		B10000152C50000100000001 /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/AuthService.swift; sourceTree = "<group>"; };
+		B10000162C50000100000001 /* SmartClassAPIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/SmartClassAPIService.swift; sourceTree = "<group>"; };
+		B10000172C50000100000001 /* LectureSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/LectureSessionManager.swift; sourceTree = "<group>"; };
+		B10000182C50000100000001 /* SmartClassControlView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SmartClassControlView.swift; sourceTree = "<group>"; };
 		B20000012C50000100000001 /* SmartGlassWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassWatchApp.swift; sourceTree = "<group>"; };
 		B20000022C50000100000001 /* Views/WatchContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/WatchContentView.swift; sourceTree = "<group>"; };
 		B20000032C50000100000001 /* Services/WatchBLEGatewayService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/WatchBLEGatewayService.swift; sourceTree = "<group>"; };
@@ -128,6 +138,11 @@
 				B100000E2C50000100000001 /* Views/G2DebugView.swift */,
 				B100000C2C50000100000001 /* Assets.xcassets */,
 				B10000092C50000100000001 /* Info.plist */,
+				B10000142C50000100000001 /* SmartClassProtocol.swift */,
+				B10000152C50000100000001 /* AuthService.swift */,
+				B10000162C50000100000001 /* SmartClassAPIService.swift */,
+				B10000172C50000100000001 /* LectureSessionManager.swift */,
+				B10000182C50000100000001 /* SmartClassControlView.swift */,
 			);
 			path = SmartGlassGateway;
 			sourceTree = "<group>";
@@ -270,6 +285,11 @@
 				A10000112C50000100000001 /* SmartGlassGateway/Views/ScriptEditorView.swift in Sources */,
 				A10000122C50000100000001 /* SmartGlassGateway/Views/TeleprompterPreviewView.swift in Sources */,
 				A10000132C50000100000001 /* SmartGlassGateway/Views/TeleprompterListView.swift in Sources */,
+				A10000142C50000100000001 /* SmartClassProtocol.swift in Sources */,
+				A10000152C50000100000001 /* AuthService.swift in Sources */,
+				A10000162C50000100000001 /* SmartClassAPIService.swift in Sources */,
+				A10000172C50000100000001 /* LectureSessionManager.swift in Sources */,
+				A10000182C50000100000001 /* SmartClassControlView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

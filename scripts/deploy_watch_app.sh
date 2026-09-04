@@ -27,6 +27,7 @@ xcodebuild -project "${PROJECT_DIR}/SmartGlassGateway.xcodeproj" \
            -configuration Release \
            -destination "id=${WATCH_DEVICE_ID}" \
            -derivedDataPath "${PROJECT_DIR}/build" \
+           -allowProvisioningUpdates \
            build
 
 echo "📲 [3/3] 正在部署 App 至 Apple Watch (${WATCH_DEVICE_NAME})..."
