@@ -17,6 +17,11 @@ class WatchBLEGatewayService: NSObject, ObservableObject, WCSessionDelegate {
         }
     }
     
+    @Published var currentLine: Int = 1
+    @Published var totalLines: Int = 1
+    @Published var currentFocusLineText: String = ""
+    @Published var remainingSnippet: String = ""
+    
     @Published var isHUDDisplayActive: Bool = true
     @Published var currentTextSnippet: String = "眼镜提词器已准备就绪"
     @Published var isTranscribing: Bool = false
@@ -27,6 +32,17 @@ class WatchBLEGatewayService: NSObject, ObservableObject, WCSessionDelegate {
     }
     
     func sendTouchpadEvent(gesture: String) {
+        // 本地瞬时乐观行号预测（Even G2 物理视口为 9 行，最大顶端行严格受限于 totalLines - 9 + 1，杜绝反向滑动空转死区）
+        let maxTopLine = max(self.totalLines - 9 + 1, 1)
+        if gesture == "SINGLE_TAP" || gesture == "CROWN_DOWN" {
+            self.currentLine = min(self.currentLine + 1, maxTopLine)
+        } else if gesture == "SCROLL_DOWN" || gesture == "SWIPE_UP" {
+            self.currentLine = min(self.currentLine + 3, maxTopLine)
+        } else if gesture == "CROWN_UP" {
+            self.currentLine = max(self.currentLine - 1, 1)
+        } else if gesture == "SCROLL_UP" || gesture == "SWIPE_DOWN" {
+            self.currentLine = max(self.currentLine - 3, 1)
+        }
         sendPageControl(action: gesture, source: "WATCH_TOUCHPAD_SIMULATOR")
     }
     
@@ -80,6 +96,10 @@ class WatchBLEGatewayService: NSObject, ObservableObject, WCSessionDelegate {
         handleIncomingMessage(applicationContext)
     }
     
+    func session(_ session: WCSession, didReceiveUserInfo userInfo: [String : Any]) {
+        handleIncomingMessage(userInfo)
+    }
+    
     private func handleIncomingMessage(_ data: [String: Any]) {
         DispatchQueue.main.async {
             if let page = data["current_page"] as? Int {
@@ -88,8 +108,23 @@ class WatchBLEGatewayService: NSObject, ObservableObject, WCSessionDelegate {
             if let total = data["total_pages"] as? Int {
                 self.totalPages = total
             }
+            if let line = data["current_line"] as? Int {
+                self.currentLine = line
+            }
+            if let totalL = data["total_lines"] as? Int {
+                self.totalLines = totalL
+            }
             if let text = data["current_text"] as? String, !text.isEmpty {
                 self.currentTextSnippet = text
+                let lines = text.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+                if let first = lines.first {
+                    self.currentFocusLineText = first
+                    // 保留后续充足的 8 行文本，填满手表纵向物理屏显
+                    self.remainingSnippet = lines.dropFirst().prefix(8).joined(separator: "\n")
+                } else {
+                    self.currentFocusLineText = text
+                    self.remainingSnippet = ""
+                }
             }
             if let connected = data["is_connected"] as? Bool {
                 self.isServerOnline = connected

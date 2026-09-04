@@ -19,19 +19,67 @@ class WatchSessionManager: NSObject, ObservableObject, WCSessionDelegate {
         }
     }
     
-    /// 向 Apple Watch 推送当前 Slide 页码与状态
-    func syncStateToWatch(currentPage: Int, totalPages: Int, isServerConnected: Bool) {
+    // MARK: - 手表状态与视口位置高频同步防抖机制
+    private var lastWatchSyncTime: Date = Date.distantPast
+    private var pendingWatchSyncWorkItem: DispatchWorkItem?
+    
+    /// 向 Apple Watch 推送当前 Slide 页码、状态、当前行号及视口提词文本
+    func syncStateToWatch(
+        currentPage: Int,
+        totalPages: Int,
+        currentLine: Int = 1,
+        totalLines: Int = 1,
+        currentText: String? = nil,
+        fullText: String? = nil,
+        isServerConnected: Bool,
+        forceImmediate: Bool = false
+    ) {
         guard WCSession.isSupported() else { return }
-        let message: [String: Any] = [
-            "type": "STATE_SYNC",
-            "current_page": currentPage,
-            "total_pages": totalPages,
-            "is_connected": isServerConnected
-        ]
-        if WCSession.default.isReachable {
-            WCSession.default.sendMessage(message, replyHandler: nil, errorHandler: nil)
+        
+        let sendBlock = {
+            var message: [String: Any] = [
+                "type": "STATE_SYNC",
+                "current_page": currentPage,
+                "total_pages": totalPages,
+                "current_line": currentLine,
+                "total_lines": totalLines,
+                "is_connected": isServerConnected
+            ]
+            if let currentText = currentText, !currentText.isEmpty {
+                message["current_text"] = currentText
+            }
+            if let fullText = fullText, !fullText.isEmpty {
+                message["full_text"] = fullText
+            }
+            
+            if WCSession.default.isReachable {
+                WCSession.default.sendMessage(message, replyHandler: nil) { err in
+                    NSLog("⚠️ [WatchSession] syncState sendMessage error: %@", err.localizedDescription)
+                }
+            } else {
+                try? WCSession.default.updateApplicationContext(message)
+            }
+            self.lastWatchSyncTime = Date()
+        }
+        
+        if forceImmediate {
+            pendingWatchSyncWorkItem?.cancel()
+            sendBlock()
+            return
+        }
+        
+        // 120ms 动态节流，防止滑行过程中高频 sendMessage 引起系统阻塞
+        let now = Date()
+        if now.timeIntervalSince(lastWatchSyncTime) >= 0.120 {
+            pendingWatchSyncWorkItem?.cancel()
+            sendBlock()
         } else {
-            try? WCSession.default.updateApplicationContext(message)
+            pendingWatchSyncWorkItem?.cancel()
+            let item = DispatchWorkItem {
+                sendBlock()
+            }
+            pendingWatchSyncWorkItem = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.120, execute: item)
         }
     }
     

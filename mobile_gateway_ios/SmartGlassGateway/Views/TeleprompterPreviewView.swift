@@ -45,7 +45,8 @@ struct TeleprompterPreviewView: View {
     var currentBounds: ViewportBounds {
         let total = wrappedLines.count
         let vp = TeleprompterPreviewView.physicalViewportLines
-        let vStart = max(0, min(activeLineIndex, max(total - 1, 0)))
+        let maxTop = max(total - vp, 0)
+        let vStart = max(0, min(activeLineIndex, maxTop))
         let vEnd = min(vStart + vp - 1, max(total - 1, 0))
         let wStart = max(0, vStart - 4)
         let wEnd = min(vEnd + 4, max(total - 1, 0))
@@ -215,7 +216,7 @@ struct TeleprompterPreviewView: View {
                             }
                         }
                         
-                        Spacer(minLength: 16)
+                        Spacer(minLength: 90)
                     }
                     .padding(.vertical, 8)
                 }
@@ -230,7 +231,7 @@ struct TeleprompterPreviewView: View {
                 .onPreferenceChange(TeleprompterLineOffsetKey.self) { offsets in
                     // 🛡️ 只有程序自动滚动期间才忽略 offset
                     guard !isProgrammaticScrolling else { return }
-                    let maxLine = max(wrappedLines.count - 1, 0)
+                    let maxLine = max(wrappedLines.count - TeleprompterPreviewView.physicalViewportLines, 0)
                     
                     let candidateIndex: Int?
                     // 精确对齐 ScrollView 容器顶部 (minY ≈ 0)
@@ -254,6 +255,9 @@ struct TeleprompterPreviewView: View {
                         dragSettleWorkItem?.cancel()
                         let item = DispatchWorkItem {
                             self.bleManager.flushFinalScrollSync(lineIndex: newIndex)
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
+                                proxy.scrollTo(newIndex, anchor: .top)
+                            }
                         }
                         self.dragSettleWorkItem = item
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.20, execute: item)
@@ -261,12 +265,15 @@ struct TeleprompterPreviewView: View {
                 }
                 .onReceive(bleManager.$currentFocusPageLine) { newGlassesLine in
                     guard !wrappedLines.isEmpty else { return }
-                    let maxLine = max(wrappedLines.count - 1, 0)
+                    let maxLine = max(wrappedLines.count - TeleprompterPreviewView.physicalViewportLines, 0)
                     let clampedLine = max(0, min(maxLine, newGlassesLine))
                     
                     // 🛡️ 消除乒乓效应: 若眼镜回波行号与手机当前已停靠的 activeLineIndex 完全一致，
                     // 说明手机本身已处于该位置，严禁重复触发 proxy.scrollTo 引起弹簧震荡与界面弹跳！
                     guard clampedLine != activeLineIndex else { return }
+                    
+                    // 🛡️ 手机主控防拉扯：若手机端刚主动滑动过 (500ms 内)，严禁被外部回波强行触发 proxy.scrollTo 引起回弹
+                    guard !self.bleManager.isRecentPhoneScroll else { return }
                     
                     self.isProgrammaticScrolling = true
                     self.dragSettleWorkItem?.cancel()
@@ -391,7 +398,7 @@ struct TeleprompterPreviewView: View {
     }
     
     private func updateFocusLine(index: Int, scrollProxy: ScrollViewProxy?) {
-        let maxLine = max(wrappedLines.count - 1, 0)
+        let maxLine = max(wrappedLines.count - TeleprompterPreviewView.physicalViewportLines, 0)
         let clamped = max(0, min(maxLine, index))
         isProgrammaticScrolling = true
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
@@ -409,7 +416,7 @@ struct TeleprompterPreviewView: View {
         guard bleManager.isConnected else { return }
         
         if bleManager.isTeleprompterSessionActive && !bleManager.isPushingText {
-            let maxLine = max(wrappedLines.count - 1, 0)
+            let maxLine = max(wrappedLines.count - TeleprompterPreviewView.physicalViewportLines, 0)
             let safeLine = max(0, min(maxLine, lineIndex))
             bleManager.sendScrollSync(lineIndex: safeLine)
         }

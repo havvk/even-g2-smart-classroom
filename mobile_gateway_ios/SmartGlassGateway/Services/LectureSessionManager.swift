@@ -79,6 +79,7 @@ class LectureSessionManager: ObservableObject {
             DispatchQueue.main.async {
                 if self?.currentLineIndex != actualLine {
                     self?.currentLineIndex = actualLine
+                    self?.syncStateToWatch(lineIndex: actualLine)
                 }
             }
         }
@@ -140,8 +141,9 @@ class LectureSessionManager: ObservableObject {
                     let wsURLStr = "\(wsScheme)://\(cleanHost)/smart-class/ws/session/\(self.sessionId)"
                     self.webSocketClient?.connect(urlString: wsURLStr, token: AuthService.shared.token)
                     
-                    // 首帧提词推送至智能眼镜
+                    // 首帧提词推送至智能眼镜与 Apple Watch
                     self.pushCurrentSlideToGlasses(force: true)
+                    self.syncStateToWatch()
                     completion?(true)
                     
                 case .failure(let error):
@@ -320,6 +322,7 @@ class LectureSessionManager: ObservableObject {
             self.currentSlideIndex = max(0, min(newPageIndex, self.totalSlides - 1))
             self.currentLineIndex = 0 // 换页时视口行号自动归零
             self.pushCurrentSlideToGlasses(force: true)
+            self.syncStateToWatch()
         }
     }
     
@@ -341,9 +344,11 @@ class LectureSessionManager: ObservableObject {
             ble.lastSentTeleprompterText = ""
         }
         
-        // 归零手机端内部视口游标
+        // 归零手机端内部视口游标，并权威锚定当前幻灯片真实排版总行数
+        let actualTotal = self.getWrappedScriptLines().count
         self.currentLineIndex = 0
         ble.currentFocusPageLine = 0
+        ble.currentTotalLines = max(actualTotal, 1)
         
         // 切页时下发整页文本，并设置从第 0 行开始
         ble.sendTeleprompterText(text, targetWidthChars: 28, scrollModeAI: false, startLine: 0)
@@ -375,6 +380,7 @@ class LectureSessionManager: ObservableObject {
         self.currentSlideIndex = target
         self.currentLineIndex = 0
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        self.syncStateToWatch()
         
         // 2. 优先通过 WebSocket 极速直发切页（毫秒级、物理保序、服务端自动排除自身回波）
         if let ws = webSocketClient, ws.isConnected {
@@ -409,6 +415,7 @@ class LectureSessionManager: ObservableObject {
         guard let ble = bleManager, ble.isConnected else { return }
         self.currentLineIndex = lineIndex
         ble.sendScrollSync(lineIndex: lineIndex)
+        self.syncStateToWatch(lineIndex: lineIndex, forceImmediate: true)
     }
     
     /// 按相对行号增量滚动（如 +1 下移一行，-1 上移一行）
@@ -428,6 +435,7 @@ class LectureSessionManager: ObservableObject {
         DispatchQueue.main.async {
             self.currentLineIndex = target
             ble.sendScrollSync(lineIndex: target, force: true)
+            self.syncStateToWatch(lineIndex: target, forceImmediate: true)
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             NSLog("📜 [ScrollSync] 视口平移至第 %ld 行 (delta: %ld, 物理边界: 0~%ld)", target, delta, maxLine)
         }
@@ -456,5 +464,46 @@ class LectureSessionManager: ObservableObject {
                 }
             }
         }
+    }
+    
+    // MARK: - 8. 状态与当前提词视口位置实时同步至 Apple Watch
+    
+    /// 获取当前页按 Even G2 规格拆分的全部排版行
+    func getWrappedScriptLines() -> [String] {
+        let text = self.currentScriptText
+        let maxLineWidth = 28 * 2
+        let (pages, _) = G2ProtocolEncoder.formatTextToPagesOnDemand(text, maxLineWidth: maxLineWidth, linesPerPage: 10)
+        let lines = pages.flatMap { $0.components(separatedBy: "\n") }
+        return lines.isEmpty ? ["暂无口述提词"] : lines
+    }
+    
+    /// 同步状态、页码、当前行号与视口切片至 Apple Watch
+    func syncStateToWatch(lineIndex: Int? = nil, forceImmediate: Bool = false) {
+        let displayPage = self.currentSlideIndex + 1
+        let displayTotal = max(self.totalSlides, 1)
+        let allLines = self.getWrappedScriptLines()
+        let totalLines = max(allLines.count, 1)
+        
+        // 确定当前视口行号 (以物理视口顶端最大行号为上限，确保手表与眼镜、手机 100% 物理对齐)
+        let targetLine = lineIndex ?? self.currentLineIndex
+        let maxTopLine = max(totalLines - BLEManager.physicalViewportLines, 0)
+        let safeLine = max(0, min(targetLine, maxTopLine))
+        self.currentLineIndex = safeLine
+        
+        // 切割从当前行开始的提词切片 (向后取 10 行，充分利用 Apple Watch 纵向物理视野)
+        let slice = allLines[safeLine..<min(safeLine + 10, allLines.count)]
+        let viewportText = slice.joined(separator: "\n")
+        
+        let isConnected = self.webSocketClient?.isConnected ?? false
+        WatchSessionManager.shared.syncStateToWatch(
+            currentPage: displayPage,
+            totalPages: displayTotal,
+            currentLine: safeLine + 1,
+            totalLines: totalLines,
+            currentText: viewportText,
+            fullText: self.currentScriptText,
+            isServerConnected: isConnected,
+            forceImmediate: forceImmediate
+        )
     }
 }

@@ -5,8 +5,8 @@ import WatchKit
 struct WatchContentView: View {
     @StateObject private var watchService = WatchBLEGatewayService()
     
-    // 界面模式选择：0 = 提词看板, 1 = G2 眼镜触控板替代模式
-    @State private var selectedTab: Int = 1
+    // 界面模式选择：0 = 提词看板 (默认主控), 1 = G2 眼镜盲操触控板模式
+    @State private var selectedTab: Int = 0
     
     // 数字表冠
     @State private var crownValue: Double = 0.0
@@ -72,11 +72,11 @@ struct WatchContentView: View {
         .focused($isFocused)
         .digitalCrownRotation($crownValue)
         .onChange(of: crownValue) { newValue in
-            if newValue > lastCrownValue + 1.2 {
-                triggerTouchpadEvent("SWIPE_DOWN", label: "下翻页 (表冠)")
+            if newValue > lastCrownValue + 1.0 {
+                triggerTouchpadEvent("CROWN_DOWN", label: "下滚 1 行 (表冠)")
                 lastCrownValue = newValue
-            } else if newValue < lastCrownValue - 1.2 {
-                triggerTouchpadEvent("SWIPE_UP", label: "上翻页 (表冠)")
+            } else if newValue < lastCrownValue - 1.0 {
+                triggerTouchpadEvent("CROWN_UP", label: "上滚 1 行 (表冠)")
                 lastCrownValue = newValue
             }
         }
@@ -129,26 +129,26 @@ struct WatchContentView: View {
                             )
                     )
                 
-                // 盲操触摸纹路指南符
-                VStack(spacing: 12) {
-                    HStack(spacing: 16) {
-                        Image(systemName: "hand.tap.fill")
-                            .font(.system(size: 14))
-                        Text("单击：确认/推进")
-                            .font(.system(size: 10, weight: .medium))
+                // 盲操触摸纹路指南符 (明确两级操作规范)
+                VStack(spacing: 10) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "arrow.left.and.right")
+                            .font(.system(size: 12))
+                        Text("左右滑：切课件页")
+                            .font(.system(size: 10, weight: .semibold))
                     }
                     
-                    HStack(spacing: 16) {
-                        Image(systemName: "hand.tap")
-                            .font(.system(size: 14))
-                        Text("双击：唤醒/休眠")
-                            .font(.system(size: 10, weight: .medium))
-                    }
-                    
-                    HStack(spacing: 16) {
+                    HStack(spacing: 12) {
                         Image(systemName: "arrow.up.and.down")
-                            .font(.system(size: 14))
-                        Text("滑动：滚屏翻页")
+                            .font(.system(size: 12))
+                        Text("上下滑/表冠：滚行")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    
+                    HStack(spacing: 12) {
+                        Image(systemName: "hand.tap")
+                            .font(.system(size: 12))
+                        Text("双击：HUD休眠/点亮")
                             .font(.system(size: 10, weight: .medium))
                     }
                 }
@@ -173,12 +173,12 @@ struct WatchContentView: View {
                     },
                     // 2. 单击手势 (Single Tap)
                     TapGesture(count: 1).onEnded {
-                        triggerTouchpadEvent("SINGLE_TAP", label: "单击：推进/确认")
+                        triggerTouchpadEvent("SINGLE_TAP", label: "单击：微步推进 1 行")
                     }
                 )
             )
             .simultaneousGesture(
-                // 3. 滑动手势 (Drag Gesture)
+                // 3. 滑动手势 (Drag Gesture: 横向切课件，纵向滚视口)
                 DragGesture(minimumDistance: 15)
                     .onChanged { value in
                         touchLocation = value.location
@@ -188,16 +188,18 @@ struct WatchContentView: View {
                         isTouching = false
                         let translation = value.translation
                         if abs(translation.height) > abs(translation.width) {
+                            // 垂直滑动：页内长文本视口滚动
                             if translation.height < 0 {
-                                triggerTouchpadEvent("NEXT_PAGE", label: "向上滑动：下一页")
+                                triggerTouchpadEvent("SCROLL_DOWN", label: "上滑：下滚行")
                             } else {
-                                triggerTouchpadEvent("PREV_PAGE", label: "向下滑动：上一页")
+                                triggerTouchpadEvent("SCROLL_UP", label: "下滑：上滚行")
                             }
                         } else {
+                            // 水平滑动：幻灯片课件切页
                             if translation.width < 0 {
-                                triggerTouchpadEvent("NEXT_PAGE", label: "向前滑动：下一页")
+                                triggerTouchpadEvent("NEXT_PAGE", label: "左滑：切下一页")
                             } else {
-                                triggerTouchpadEvent("PREV_PAGE", label: "向后滑动：上一页")
+                                triggerTouchpadEvent("PREV_PAGE", label: "右滑：切上一页")
                             }
                         }
                     }
@@ -206,78 +208,147 @@ struct WatchContentView: View {
         .padding(.horizontal, 4)
     }
     
-    // MARK: - 提词看板界面 (Dashboard)
+    // MARK: - 提词看板交互主界面 (取消滚动条，全屏手势卡片控制)
     private var teleprompterDashboardView: some View {
-        ScrollView {
-            VStack(spacing: 8) {
-                // 顶部状态与 HUD 快捷开关
-                HStack {
-                    Circle()
-                        .fill(watchService.isPhoneReachable ? Color.green : Color.orange)
-                        .frame(width: 6, height: 6)
-                    Text(watchService.isPhoneReachable ? "已连通" : "待同步")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.secondary)
-                    
-                    Spacer()
-                    
-                    Button(action: {
-                        WKInterfaceDevice.current().play(.click)
-                        watchService.sendDisplayToggle()
-                    }) {
-                        Image(systemName: watchService.isHUDDisplayActive ? "eye.fill" : "eye.slash.fill")
-                            .font(.system(size: 10))
-                            .padding(4)
-                            .background(Color.white.opacity(0.2))
-                            .clipShape(Circle())
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                }
+        VStack(spacing: 3) {
+            // 顶部状态行 (页码 + 行号进度 + 手势提示 + 显存点亮)
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(watchService.isPhoneReachable ? Color.green : Color.orange)
+                    .frame(width: 5, height: 5)
                 
-                // 当前文本预览
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("PAGE \(watchService.currentPage) / \(watchService.totalPages)")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundColor(.cyan)
-                    
-                    Text(watchService.currentTextSnippet)
-                        .font(.system(size: 11))
-                        .foregroundColor(.white)
-                        .lineLimit(2)
-                }
-                .padding(6)
-                .background(Color.white.opacity(0.1))
-                .cornerRadius(8)
+                Text("P\(watchService.currentPage)/\(watchService.totalPages)")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundColor(.cyan)
                 
-                // 翻页简单按键
-                HStack(spacing: 6) {
-                    Button(action: {
-                        triggerTouchpadEvent("PREV_PAGE", label: "上一页")
-                    }) {
-                        Text("上一页")
-                            .font(.system(size: 11, weight: .semibold))
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(Color.gray.opacity(0.3))
-                            .cornerRadius(8)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    
-                    Button(action: {
-                        triggerTouchpadEvent("NEXT_PAGE", label: "下一页")
-                    }) {
-                        Text("下一页")
-                            .font(.system(size: 11, weight: .bold))
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(Color.blue)
-                            .foregroundColor(.white)
-                            .cornerRadius(8)
-                    }
-                    .buttonStyle(PlainButtonStyle())
+                Text("L\(watchService.currentLine)/\(watchService.totalLines)")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundColor(.yellow)
+                    .padding(.horizontal, 3)
+                    .padding(.vertical, 1)
+                    .background(Color.yellow.opacity(0.18))
+                    .cornerRadius(3)
+                
+                Spacer()
+                
+                Text(lastDetectedGesture)
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundColor(gestureBadgeColor)
+                    .lineLimit(1)
+                
+                Button(action: {
+                    WKInterfaceDevice.current().play(.click)
+                    watchService.sendDisplayToggle()
+                }) {
+                    Image(systemName: watchService.isHUDDisplayActive ? "eye.fill" : "eye.slash.fill")
+                        .font(.system(size: 9))
+                        .padding(3)
+                        .background(Color.white.opacity(0.18))
+                        .clipShape(Circle())
                 }
-                .frame(height: 40)
+                .buttonStyle(PlainButtonStyle())
             }
-            .padding(4)
+            .padding(.horizontal, 4)
+            
+            // 提词卡片主手势操作区 (全屏触控，手势直通眼镜与课件)
+            ZStack {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(
+                        LinearGradient(colors: [Color(white: 0.15), Color(white: 0.08)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(
+                                LinearGradient(colors: [.cyan.opacity(0.4), .purple.opacity(0.2)], startPoint: .topLeading, endPoint: .bottomTrailing),
+                                lineWidth: 1.0
+                            )
+                    )
+                
+                // 实时提词正文 (首行焦点与眼镜顶端 100% 对齐 + 满幅后续预览，充分利用纵向屏幕)
+                VStack(alignment: .leading, spacing: 4) {
+                    if !watchService.currentFocusLineText.isEmpty {
+                        // 👓 焦点首行：加粗高亮与青色引导指示，一抬腕瞬间锁定当前句
+                        HStack(alignment: .top, spacing: 4) {
+                            Circle()
+                                .fill(Color.cyan)
+                                .frame(width: 4, height: 4)
+                                .padding(.top, 4)
+                            Text(watchService.currentFocusLineText)
+                                .font(.system(size: 11.5, weight: .bold))
+                                .foregroundColor(.cyan)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        
+                        // ⚪️ 后续待讲提词 (充分利用空间，填满原本空白的 2~3 行)
+                        if !watchService.remainingSnippet.isEmpty {
+                            Text(watchService.remainingSnippet)
+                                .font(.system(size: 10.5, weight: .regular))
+                                .foregroundColor(.white.opacity(0.75))
+                                .lineSpacing(2)
+                                .lineLimit(7)
+                        }
+                    } else {
+                        Text(watchService.currentTextSnippet)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.white)
+                            .lineSpacing(2)
+                            .lineLimit(8)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 6)
+                
+                // 触控涟漪效果
+                if isTouching, let loc = touchLocation {
+                    Circle()
+                        .fill(Color.cyan.opacity(0.3))
+                        .frame(width: 32, height: 32)
+                        .position(loc)
+                }
+            }
+            .contentShape(Rectangle())
+            // 挂载单击/双击手势
+            .gesture(
+                ExclusiveGesture(
+                    TapGesture(count: 2).onEnded {
+                        triggerTouchpadEvent("DOUBLE_TAP", label: "双击：显示切换")
+                    },
+                    TapGesture(count: 1).onEnded {
+                        triggerTouchpadEvent("SINGLE_TAP", label: "单击：下推 1 行")
+                    }
+                )
+            )
+            .simultaneousGesture(
+                // 挂载滑动手势 (横向切课件，纵向高效滚 3 行)
+                DragGesture(minimumDistance: 12)
+                    .onChanged { value in
+                        touchLocation = value.location
+                        isTouching = true
+                    }
+                    .onEnded { value in
+                        isTouching = false
+                        let translation = value.translation
+                        if abs(translation.height) > abs(translation.width) {
+                            // 垂直滑动：高效滚 3 行
+                            if translation.height < 0 {
+                                triggerTouchpadEvent("SCROLL_DOWN", label: "上滑：下滚 3 行")
+                            } else {
+                                triggerTouchpadEvent("SCROLL_UP", label: "下滑：上滚 3 行")
+                            }
+                        } else {
+                            // 水平滑动：课件 Slide 翻页
+                            if translation.width < 0 {
+                                triggerTouchpadEvent("NEXT_PAGE", label: "左滑：切下一页")
+                            } else {
+                                triggerTouchpadEvent("PREV_PAGE", label: "右滑：切上一页")
+                            }
+                        }
+                    }
+            )
         }
+        .padding(.horizontal, 2)
     }
     
     // MARK: - 触发手势指令并发送给 iPhone (带 250ms 物理防抖节流)
@@ -291,14 +362,8 @@ struct WatchContentView: View {
         lastDetectedGesture = label
         gestureBadgeColor = (action == "DOUBLE_TAP") ? .purple : ((action == "SINGLE_TAP") ? .green : .cyan)
         
-        // 发送 Taptic 物理震动反馈
-        if action == "DOUBLE_TAP" {
-            WKInterfaceDevice.current().play(.directionUp)
-        } else if action == "SINGLE_TAP" {
-            WKInterfaceDevice.current().play(.click)
-        } else {
-            WKInterfaceDevice.current().play(.directionDown)
-        }
+        // 发送 Taptic 物理触觉反馈 (所有手势均提供与单击一致的清脆振动，完全静音绝无“叮叮”提示音)
+        WKInterfaceDevice.current().play(.click)
         
         watchService.sendTouchpadEvent(gesture: action)
     }
@@ -318,10 +383,10 @@ struct WatchContentView: View {
             
             if rotRateX > 3.8 && userAccelZ > 1.2 {
                 lastFlickTimestamp = now
-                triggerTouchpadEvent("SWIPE_DOWN", label: "甩手：后翻页")
+                triggerTouchpadEvent("NEXT_PAGE", label: "甩手：切下一页")
             } else if rotRateX < -3.8 && userAccelZ < -1.2 {
                 lastFlickTimestamp = now
-                triggerTouchpadEvent("SWIPE_UP", label: "甩手：前翻页")
+                triggerTouchpadEvent("PREV_PAGE", label: "甩手：切上一页")
             }
         }
     }

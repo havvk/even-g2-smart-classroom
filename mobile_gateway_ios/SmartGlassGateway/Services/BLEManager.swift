@@ -500,7 +500,12 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     var onGlassesViewportLineReported: ((Int) -> Void)?
     
     private var currentPages: [String] = []
-    private var lastPhoneScrollTime: Date = Date.distantPast
+    var lastPhoneScrollTime: Date = Date.distantPast
+    
+    /// 手机端最近是否主动滑动提词 (500ms 内，用于视图层防外部回波强行 scrollTo 引起回弹)
+    var isRecentPhoneScroll: Bool {
+        Date().timeIntervalSince(lastPhoneScrollTime) < 0.500
+    }
     private var lastGlassesRxScrollTime: Date = Date.distantPast
     private var lastScrollSyncSentTime: Date = Date.distantPast
     private var pendingSyncLineIndex: Int?
@@ -553,13 +558,14 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     }
     
     /// 硬件物理屏幕视口高度（行数）
-    /// Even G2 光学屏幕视口高度 3113 / 单行行高 567 ≈ 5.5 行。通常同屏显示 5 行完整文本。
-    /// 当最后一行触及视野底端时即算触底，避免视口越界沉没导致的多次反向滚动滞后死区！
-    static let physicalViewportLines: Int = 5
+    /// Even G2 智能眼镜物理视口固定显示 9 行文本 (与官方 App 及独立提词器保持 100% 一致)
+    static let physicalViewportLines: Int = 9
     
-    /// 当前讲稿的最大行号 (即滚动到底部时允许到达的最大索引: totalLines - physicalViewportLines)
+    /// 当前讲稿视口顶端最大行号 (Even G2 物理视口固定 9 行，触底时最后一行刚好停在屏幕第 9 行底端，消除反向滑动空转死区)
     var maxMovableLine: Int {
-        return max(currentTotalLines - BLEManager.physicalViewportLines, 0)
+        let actualLectureLines = LectureSessionManager.shared.getWrappedScriptLines().count
+        let total = actualLectureLines > 0 ? actualLectureLines : currentTotalLines
+        return max(total - BLEManager.physicalViewportLines, 0)
     }
     
     /// 发送双向滚动位置同步 (150ms 物理节流保护，下发 0x06-20 Type 165 报文至眼镜固件)
@@ -612,9 +618,10 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     func flushFinalScrollSync(lineIndex: Int) {
         guard isConnected else { return }
         sendScrollSync(lineIndex: lineIndex, force: true)
-        // 延时 150ms 之后，解封主控屏障窗口，允许接收眼镜 Rx 确认包进行位置校验
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.150) {
-            self.lastPhoneScrollTime = Date.distantPast
+        self.lastPhoneScrollTime = Date()
+        // 延时 500ms 确保手机端动画完成之后，开放眼镜 Rx 校准通道
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.500) {
+            self.lastGlassesRxScrollTime = Date.distantPast
         }
     }
     
@@ -1559,21 +1566,19 @@ extension BLEManager {
     }
     
     func handleWatchGesture(action: String, source: String = "Watch") {
-        guard isConnected, isTeleprompterSessionActive else { return }
-        
-        // 🎯 视口对齐：最大可移动行号为 (totalLines - 10)，使得滑动到底部时，最后一行恰好留在视野屏底
-        // 彻底消除视口沉没导致的 3 次反向滑动滞后死区！
         let maxLine = self.maxMovableLine
         
         switch action {
-        case "NEXT_PAGE", "SWIPE_LEFT", "SWIPE_UP":
-            // 1. 先将基准归位到合法区间：若当前处于越界状态，瞬间归位到 maxLine
+        case "SCROLL_DOWN", "CROWN_DOWN", "SWIPE_UP", "SINGLE_TAP":
+            // 1. 基准归位：严格限制在 [0, maxLine]
             let baseLine = min(max(currentFocusPageLine, 0), maxLine)
             
-            // 2. 边缘锁死：若已在最底部，保持在 maxLine 并拦截发包
+            // 2. 边缘硬锁死：若当前已达最底部 (baseLine >= maxLine)，死死锁在 maxLine！
+            // 严禁产生任何隐形越界累加，彻底杜绝反向滑动时的空转滞后！
             if baseLine >= maxLine {
                 self.currentFocusPageLine = maxLine
-                addLog("🛑 ⌚️ 已处于讲稿最底部 (Line \(maxLine))，位置锁死，拦截发包")
+                LectureSessionManager.shared.syncStateToWatch(lineIndex: maxLine, forceImmediate: true)
+                addLog("🛑 ⌚️ 已处于讲稿最底部 (Line \(maxLine))，位置死锁，拦截越界发包")
                 return
             }
             
@@ -1581,20 +1586,34 @@ extension BLEManager {
             self.lastPhoneScrollTime = Date()
             self.lastGlassesRxScrollTime = Date.distantPast
             
-            // 3. 基于归位后的基准行向下平滑步进用户设定的行数
-            let step = max(self.linesPerPage, 1)
+            // 3. 步长精准区分：
+            // - 单击 (SINGLE_TAP) / 表冠 (CROWN_DOWN): 单行微调 1 行
+            // - 上下滑动 (SCROLL_DOWN / SWIPE_UP): 高效快速滚 3 行
+            let step: Int
+            if action == "SINGLE_TAP" || action == "CROWN_DOWN" {
+                step = 1
+            } else if action == "SCROLL_DOWN" || action == "SWIPE_UP" {
+                step = 3
+            } else {
+                step = max(self.linesPerPage, 1)
+            }
             let nextLine = min(baseLine + step, maxLine)
             self.currentFocusPageLine = nextLine
-            sendScrollSync(lineIndex: nextLine, force: true)
+            if isConnected && isTeleprompterSessionActive {
+                sendScrollSync(lineIndex: nextLine, force: true)
+            }
+            LectureSessionManager.shared.syncStateToWatch(lineIndex: nextLine, forceImmediate: true)
             
-        case "PREV_PAGE", "SWIPE_RIGHT", "SWIPE_DOWN":
-            // 1. 核心归位逻辑：反向操作时，若当前位置处于外侧/越界（如 130 > maxLine），瞬间先归位到边缘线 maxLine
+        case "SCROLL_UP", "CROWN_UP", "SWIPE_DOWN":
+            // 1. 基准归位：严格限制在 [0, maxLine]
             let baseLine = min(max(currentFocusPageLine, 0), maxLine)
             
-            // 2. 边缘锁死：若已在最顶部，保持在 0 并拦截发包
+            // 2. 边缘硬锁死：若当前已处于最顶部 (baseLine <= 0)，死死锁在 0！
+            // 严禁产生负数越界，彻底消除反向滑动延迟！
             if baseLine <= 0 {
                 self.currentFocusPageLine = 0
-                addLog("🛑 ⌚️ 已处于讲稿最顶部 (Line 0)，位置锁死，拦截发包")
+                LectureSessionManager.shared.syncStateToWatch(lineIndex: 0, forceImmediate: true)
+                addLog("🛑 ⌚️ 已处于讲稿最顶部 (Line 0)，位置死锁，拦截发包")
                 return
             }
             
@@ -1602,11 +1621,23 @@ extension BLEManager {
             self.lastPhoneScrollTime = Date()
             self.lastGlassesRxScrollTime = Date.distantPast
             
-            // 3. 从边缘线 maxLine（或合法 baseLine）开始向上平滑步进减算用户设定的行数
-            let step = max(self.linesPerPage, 1)
+            // 3. 步长精准区分：
+            // - 表冠 (CROWN_UP): 单行上移 1 行
+            // - 上下滑动 (SCROLL_UP / SWIPE_DOWN): 高效上滚 3 行
+            let step: Int
+            if action == "CROWN_UP" {
+                step = 1
+            } else if action == "SCROLL_UP" || action == "SWIPE_DOWN" {
+                step = 3
+            } else {
+                step = max(self.linesPerPage, 1)
+            }
             let prevLine = max(baseLine - step, 0)
             self.currentFocusPageLine = prevLine
-            sendScrollSync(lineIndex: prevLine, force: true)
+            if isConnected && isTeleprompterSessionActive {
+                sendScrollSync(lineIndex: prevLine, force: true)
+            }
+            LectureSessionManager.shared.syncStateToWatch(lineIndex: prevLine, forceImmediate: true)
             
         default:
             break
