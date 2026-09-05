@@ -1,6 +1,7 @@
 import Foundation
 import WatchConnectivity
 import Combine
+import WatchKit
 
 class WatchBLEGatewayService: NSObject, ObservableObject, WCSessionDelegate {
     @Published var isPhoneReachable = false
@@ -55,23 +56,77 @@ class WatchBLEGatewayService: NSObject, ObservableObject, WCSessionDelegate {
         sendPageControl(action: "TOGGLE_TRANSCRIBE", source: "WATCH_TRANSCRIBE_BUTTON")
     }
     
-    func sendPageControl(action: String, source: String = "WATCH_TAP") {
+    // MARK: - 发送翻页与触控指令 (纯物理无声双震，免弹窗直通)
+    private var lastPageControlSendTime: Date = Date.distantPast
+    private var lastAckHapticTime: Date = Date.distantPast
+    
+    /// 触发纯物理无声机械双击震动 (绝无“叮叮”系统铃声，300ms 幂等防连震)
+    func playSilentHapticFeedback() {
+        let now = Date()
+        guard now.timeIntervalSince(lastAckHapticTime) >= 0.300 else { return }
+        lastAckHapticTime = now
+        DispatchQueue.main.async {
+            WKInterfaceDevice.current().play(.click)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
+                WKInterfaceDevice.current().play(.click)
+            }
+        }
+    }
+    
+    func sendPageControl(action: String, source: String = "WATCH_TAP", postureInfo: [String: Any]? = nil) {
+        let now = Date()
+        guard now.timeIntervalSince(lastPageControlSendTime) >= 0.250 else { return }
+        lastPageControlSendTime = now
+        
         guard WCSession.isSupported() else { return }
-        let message: [String: Any] = [
+        let session = WCSession.default
+        guard session.activationState == .activated else { return }
+        
+        let msgId = UUID().uuidString
+        var message: [String: Any] = [
             "type": "PAGE_CONTROL",
             "action": action,
             "source": source,
-            "timestamp": Int64(Date().timeIntervalSince1970 * 1000)
+            "msgId": msgId,
+            "timestamp": Int64(now.timeIntervalSince1970 * 1000)
         ]
         
-        NSLog("⌚️ [SmartGlassWatch] Sending gesture: %@ from %@", action, source)
-        
-        if WCSession.default.isReachable {
-            WCSession.default.sendMessage(message, replyHandler: nil) { err in
-                NSLog("⚠️ sendMessage error: %@", err.localizedDescription)
+        if let posture = postureInfo {
+            for (k, v) in posture {
+                message[k] = v
             }
+        }
+        
+        NSLog("⌚️ [SmartGlassWatch] 发射指令: %@ (msgId: %@, isReachable: %d)", action, msgId, session.isReachable)
+        
+        // 核心实时发送逻辑：优先走低延迟 sendMessage
+        let attemptSendMessage: () -> Void = { [weak self] in
+            session.sendMessage(message, replyHandler: { [weak self] reply in
+                NSLog("🎯 [Watch] 手机端即时确认 ACK (msgId: %@)，播放纯物理静音震动！", msgId)
+                self?.playSilentHapticFeedback()
+            }) { [weak self] err in
+                NSLog("⚠️ [Watch] sendMessage 穿透受阻: %@，降级至 updateApplicationContext", err.localizedDescription)
+                try? session.updateApplicationContext(message)
+            }
+        }
+        
+        if session.isReachable {
+            attemptSendMessage()
         } else {
-            WCSession.default.transferUserInfo(message)
+            // 暗屏或连接从休眠唤醒时，立即尝试发送并设置 60ms、150ms 快速短周期唤醒重试
+            attemptSendMessage()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.060) {
+                if session.isReachable {
+                    attemptSendMessage()
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.150) {
+                if session.isReachable {
+                    attemptSendMessage()
+                } else {
+                    try? session.updateApplicationContext(message)
+                }
+            }
         }
     }
     
@@ -101,6 +156,12 @@ class WatchBLEGatewayService: NSObject, ObservableObject, WCSessionDelegate {
     }
     
     private func handleIncomingMessage(_ data: [String: Any]) {
+        if data["type"] as? String == "PAGE_CONTROL_ACK" || data["status"] as? String == "ACK" {
+            NSLog("🎯 [Watch] 收到手机端异步 ACK 回执，播放纯物理静音震动！")
+            playSilentHapticFeedback()
+            return
+        }
+        
         DispatchQueue.main.async {
             if let page = data["current_page"] as? Int {
                 self.currentPage = page

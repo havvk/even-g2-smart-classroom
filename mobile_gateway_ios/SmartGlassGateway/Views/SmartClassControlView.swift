@@ -119,6 +119,28 @@ struct SmartClassControlView: View {
     @ObservedObject var lectureManager = LectureSessionManager.shared
     @EnvironmentObject var webSocketClient: WebSocketClient
     @EnvironmentObject var bleManager: BLEManager
+    @ObservedObject var watchManager = WatchSessionManager.shared
+    @StateObject private var motionRemote = PhoneMotionRemoteService.shared
+    
+    // 手机体感手势 HUD 动效浮层
+    @State private var showGestureToast: Bool = false
+    @State private var motionToastText: String? = nil
+    @State private var toastDismissWorkItem: DispatchWorkItem?
+    
+    private func triggerGestureToast(_ text: String) {
+        toastDismissWorkItem?.cancel()
+        motionToastText = text
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+            showGestureToast = true
+        }
+        let item = DispatchWorkItem {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                self.showGestureToast = false
+            }
+        }
+        toastDismissWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6, execute: item)
+    }
     
     @State private var serverUrlInput: String = "https://syb.ncu.edu.cn"
     @State private var sessionIdInput: String = "c81431e6"
@@ -161,21 +183,43 @@ struct SmartClassControlView: View {
     }
     
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                // MARK: - 1. 教师身份鉴权卡片
-                authCard
-                
-                // MARK: - 2. 课时连接与状态面板
-                connectionCard
-                
-                // MARK: - 3. 讲台实时 HUD 提词监看大屏
-                lectureHUDCard
-                
-                // MARK: - 4. 激光笔平级双向控屏手柄
-                controlActionsCard
+        ZStack(alignment: .bottom) {
+            ScrollView {
+                VStack(spacing: 16) {
+                    // MARK: - 1. 教师身份鉴权卡片
+                    authCard
+                    
+                    // MARK: - 2. 课时连接与状态面板
+                    connectionCard
+                    
+                    // MARK: - 3. 讲台实时 HUD 提词监看大屏
+                    lectureHUDCard
+                    
+                    // MARK: - 4. 激光笔平级双向控屏手柄
+                    controlActionsCard
+                }
+                .padding()
             }
-            .padding()
+            
+            // 🪄 手机体感手势触发 HUD 动效浮层
+            if showGestureToast, let toast = motionToastText {
+                HStack(spacing: 8) {
+                    Image(systemName: "wand.and.stars")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundColor(.purple)
+                    Text(toast)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(.primary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(.ultraThinMaterial)
+                .cornerRadius(12)
+                .shadow(color: Color.purple.opacity(0.25), radius: 8, x: 0, y: 3)
+                .padding(.bottom, 24)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .animation(.spring(response: 0.25, dampingFraction: 0.8), value: showGestureToast)
+            }
         }
         .navigationTitle("智慧课堂 HUD 辅驾")
         .navigationBarTitleDisplayMode(.inline)
@@ -194,6 +238,22 @@ struct SmartClassControlView: View {
             // 🌟 若蓝牙未连接且未在扫描，自动开启扫描以快速寻机连接 Even G2
             if !bleManager.isConnected && !bleManager.isScanning {
                 bleManager.startScanning()
+            }
+            
+            // 🌟 绑定手机陀螺仪体感遥控手势回调
+            motionRemote.onPageNavTriggered = { isNext in
+                if isNext {
+                    lectureManager.gotoNextSlide()
+                    triggerGestureToast("向左挥动 ➡️ 下一页 (P\(lectureManager.currentSlideIndex + 1))")
+                } else {
+                    lectureManager.gotoPrevSlide()
+                    triggerGestureToast("向右挥动 ⬅️ 上一页 (P\(lectureManager.currentSlideIndex + 1))")
+                }
+            }
+            motionRemote.onScrollDeltaTriggered = { delta in
+                lectureManager.scrollByLineDelta(delta)
+                let label = delta > 0 ? "向前甩动 ⬇️ 视口下滚 \(delta) 行" : "向上挑动 ⬆️ 视口上滚 \(-delta) 行"
+                triggerGestureToast(label)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
@@ -361,12 +421,12 @@ struct SmartClassControlView: View {
                     .fontWeight(.bold)
                 Spacer()
                 
-                // 状态指示灯
-                HStack(spacing: 10) {
+                // 状态指示灯 (大屏 + G2眼镜 + Apple Watch，尺寸固定，绝无缩放抖动)
+                HStack(spacing: 8) {
                     HStack(spacing: 4) {
                         Circle()
                             .fill(webSocketClient.isConnected ? Color.green : Color.red)
-                            .frame(width: 7, height: 7)
+                            .frame(width: 6, height: 6)
                         Text(webSocketClient.isConnected ? "大屏在线" : "大屏未连")
                             .font(.caption2)
                             .foregroundColor(.secondary)
@@ -374,12 +434,21 @@ struct SmartClassControlView: View {
                     HStack(spacing: 4) {
                         Circle()
                             .fill(bleManager.isReadyForTeleprompter ? Color.green : (bleManager.isConnected ? Color.yellow : Color.orange))
-                            .frame(width: 7, height: 7)
-                        Text(bleManager.isReadyForTeleprompter ? "G2就绪" : (bleManager.isConnected ? "通道配置中" : "眼镜未连"))
+                            .frame(width: 6, height: 6)
+                        Text(bleManager.isReadyForTeleprompter ? "G2就绪" : (bleManager.isConnected ? "G2配置" : "G2未连"))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(watchManager.isWatchReachable ? Color.green : Color.orange)
+                            .frame(width: 6, height: 6)
+                        Text(watchManager.isWatchReachable ? "手表在线" : "手表待命")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
                 }
+                .fixedSize(horizontal: true, vertical: true)
                 
                 Button(action: {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -833,6 +902,52 @@ struct SmartClassControlView: View {
     // MARK: - 卡片 4: 激光笔平级双向控屏手柄
     private var controlActionsCard: some View {
         VStack(spacing: 10) {
+            // 🪄 手机陀螺仪体感遥控器 (Air Remote) 快捷控制条
+            VStack(spacing: 6) {
+                HStack(spacing: 8) {
+                    Button(action: {
+                        motionRemote.toggleEnabled()
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: motionRemote.isEnabled ? "wand.and.stars" : "wand.and.rays")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundColor(motionRemote.isEnabled ? .purple : .secondary)
+                            Text(motionRemote.isEnabled ? "体感遥控: 运行中" : "体感遥控: 已暂停")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(motionRemote.isEnabled ? .purple : .secondary)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(motionRemote.isEnabled ? Color.purple.opacity(0.12) : Color(UIColor.tertiarySystemBackground))
+                        .cornerRadius(8)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    
+                    Spacer()
+                    
+                    Text(motionRemote.lastGestureName)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(motionRemote.isEnabled ? .purple : .secondary)
+                        .lineLimit(1)
+                }
+                
+                if motionRemote.isEnabled {
+                    HStack(spacing: 4) {
+                        Text("💡 体感手势:")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.purple)
+                        Text("向左/右挥动 ➡️ 翻页 | 前甩/上挑 ➡️ 滚动3行")
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 4)
+                }
+            }
+            .padding(8)
+            .background(Color(UIColor.tertiarySystemBackground))
+            .cornerRadius(10)
+            
             // 切页
             HStack(spacing: 12) {
                 Button(action: {

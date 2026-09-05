@@ -357,12 +357,21 @@ class LectureSessionManager: ObservableObject {
     // MARK: - 5. 手势/手表反向控屏 (调用生产 POST page-nav)
     func gotoNextSlide() {
         guard currentSlideIndex < totalSlides - 1 else { return }
+        // 🛡️ 硬件注销敏感期防撞车门禁：如果上一次换页的 state=4 注销尚未完成确认，吸收过频连续手势防冲突
+        if let ble = bleManager, ble.isWaitingForSessionTeardown {
+            NSLog("🛡️ [LectureManager] 正在等待上一次换页注销确认 (isWaitingForSessionTeardown)，吸收过频连续手势")
+            return
+        }
         let target = currentSlideIndex + 1
         requestPageChange(target: target)
     }
     
     func gotoPrevSlide() {
         guard currentSlideIndex > 0 else { return }
+        if let ble = bleManager, ble.isWaitingForSessionTeardown {
+            NSLog("🛡️ [LectureManager] 正在等待上一次换页注销确认 (isWaitingForSessionTeardown)，吸收过频连续手势")
+            return
+        }
         let target = currentSlideIndex - 1
         requestPageChange(target: target)
     }
@@ -421,6 +430,14 @@ class LectureSessionManager: ObservableObject {
     /// 按相对行号增量滚动（如 +1 下移一行，-1 上移一行）
     func scrollByLineDelta(_ delta: Int) {
         guard let ble = bleManager, ble.isConnected else { return }
+        
+        // 🛡️ 提词唤醒与自愈：若眼镜会话未挂载或已退出，滚动操作自动重新点亮并推流当前页！
+        if !ble.isTeleprompterSessionActive {
+            NSLog("🔄 [LectureManager] 眼镜未处于提词模式，滚动触发自动重新点亮并推流当前页")
+            self.pushCurrentSlideToGlasses(force: true)
+            return
+        }
+        
         let maxLine = ble.maxMovableLine
         let target = min(max(self.currentLineIndex + delta, 0), maxLine)
         

@@ -16,7 +16,27 @@ struct SmartGlassGatewayApp: App {
                     bleManager.setupWebSocketTelemetryBinding(webSocketClient)
                     LectureSessionManager.shared.setup(webSocketClient: webSocketClient, bleManager: bleManager)
                     setupWatchSessionBinding()
+                    setupPhoneMotionBinding()
                 }
+        }
+    }
+    
+    /// 绑定 iPhone 自身陀螺仪体感挥动手势与视口微调
+    private func setupPhoneMotionBinding() {
+        let motionRemote = PhoneMotionRemoteService.shared
+        motionRemote.onPageNavTriggered = { isNext in
+            DispatchQueue.main.async {
+                if isNext {
+                    LectureSessionManager.shared.gotoNextSlide()
+                } else {
+                    LectureSessionManager.shared.gotoPrevSlide()
+                }
+            }
+        }
+        motionRemote.onScrollDeltaTriggered = { delta in
+            DispatchQueue.main.async {
+                LectureSessionManager.shared.scrollByLineDelta(delta)
+            }
         }
     }
     
@@ -40,24 +60,29 @@ struct SmartGlassGatewayApp: App {
         }
         
         // 2. 双指捏合 / 表冠 / 甩手 / 触控板滑动与点击
-        watchManager.onPageControlTriggered = { [weak bleManager, weak webSocketClient] action, source in
+        watchManager.onPageControlTriggered = { [weak bleManager] action, source in
             DispatchQueue.main.async {
-                guard let bleManager = bleManager, let webSocketClient = webSocketClient else { return }
+                guard let bleManager = bleManager else { return }
                 
-                NSLog("📱 [iPhone App] Watch 触控/手势收到: %@来自 %@，分流处理", action, source)
+                NSLog("📱 [iPhone App] Watch 触控/手势收到: %@来自 %@，100% 统一走 LectureSessionManager", action, source)
                 
-                // 1. 宏观 Slide 幻灯片翻页 (联动大屏生产级 LectureSessionManager 与激光翻页笔)
-                if action == "NEXT_PAGE" || action == "NEXT" || action == "SWIPE_LEFT" {
+                // 🌟 100% 对齐界面翻页与滚动的标准调用通道：
+                switch action {
+                case "NEXT_PAGE", "NEXT", "SWIPE_LEFT":
                     LectureSessionManager.shared.gotoNextSlide()
-                } else if action == "PREV_PAGE" || action == "PREV" || action == "SWIPE_RIGHT" {
+                case "PREV_PAGE", "PREV", "SWIPE_RIGHT":
                     LectureSessionManager.shared.gotoPrevSlide()
-                } else {
-                    // 2. 微观页内视口平滑滚动 (当前 Slide 超长逐字稿上下滚行)
+                case "SCROLL_DOWN", "SWIPE_UP":
+                    LectureSessionManager.shared.scrollByLineDelta(3)
+                case "SCROLL_UP", "SWIPE_DOWN":
+                    LectureSessionManager.shared.scrollByLineDelta(-3)
+                case "SINGLE_TAP", "CROWN_DOWN":
+                    LectureSessionManager.shared.scrollByLineDelta(1)
+                case "CROWN_UP":
+                    LectureSessionManager.shared.scrollByLineDelta(-1)
+                default:
                     bleManager.handleWatchGesture(action: action, source: source)
                 }
-                
-                // 向 WebSocket 广播 PAGE_CONTROL 兼容旧链路
-                webSocketClient.sendPageControl(sessionId: LectureSessionManager.shared.sessionId, action: action, source: source)
                 
                 // 实时同步最新页码与剧本至 Apple Watch
                 LectureSessionManager.shared.syncStateToWatch()

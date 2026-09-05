@@ -19,13 +19,23 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.1</string>
 	<key>CFBundleVersion</key>
-	<string>2</string>
+	<string>24</string>
 	<key>MinimumOSVersion</key>
 	<string>10.0</string>
 	<key>NSMotionUsageDescription</key>
 	<string>SmartGlass Watch requires motion sensor data for wrist flick gesture detection.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>应用需要维持授课体态监测会话，以保障自然垂手暗屏时手势翻页持续可用。</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>应用需要访问运动传感器与体态数据以实现后台翻页手势识别。</string>
 	<key>WKApplication</key>
 	<true/>
+	<key>WKBackgroundModes</key>
+	<array>
+		<string>workout-processing</string>
+		<string>physical-therapy</string>
+		<string>self-care</string>
+	</array>
 	<key>WKCompanionAppBundleIdentifier</key>
 	<string>edu.ncu.smartglass.gateway</string>
 </dict>

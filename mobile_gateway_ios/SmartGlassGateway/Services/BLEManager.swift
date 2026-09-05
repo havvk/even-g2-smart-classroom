@@ -86,6 +86,11 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     
     @Published var connectionState: G2ConnectionState = .disconnected
     
+    // MARK: - 主动链路探活巡检与快速断开感知看门狗
+    @Published var currentGlassesRSSI: Int = 0
+    private var linkProbeTimer: Timer?
+    private var lastRxOrHeartbeatTime: Date = Date()
+    
     private var isManualDisconnect = false
     private var hasHandshakeExecuted = false
     private var isGattSystemModeInitialized = false
@@ -160,16 +165,11 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.isManualDisconnect = true
-            self.hasHandshakeExecuted = false
+            self.stopLinkProbing()
             if let peripheral = self.targetPeripheral {
                 self.centralManager.cancelPeripheralConnection(peripheral)
             }
-            self.isConnected = false
-            self.connectedPeripheralName = nil
-            self.controlTxChar = nil
-            self.contentTxChar = nil
-            self.renderingTxChar = nil
-            self.teleprompterTxChar = nil
+            self.handlePhysicalDisconnect(peripheral: self.targetPeripheral, error: nil)
             self.lastBLEStatusMessage = "已手动断开蓝牙"
         }
     }
@@ -195,6 +195,8 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                     self.startScanning()
                 }
             } else {
+                self.stopLinkProbing()
+                self.handlePhysicalDisconnect(peripheral: self.targetPeripheral, error: nil)
                 self.isConnected = false
                 self.isScanning = false
             }
@@ -225,16 +227,33 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             self.teleprompterMsgId = 0x14
             self.connectedPeripheralName = peripheral.name ?? "Even G2 Smart Glass"
             self.lastBLEStatusMessage = "🟢 蓝牙已物理连接: \(self.connectedPeripheralName ?? "") (配置通道中...)"
+            self.updateReadyForTeleprompter()
+            self.startLinkProbing()
         }
         peripheral.discoverServices(nil)
     }
     
+    func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        let errDesc = error?.localizedDescription ?? "未知错误"
+        addLog("❌ [物理连接失败] didFailToConnect: \(peripheral.name ?? "G2") (原因: \(errDesc))")
+        handlePhysicalDisconnect(peripheral: peripheral, error: error)
+    }
+    
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        let errDesc = error != nil ? " (原因: \(error!.localizedDescription))" : " (远端断开或突然掉电)"
+        addLog("🔌 [物理断开感知] didDisconnectPeripheral 触发: \(peripheral.name ?? "G2")\(errDesc)")
+        handlePhysicalDisconnect(peripheral: peripheral, error: error)
+    }
+    
+    /// 统一物理断开处理与状态清理，确保 UI 状态 0 延迟响应
+    private func handlePhysicalDisconnect(peripheral: CBPeripheral?, error: Error?) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            self.stopLinkProbing()
             self.isConnected = false
             self.isNotifyReady = false
             self.isHardwareRenderConfirmed = false
+            self.isHardwareCanvasMounted = false
             self.teleprompterPushStatusMessage = "🔴 眼镜已断开"
             self.connectionState = .disconnected
             self.hasHandshakeExecuted = false
@@ -256,17 +275,86 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             self.contentTxChar = nil
             self.renderingTxChar = nil
             self.teleprompterTxChar = nil
+            self.currentGlassesRSSI = 0
+            self.updateReadyForTeleprompter()
             
             if !self.isManualDisconnect {
                 self.lastBLEStatusMessage = "⚠️ 眼镜异常断开，正在自动重连..."
-                self.addLog("🔄 [自动重连] 眼镜意外断开，立即挂起系统级重连并开启辅助扫描...")
+                self.addLog("🔄 [自动重连] 眼镜物理断开，立即挂起系统级重连并开启扫描...")
                 // 1. 核心：立即对已知外设对象调用 connect (iOS 底层保持持续监听，一旦设备上线毫秒级重连)
-                self.centralManager.connect(peripheral, options: [CBConnectPeripheralOptionNotifyOnDisconnectionKey: true])
+                if let p = peripheral ?? self.targetPeripheral {
+                    self.centralManager.connect(p, options: [CBConnectPeripheralOptionNotifyOnDisconnectionKey: true])
+                }
                 // 2. 辅助：同时开启扫描备选
                 self.startScanning()
             } else {
                 self.lastBLEStatusMessage = "已断开蓝牙，点击按钮可重新扫描"
             }
+        }
+    }
+    
+    // MARK: - 主动链路探活巡检与快速感知看门狗 (Active Link Probing & Watchdog)
+    
+    /// 启动周期性 RSSI 探活巡检 (2.0s 间隔) 与 5.0s 静默超时看门狗
+    func startLinkProbing() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.stopLinkProbing()
+            self.lastRxOrHeartbeatTime = Date()
+            self.addLog("🛡️ [链路巡检] 启动主动 RSSI 探活 (2.0s) 与 5.0s 无应答断线看门狗")
+            self.linkProbeTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+                self?.performLinkProbe()
+            }
+        }
+    }
+    
+    /// 停止链路探活巡检
+    func stopLinkProbing() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if self.linkProbeTimer != nil {
+                self.linkProbeTimer?.invalidate()
+                self.linkProbeTimer = nil
+            }
+        }
+    }
+    
+    /// 执行单次探活与看门狗判定
+    private func performLinkProbe() {
+        guard isConnected, let p = targetPeripheral else {
+            stopLinkProbing()
+            return
+        }
+        
+        // 1. 物理层探测：迫使 iOS 蓝牙驱动向外设发送物理链路握手
+        if p.state == .connected {
+            p.readRSSI()
+        } else {
+            addLog("⚠️ [链路巡检] 外设底层状态已脱离 .connected (当前: \(p.state.rawValue))，立即执行断开清理")
+            handlePhysicalDisconnect(peripheral: p, error: nil)
+            return
+        }
+        
+        // 2. 看门狗超时检测：若超过 5.0 秒未收到任何数据包且未收到 RSSI 回复，判定眼镜已断电合腿
+        let silenceDuration = Date().timeIntervalSince(lastRxOrHeartbeatTime)
+        if silenceDuration > 5.0 {
+            addLog("🚨 [看门狗触发] 眼镜持续 \(String(format: "%.1f", silenceDuration))s 无任何物理响应，判定为合腿掉电僵尸连接，强行断开并重连！")
+            centralManager.cancelPeripheralConnection(p)
+            handlePhysicalDisconnect(peripheral: p, error: nil)
+        }
+    }
+    
+    // MARK: - CBPeripheralDelegate (RSSI)
+    func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
+        if let error = error {
+            addLog("⚠️ [RSSI巡检] 读取失败: \(error.localizedDescription)")
+            return
+        }
+        let rssiVal = RSSI.intValue
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.currentGlassesRSSI = rssiVal
+            self.lastRxOrHeartbeatTime = Date()
         }
     }
     
@@ -319,6 +407,9 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         let hasAnyTxChar = controlTxChar != nil || contentTxChar != nil
         if hasAnyTxChar {
             addLog("✍️ 已成功绑定 5401 物理写特征通道")
+            DispatchQueue.main.async { [weak self] in
+                self?.updateReadyForTeleprompter()
+            }
         }
     }
     
@@ -336,6 +427,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                     self.connectionState = .channelsReady
                     self.lastBLEStatusMessage = "🟢 眼镜就绪: \(self.connectedPeripheralName ?? "Even G2")"
                     self.addLog("🔒 [物理订阅锁] 5402 Notify 100% 订阅就绪，允许推屏!")
+                    self.updateReadyForTeleprompter()
                     self.onGlassesReadyToRender?()
                 }
             }
@@ -399,6 +491,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         DispatchQueue.main.async {
             self.rxPacketCount += 1
             self.lastRawHex = hexStr
+            self.lastRxOrHeartbeatTime = Date()
         }
         
         processReceivedG2Data(data)
@@ -417,11 +510,18 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     @Published var isPushingText: Bool = false
     @Published var useV2OnDemandPadding: Bool = true // 开: V2 按需切分 (官方原装), 关: V1 14页补满
     @Published var isHardwareRenderConfirmed: Bool = false
+    @Published var isHardwareCanvasMounted: Bool = false
     @Published var teleprompterPushStatusMessage: String = "未推屏"
     
-    /// 蓝牙通信与 5401/5402 数据通道完全就绪指示
-    var isReadyForTeleprompter: Bool {
-        return isConnected && contentTxChar != nil && isNotifyReady
+    /// 蓝牙通信与 5401/5402 数据通道完全就绪指示 (声明为 @Published 确保 SwiftUI 界面毫秒级响应)
+    @Published var isReadyForTeleprompter: Bool = false
+    
+    func updateReadyForTeleprompter() {
+        let ready = isConnected && contentTxChar != nil && isNotifyReady
+        if self.isReadyForTeleprompter != ready {
+            self.isReadyForTeleprompter = ready
+            self.addLog("⚡️ [G2状态变更] isReadyForTeleprompter -> \(ready ? "🟢通道就绪" : "🔴未就绪")")
+        }
     }
     
     /// 眼镜蓝牙通道就绪回调 (用于自动补推当前页逐字稿)
@@ -469,6 +569,8 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         lastSentTeleprompterText = ""
         isTeleprompterSessionActive = false
+        isHardwareCanvasMounted = false
+        isHardwareRenderConfirmed = false
         isPushingText = false
     }
     
@@ -512,7 +614,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     private var scrollSyncThrottleWorkItem: DispatchWorkItem?
     private var pendingRePushTask: (() -> Void)?
     private var rePushTimeoutWorkItem: DispatchWorkItem?
-    private var isWaitingForSessionTeardown: Bool = false
+    var isWaitingForSessionTeardown: Bool = false
     private var sessionKeepaliveTimer: Timer?
     
     /// 当用户在手机端物理触摸屏幕滑动时，立即复位眼镜 Rx 屏障，确保手机端手势 100% 优先发包
@@ -705,6 +807,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         guard bt3CurrentIndex < totalCount else {
             self.isPushingText = false
             self.isTeleprompterSessionActive = true
+            self.isHardwareCanvasMounted = true
             self.startSessionKeepaliveTimer()
             let elapsedMs = pushStartTime != nil ? Int(Date().timeIntervalSince(pushStartTime!) * 1000) : 0
             let modeStr = useV2OnDemandPadding ? "V2 按需切分 (官方原装)" : "V1 14页固定 Buffer 补满"
@@ -810,14 +913,14 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                 self.sendTeleprompterText(rawText, targetWidthChars: targetWidthChars, scrollModeAI: scrollModeAI, startLine: startLine)
             }
             
-            // 设置 3 秒超时保底：如果眼镜没回 Session Terminated，强制冷启动重推
+            // 设置 3.0 秒超时保底：给予 MCU 充足注销窗口，正常收到 0D-01 即刻 cancel，杜绝假超时抢跑引发黑屏
             let timeoutItem = DispatchWorkItem { [weak self] in
                 guard let self = self else { return }
                 if self.isWaitingForSessionTeardown {
-                    self.addLog("⏱️ [超时保底] 3s 未收到 Session Terminated 确认，强制重推")
+                    self.addLog("⏱️ [超时保底] 3.0s 未收到 Session Terminated 确认，自动执行自愈冷启动推流")
                     self.isWaitingForSessionTeardown = false
                     self.isTeleprompterSessionActive = false
-                    // §23.2: Auth 保持有效，不重置
+                    self.isHardwareCanvasMounted = false
                     if let task = self.pendingRePushTask {
                         self.pendingRePushTask = nil
                         task()
@@ -833,7 +936,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         
         // =====================================================================
-        // 以下为冷启动路径 (Push #1 或 Session Terminated 后的重推)
+        // 以下为冷启动 / 自愈推流路径
         // =====================================================================
         
         // 1. 取消正在执行的任务与重置状态
@@ -856,9 +959,10 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         var seq: UInt8 = self.teleprompterSeq == 0 ? 0x01 : self.teleprompterSeq
         var msgId: Int = self.teleprompterMsgId == 0 ? 0x01 : self.teleprompterMsgId
         
-        // 2.1 [冷启动 Push #1 专属] 当次 BLE 连接的首次点按推屏：下发 Auth (4包) + Setup (11包) 完成 MCU 画布挂载 (100% 物理对齐 bt3.pklg Pkt #01-#15)
-        if !hasAuthBeenDoneForCurrentConnection {
-            addLog("🔑 [BLE 冷启动推屏] 下发 Auth (4包) + Setup (11包) 挂载眼镜 MCU 提词画布...")
+        // 2.1 [冷启动 vs 热重推判定 (100% 对齐官方 §23.2 与 multiprompts.pklg 抓包)]
+        let isColdStart = !hasAuthBeenDoneForCurrentConnection
+        if isColdStart {
+            addLog("🔑 [BLE 首次冷启动] 下发 Auth (4包) + Setup (6包) 挂载眼镜 MCU 提词画布...")
             let authPackets = G2ProtocolEncoder.buildAuthPackets(seq: &seq, msgId: &msgId)
             for (idx, pkt) in authPackets.enumerated() {
                 packets.append(pkt)
@@ -870,8 +974,9 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                 descs.append(desc)
             }
             self.hasAuthBeenDoneForCurrentConnection = true
+            self.isHardwareCanvasMounted = true
         } else {
-            addLog("⚡️ [热重推] Auth 已完成，跳过 Auth/Setup，直接下发提词序列...")
+            addLog("⚡️ [热重推] 已完成基础 Setup，严格跳过 Auth/Setup，直接下发提词序列 (防黑屏)...")
         }
         
         // 3. TeleprompterInit (0x06-20 type=1)
@@ -988,12 +1093,14 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                 self.sendTeleprompterTextV2(rawText, targetWidthChars: targetWidthChars, scrollModeAI: scrollModeAI, startLine: startLine)
             }
             
+            // 设置 3.0 秒超时保底：给予 MCU 充足注销窗口，正常收到 0D-01 即刻 cancel，杜绝假超时抢跑引发黑屏
             let timeoutItem = DispatchWorkItem { [weak self] in
                 guard let self = self else { return }
                 if self.isWaitingForSessionTeardown {
-                    self.addLog("⏱️ [V2 超时保底] 2.2s 未收到 Session Terminated (1A 00)，强制冷启动重推")
+                    self.addLog("⏱️ [V2 超时保底] 3.0s 未收到 Session Terminated，自动执行冷启动自愈推流")
                     self.isWaitingForSessionTeardown = false
                     self.isTeleprompterSessionActive = false
+                    self.isHardwareCanvasMounted = false
                     if let task = self.pendingRePushTask {
                         self.pendingRePushTask = nil
                         task()
@@ -1001,13 +1108,13 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                 }
             }
             self.rePushTimeoutWorkItem = timeoutItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.200, execute: timeoutItem)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: timeoutItem)
             
             sendExitTeleprompterMode()
             return
         }
         
-        // 冷启动路径
+        // 冷启动 / 自愈推流路径
         cancelPendingTeleprompterTasks()
         self.isPushingText = true
         self.targetStartLine = startLine
@@ -1015,7 +1122,6 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         DispatchQueue.main.async {
             self.currentFocusPageLine = startLine
         }
-        
         
         // 🛡️ 固件底层 Page Slot 槽位恒定为 10 行。下发时严格按 10 行连续紧密装填，
         // 彻底消除由于非 10 行切分导致的“每显示 N 行就插入大量空行、大量提词被挤爆丢弃”的问题！
@@ -1030,10 +1136,12 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         var seq: UInt8 = self.teleprompterSeq == 0 ? 0x01 : self.teleprompterSeq
         var msgId: Int = self.teleprompterMsgId == 0 ? 0x01 : self.teleprompterMsgId
         
-        // [冷启动] Auth + Setup 判定
+        // [冷启动 vs 热重推判定 (100% 对齐官方 §23.2 与 multiprompts.pklg 抓包)]
+        // 当次 BLE 物理连接建立后的首次推屏（Push #1 冷启动）：必须下发 Auth (4包) + Setup (6包)
+        // 后续翻页与重推（Push #2+ 热重推）：必须跳过 Auth 和 Setup！绝不重复下发 Setup（重复下发会导致 MCU 视口重置黑屏）！
         let isColdStart = !hasAuthBeenDoneForCurrentConnection
         if isColdStart {
-            addLog("🔑 [V2 冷启动] 下发 Auth + Setup...")
+            addLog("🔑 [V2 首次冷启动] 下发 Auth (4包) + Setup (6包) 挂载 MicroLED 画布与视口通道...")
             let authPackets = G2ProtocolEncoder.buildAuthPackets(seq: &seq, msgId: &msgId)
             for (idx, pkt) in authPackets.enumerated() {
                 packets.append(pkt)
@@ -1045,8 +1153,9 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                 descs.append(desc)
             }
             self.hasAuthBeenDoneForCurrentConnection = true
+            self.isHardwareCanvasMounted = true
         } else {
-            addLog("⚡️ [V2 热重推] Auth 已完成，直接下发提词序列...")
+            addLog("⚡️ [V2 热重推] 已完成基础 Setup，严格跳过 Auth/Setup，直接下发提词序列 (防黑屏)...")
         }
         
         // §25.1: TeleprompterInit V2 参数：100% 官方原装 (切出几页填几页，对齐 multiprompts.pklg 帧 #1)
@@ -1125,6 +1234,9 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         stopSessionKeepaliveTimer()
         self.isWaitingForSessionTeardown = true
         self.isTeleprompterSessionActive = false
+        self.isHardwareCanvasMounted = false
+        self.isHardwareRenderConfirmed = false
+        self.teleprompterPushStatusMessage = "🟡 正在切换页面..."
         var seq = self.teleprompterSeq == 0 ? 0x01 : self.teleprompterSeq
         var msgId = self.teleprompterMsgId == 0 ? 0x01 : self.teleprompterMsgId
         
@@ -1168,6 +1280,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         self.isWaitingForSessionTeardown = false
         self.isPushingText = false
         self.isTeleprompterSessionActive = false
+        self.isHardwareCanvasMounted = false
         self.retryCountForCurrentPush = 0
         self.teleprompterPushStatusMessage = "🟡 正在重置屏显..."
         
@@ -1283,20 +1396,28 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                 }
             }
             
-            // 捕获眼镜端主动退出提词器模式通知 (§22.2: 0D-01 含 1A 00 = Session Terminated，或镜腿长按手势 01-01 含 08 03)
-            // ⚠️ 必须严格包含 1A 00，杜绝被常规 08 06 状态心跳提前抢跑误触发！
-            let isSessionTerminatedNotify = (sHi == 0x0D && sLo == 0x01) && relativeData.contains(Data([0x1A, 0x00]))
+            // 捕获眼镜端主动退出提词器模式通知
+            // 1) 换页主动注销确认: 在 isWaitingForSessionTeardown 期间收到 0x0D-01/00 回执
+            let isTeardownAck = self.isWaitingForSessionTeardown && (sHi == 0x0D && (sLo == 0x01 || sLo == 0x00))
+            // 2) 眼镜端主动退出提词: Svc 0D-01 (含 1A 00 Session Terminated 或 08 06)
+            let isSessionTerminatedNotify = (sHi == 0x0D && sLo == 0x01) && (relativeData.contains(Data([0x1A, 0x00])) || relativeData.contains(Data([0x08, 0x06])))
+            // 3) Svc 01-01: 镜腿手势退出 (含 08 03)
             let isGestureExit = (sHi == 0x01 && sLo == 0x01) && relativeData.contains(Data([0x08, 0x03]))
+            // 4) Dashboard 退出指令: 含 22 02 08 04
             let isSessionExit = relativeData.range(of: Data([0x22, 0x02, 0x08, 0x04])) != nil
+            // 5) 屏幕休眠 / 息屏: Svc 04-01 / 04-00
+            let isDisplaySleep = (sHi == 0x04 && (sLo == 0x01 || sLo == 0x00)) && (relativeData.contains(Data([0x08, 0x02])) || relativeData.contains(Data([0x1A, 0x02, 0x08, 0x02])))
             
-            if isSessionTerminatedNotify || isGestureExit || isSessionExit {
+            if isTeardownAck || isSessionTerminatedNotify || isGestureExit || isSessionExit || isDisplaySleep {
                 DispatchQueue.main.async {
                     self.isWaitingForSessionTeardown = false
                     self.isTeleprompterSessionActive = false
+                    self.isHardwareRenderConfirmed = false
+                    self.isHardwareCanvasMounted = false
                     self.isPushingText = false
+                    self.teleprompterPushStatusMessage = "🔴 提词已退出"
                     self.stopSessionKeepaliveTimer()
-                    // §23.2: 已建立 BLE 连接的 Auth 保持有效，不重置 hasAuthBeenDoneForCurrentConnection 和 Seq/MsgId
-                    self.addLog("🛑 [眼镜端退出/会话释放] (Svc \(svcStr): Session Terminated) → Session 已物理注销，状态位全量复位，下次直接切入提词层")
+                    self.addLog("🛑 [眼镜端退出/会话释放] (Svc \(svcStr): Session Terminated) → Session 已物理注销，UI 状态已同步置为🔴提词已退出")
                     
                     if let task = self.pendingRePushTask {
                         self.rePushTimeoutWorkItem?.cancel()
@@ -1583,7 +1704,7 @@ extension BLEManager {
             }
             
             addLog("⌚️ 接收到 Watch 触控/手势 [\(action)] (Source: \(source))")
-            self.lastPhoneScrollTime = Date()
+            // 保持 lastPhoneScrollTime 为历史时间，确保手机端 HUD 视口能够及时同步响应并滚动
             self.lastGlassesRxScrollTime = Date.distantPast
             
             // 3. 步长精准区分：
@@ -1618,7 +1739,7 @@ extension BLEManager {
             }
             
             addLog("⌚️ 接收到 Watch 触控/手势 [\(action)] (Source: \(source))")
-            self.lastPhoneScrollTime = Date()
+            // 保持 lastPhoneScrollTime 为历史时间，确保手机端 HUD 视口能够及时同步响应并滚动
             self.lastGlassesRxScrollTime = Date.distantPast
             
             // 3. 步长精准区分：

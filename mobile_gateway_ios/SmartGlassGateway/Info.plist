@@ -17,7 +17,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.1</string>
 	<key>CFBundleVersion</key>
-	<string>2</string>
+	<string>24</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
@@ -27,6 +27,8 @@
 	</dict>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>应用需要使用蓝牙连接 Even G2 智能眼镜与 Smart Ring 戒头，以接收手势翻页指令并发送 HUD 显存内容。</string>
+	<key>NSMotionUsageDescription</key>
+	<string>应用需要使用手机运动传感器实现体感遥控挥动翻页与提词视口滚动。</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>应用需要使用蓝牙连接 Even G2 智能眼镜与 Smart Ring 戒头。</string>
 	<key>NSLocalNetworkUsageDescription</key>
