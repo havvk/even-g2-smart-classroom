@@ -19,6 +19,7 @@ struct ViewportBounds {
 struct TeleprompterPreviewView: View {
     @EnvironmentObject var bleManager: BLEManager
     @ObservedObject var storage = ScriptStorage.shared
+    @ObservedObject private var speechEngine = SpeechFollowEngine.shared
     @Environment(\.presentationMode) var presentationMode
     
     @State var script: ScriptItem
@@ -231,6 +232,8 @@ struct TeleprompterPreviewView: View {
                 .onPreferenceChange(TeleprompterLineOffsetKey.self) { offsets in
                     // 🛡️ 只有程序自动滚动期间才忽略 offset
                     guard !isProgrammaticScrolling else { return }
+                    // 🛡️ 核心防干扰：当 AI 语音跟随模式开启时，提词位置由 AI 引擎绝对独占，严禁物理滚动反向篡改！
+                    guard !(isPlaying && script.scrollMode == .ai) else { return }
                     let maxLine = max(wrappedLines.count - TeleprompterPreviewView.physicalViewportLines, 0)
                     
                     let candidateIndex: Int?
@@ -286,10 +289,16 @@ struct TeleprompterPreviewView: View {
                     }
                 }
                 .onReceive(timer) { _ in
-                    if isPlaying && !wrappedLines.isEmpty {
+                    if isPlaying && script.scrollMode == .auto && !wrappedLines.isEmpty {
                         let nextLine = (activeLineIndex + 1) % wrappedLines.count
                         updateFocusLine(index: nextLine, scrollProxy: proxy)
                     }
+                }
+                .onReceive(speechEngine.$activeLineIndex) { aiLine in
+                    guard isPlaying && script.scrollMode == .ai && !wrappedLines.isEmpty else { return }
+                    let targetLine = min(max(0, aiLine), max(wrappedLines.count - 1, 0))
+                    guard targetLine != activeLineIndex else { return }
+                    updateFocusLine(index: targetLine, scrollProxy: proxy)
                 }
             }
             .background(Color(UIColor.systemGroupedBackground))
@@ -306,11 +315,22 @@ struct TeleprompterPreviewView: View {
                     }
                     
                     Button(action: {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                         isPlaying.toggle()
+                        if script.scrollMode == .ai {
+                            if isPlaying {
+                                speechEngine.loadSlideScriptLines(lines: wrappedLines, rawScript: script.content)
+                                speechEngine.startListening()
+                            } else {
+                                speechEngine.stopListening()
+                            }
+                        }
                     }) {
-                        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.title)
-                            .foregroundColor(.purple)
+                        HStack(spacing: 4) {
+                            Image(systemName: isPlaying ? "pause.circle.fill" : (script.scrollMode == .ai ? "sparkles.tv.fill" : "play.circle.fill"))
+                                .font(.title)
+                                .foregroundColor(script.scrollMode == .ai ? (isPlaying ? .green : .purple) : .purple)
+                        }
                     }
                     
                     VStack(alignment: .leading, spacing: 6) {
@@ -390,6 +410,12 @@ struct TeleprompterPreviewView: View {
                 self.activeLineIndex = target
             } else {
                 self.activeLineIndex = 0
+            }
+        }
+        .onDisappear {
+            if isPlaying {
+                isPlaying = false
+                speechEngine.stopListening()
             }
         }
         .sheet(isPresented: $showingEditor) {

@@ -92,6 +92,21 @@ class LectureSessionManager: ObservableObject {
                 self.pushCurrentSlideToGlasses(force: true)
             }
         }
+        
+        // 🤖 监听自研 AI 语音提词引擎行号推进通知
+        SpeechFollowEngine.shared.onLineIndexUpdated = { [weak self] targetLine in
+            DispatchQueue.main.async {
+                self?.scrollGlassesToLine(targetLine)
+            }
+        }
+        
+        // 🎯 监听自研 AI 语音提词引擎尾部语义锚点命中通知 (自动切页)
+        SpeechFollowEngine.shared.onVoiceKeywordTriggered = { [weak self] _ in
+            DispatchQueue.main.async {
+                NSLog("🎯 [LectureManager] 收到语音跟随引擎尾部语义锚点通知，自动切至下一页！")
+                self?.gotoNextSlide()
+            }
+        }
     }
     
     // MARK: - 1. 加载课时全量剧本并完成本地初始化
@@ -300,6 +315,10 @@ class LectureSessionManager: ObservableObject {
         self.slideTitleDict = titles
         self.totalSlides = max(maxSlide + 1, 1)
         NSLog("📚 [LectureManager] 课时解析完成: 共 %ld 页，已载入提词 %ld 条", self.totalSlides, finalDict.count)
+        
+        // 🤖 课时载入完成时，第一时间初始化自研 AI 语音提词引擎权威逐字稿模型
+        let initLines = self.getWrappedScriptLines()
+        SpeechFollowEngine.shared.loadSlideScriptLines(lines: initLines, rawScript: self.currentScriptText)
     }
     
     // MARK: - 3. 响应大屏/导播台切页通知 (正向跟随)
@@ -321,6 +340,11 @@ class LectureSessionManager: ObservableObject {
         DispatchQueue.main.async {
             self.currentSlideIndex = max(0, min(newPageIndex, self.totalSlides - 1))
             self.currentLineIndex = 0 // 换页时视口行号自动归零
+            
+            // 🤖 远端切页时，无条件第一时间装载新页权威逐字稿并复位 ASR
+            let newLines = self.getWrappedScriptLines()
+            SpeechFollowEngine.shared.loadSlideScriptLines(lines: newLines, rawScript: self.currentScriptText)
+            
             self.pushCurrentSlideToGlasses(force: true)
             self.syncStateToWatch()
         }
@@ -352,6 +376,9 @@ class LectureSessionManager: ObservableObject {
         
         // 切页时下发整页文本，并设置从第 0 行开始
         ble.sendTeleprompterText(text, targetWidthChars: 28, scrollModeAI: false, startLine: 0)
+        
+        // 🤖 同步将当前幻灯片权威逐字稿载入自研 AI 语音提词引擎构建音素模型
+        SpeechFollowEngine.shared.loadSlideScriptLines(lines: self.getWrappedScriptLines(), rawScript: text)
     }
     
     // MARK: - 5. 手势/手表反向控屏 (调用生产 POST page-nav)
@@ -391,6 +418,10 @@ class LectureSessionManager: ObservableObject {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         self.syncStateToWatch()
         
+        // 🤖 关键：无条件第一时间装载新页权威逐字稿，切页瞬间即刻恢复敏锐听写！
+        let newLines = self.getWrappedScriptLines()
+        SpeechFollowEngine.shared.loadSlideScriptLines(lines: newLines, rawScript: self.currentScriptText)
+        
         // 2. 优先通过 WebSocket 极速直发切页（毫秒级、物理保序、服务端自动排除自身回波）
         if let ws = webSocketClient, ws.isConnected {
             ws.sendPageNav(targetPage: target)
@@ -429,6 +460,9 @@ class LectureSessionManager: ObservableObject {
     
     /// 按相对行号增量滚动（如 +1 下移一行，-1 上移一行）
     func scrollByLineDelta(_ delta: Int) {
+        // 🛡️ 人在回路 (HOTL) 物理干涉让位：微调滚动时 AI 引擎静默 3 秒
+        SpeechFollowEngine.shared.markManualOverride(reason: "Line Scroll Gesture")
+        
         guard let ble = bleManager, ble.isConnected else { return }
         
         // 🛡️ 提词唤醒与自愈：若眼镜会话未挂载或已退出，滚动操作自动重新点亮并推流当前页！
@@ -501,14 +535,13 @@ class LectureSessionManager: ObservableObject {
         let allLines = self.getWrappedScriptLines()
         let totalLines = max(allLines.count, 1)
         
-        // 确定当前视口行号 (以物理视口顶端最大行号为上限，确保手表与眼镜、手机 100% 物理对齐)
-        let targetLine = lineIndex ?? self.currentLineIndex
-        let maxTopLine = max(totalLines - BLEManager.physicalViewportLines, 0)
-        let safeLine = max(0, min(targetLine, maxTopLine))
+        // 确定当前朗读与视口行号 (当前朗读行直接置于手表视口顶端，抬腕即读)
+        let rawTarget = lineIndex ?? self.currentLineIndex
+        let safeLine = max(0, min(rawTarget, totalLines - 1))
         self.currentLineIndex = safeLine
         
-        // 切割从当前行开始的提词切片 (向后取 10 行，充分利用 Apple Watch 纵向物理视野)
-        let slice = allLines[safeLine..<min(safeLine + 10, allLines.count)]
+        // 切割从当前朗读行开始的提词切片 (向后取 8 行，当前朗读行排在最顶部)
+        let slice = allLines[safeLine..<min(safeLine + 8, allLines.count)]
         let viewportText = slice.joined(separator: "\n")
         
         let isConnected = self.webSocketClient?.isConnected ?? false

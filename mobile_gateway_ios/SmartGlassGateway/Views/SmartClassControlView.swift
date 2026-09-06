@@ -121,6 +121,7 @@ struct SmartClassControlView: View {
     @EnvironmentObject var bleManager: BLEManager
     @ObservedObject var watchManager = WatchSessionManager.shared
     @StateObject private var motionRemote = PhoneMotionRemoteService.shared
+    @ObservedObject private var speechEngine = SpeechFollowEngine.shared
     
     // 手机体感手势 HUD 动效浮层
     @State private var showGestureToast: Bool = false
@@ -238,6 +239,12 @@ struct SmartClassControlView: View {
             // 🌟 若蓝牙未连接且未在扫描，自动开启扫描以快速寻机连接 Even G2
             if !bleManager.isConnected && !bleManager.isScanning {
                 bleManager.startScanning()
+            }
+            
+            // 🌟 视图挂载时确保装载当前页权威逐字稿进入 AI 引擎
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                let currentLines = self.wrappedScriptLines
+                self.speechEngine.loadSlideScriptLines(lines: currentLines, rawScript: self.lectureManager.currentScriptText)
             }
             
             // 🌟 绑定手机陀螺仪体感遥控手势回调
@@ -714,6 +721,89 @@ struct SmartClassControlView: View {
                 .fixedSize(horizontal: true, vertical: false)
             }
             
+            // MARK: - 顶行 3: 🤖 自研 AI 语音智能跟随提词控制栏
+            HStack(spacing: 8) {
+                Button(action: {
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    if speechEngine.isListening {
+                        speechEngine.stopListening()
+                    } else {
+                        // 🌟 核心防空：确保当前界面渲染的逐字稿权威模型已被载入引擎
+                        let currentLines = self.wrappedScriptLines
+                        speechEngine.loadSlideScriptLines(lines: currentLines, rawScript: lectureManager.currentScriptText)
+                        speechEngine.startListening()
+                    }
+                }) {
+                    HStack(spacing: 5) {
+                        Image(systemName: speechEngine.isListening ? "sparkles" : "mic.slash")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(speechEngine.isListening ? .white : .secondary)
+                        
+                        Text(speechEngine.isListening ? "AI 跟随中" : "开启 AI 语音跟随")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(speechEngine.isListening ? .white : .primary)
+                    }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(speechEngine.isListening ? Color.green : Color(UIColor.tertiarySystemFill))
+                    .cornerRadius(8)
+                }
+                .buttonStyle(PlainButtonStyle())
+                
+                if speechEngine.isListening {
+                    if speechEngine.isManualOverrideActive {
+                        HStack(spacing: 4) {
+                            Image(systemName: "hand.raised.fill")
+                                .font(.system(size: 9))
+                            Text("手势让位 3s")
+                                .font(.system(size: 10, weight: .semibold))
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.orange.opacity(0.15))
+                        .foregroundColor(.orange)
+                        .cornerRadius(6)
+                    } else if speechEngine.isDigressed {
+                        HStack(spacing: 4) {
+                            Image(systemName: "shield.fill")
+                                .font(.system(size: 9))
+                            Text("脱稿驻留保持")
+                                .font(.system(size: 10, weight: .semibold))
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.blue.opacity(0.15))
+                        .foregroundColor(.blue)
+                        .cornerRadius(6)
+                    } else {
+                        HStack(spacing: 4) {
+                            Circle().fill(Color.green).frame(width: 5, height: 5)
+                            Text("咬合: \(Int(speechEngine.confidenceScore * 100))%")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundColor(.green)
+                        }
+                    }
+                    
+                    Spacer()
+                    
+                    if !speechEngine.partialTranscript.isEmpty {
+                        Text("“\(speechEngine.partialTranscript.suffix(14))”")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+                } else {
+                    Spacer()
+                    Text("48kHz 高精 ASR • 前向竞争对齐 • 手势无感让位")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary.opacity(0.7))
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.purple.opacity(0.04))
+            .cornerRadius(8)
+            
             // 🌟 独立提词器完整复用：两区域视觉区分 + 拖拽滑动毫秒级同步移动眼镜提词位置
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: true) {
@@ -723,19 +813,28 @@ struct SmartClassControlView: View {
                         ForEach(Array(wrappedScriptLines.enumerated()), id: \.offset) { index, lineText in
                             let bounds = viewportBounds
                             let isInViewport = (index >= bounds.vStart && index <= bounds.vEnd)
+                            let isCurrentReading = (speechEngine.isListening && index == activeLineIndex)
                             let isViewportTop = (index == bounds.vStart)
+                            let isHighlighted = isCurrentReading || (!speechEngine.isListening && isViewportTop)
                             
                             HStack(alignment: .center, spacing: 8) {
-                                // 行号：紧凑纯粹的等宽数字，仅占 22pt，不浪费任何横向空间
-                                Text(String(format: "%02d", index + 1))
-                                    .font(.system(size: 11.5, weight: isViewportTop ? .black : (isInViewport ? .bold : .regular), design: .monospaced))
-                                    .foregroundColor(isViewportTop ? Color.purple : (isInViewport ? Color.purple.opacity(0.8) : Color.gray.opacity(0.35)))
-                                    .frame(width: 22, alignment: .trailing)
+                                // 🌟 状态指示与行号：正在朗读行显示动态绿色声波圆点，普通行显示等宽数字
+                                HStack(spacing: 3) {
+                                    if isCurrentReading {
+                                        Circle()
+                                            .fill(Color.green)
+                                            .frame(width: 6, height: 6)
+                                    }
+                                    Text(String(format: "%02d", index + 1))
+                                        .font(.system(size: 11.5, weight: isHighlighted ? .black : (isInViewport ? .bold : .regular), design: .monospaced))
+                                        .foregroundColor(isCurrentReading ? Color.green : ((!speechEngine.isListening && isViewportTop) ? Color.purple : (isInViewport ? Color.purple.opacity(0.8) : Color.gray.opacity(0.35))))
+                                }
+                                .frame(width: 28, alignment: .trailing)
                                 
-                                // 文本正文：宽度 100% 释放，顶行 14.5pt 饱满清晰，杜绝文字缩水挤压
+                                // 文本正文：当前朗读行高亮且字号饱满，随语音逐行跳跃
                                 Text(lineText.isEmpty ? " " : lineText)
-                                    .font(.system(size: isViewportTop ? 14.5 : 13.5, weight: isViewportTop ? .bold : (isInViewport ? .semibold : .regular)))
-                                    .foregroundColor(isViewportTop ? Color.purple : (isInViewport ? Color.primary : Color.secondary.opacity(0.38)))
+                                    .font(.system(size: isHighlighted ? 14.5 : 13.5, weight: isHighlighted ? .bold : (isInViewport ? .semibold : .regular)))
+                                    .foregroundColor(isCurrentReading ? Color.green : ((!speechEngine.isListening && isViewportTop) ? Color.purple : (isInViewport ? Color.primary : Color.secondary.opacity(0.38))))
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.85)
                                     .allowsTightening(true)
@@ -745,13 +844,22 @@ struct SmartClassControlView: View {
                             .padding(.vertical, 4) // 恒定上下内边距，单行稳定约 30pt
                             .background(
                                 Group {
-                                    if isInViewport {
-                                        // 👓【眼镜显示区域】：高亮深底色与紫色描边，顶端行加深增强焦点
+                                    if isCurrentReading {
+                                        // 🤖【AI 实时朗读/提词焦点行】：醒目翠绿光晕底色与微发光描边
                                         RoundedRectangle(cornerRadius: 6)
-                                            .fill(isViewportTop ? Color.purple.opacity(0.18) : Color.purple.opacity(0.06))
+                                            .fill(Color.green.opacity(0.18))
                                             .overlay(
                                                 RoundedRectangle(cornerRadius: 6)
-                                                    .stroke(isViewportTop ? Color.purple.opacity(0.5) : Color.purple.opacity(0.15), lineWidth: isViewportTop ? 1.5 : 1)
+                                                    .stroke(Color.green.opacity(0.7), lineWidth: 1.5)
+                                            )
+                                    } else if isInViewport {
+                                        // 👓【眼镜视口显示区域】：紫色淡底色与描边 (非 AI 跟随模式下才显示顶行强调)
+                                        let showTopBorder = !speechEngine.isListening && isViewportTop
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(showTopBorder ? Color.purple.opacity(0.15) : Color.purple.opacity(0.05))
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 6)
+                                                    .stroke(showTopBorder ? Color.purple.opacity(0.5) : Color.purple.opacity(0.12), lineWidth: showTopBorder ? 1.5 : 1)
                                             )
                                     } else {
                                         // ⚪️【外部区域】：清爽无底色，弱灰阶显示供提前预览
@@ -792,12 +900,19 @@ struct SmartClassControlView: View {
                     DragGesture(minimumDistance: 1)
                         .onChanged { _ in
                             self.isProgrammaticScrolling = false
+                            self.bleManager.markPhonePhysicalScroll()
                             self.bleManager.resetGlassesRxShield()
+                            // 若在 AI 跟随期间手动滑动屏幕，触发 HOTL 让位 3 秒
+                            if self.speechEngine.isListening {
+                                self.speechEngine.markManualOverride(reason: "用户手动拖拽提词列表")
+                            }
                         }
                 )
                 // 2. 核心联动：手机拖拽滑动时，实时计算顶部行号并同步移动眼镜提词视口
                 .onPreferenceChange(TeleprompterLineOffsetKey.self) { offsets in
                     guard !isProgrammaticScrolling else { return }
+                    // 🛡️ 核心防干扰：当 AI 语音跟随开启时，提词位置由语音引擎绝对独占，严禁物理滚动坐标反向篡改提词位置！
+                    guard !speechEngine.isListening else { return }
                     let maxLine = max(wrappedScriptLines.count - SmartClassControlView.physicalViewportLines, 0)
                     
                     let candidateIndex: Int?
@@ -834,6 +949,8 @@ struct SmartClassControlView: View {
                 }
                 // 3. 接收眼镜端/手表端回波：消除乒乓震荡，自动跟焦滚动
                 .onReceive(bleManager.$currentFocusPageLine) { newGlassesLine in
+                    // 🛡️ 核心防死锁：当 AI 语音跟随开启时，提词行号由 AI 语音引擎独占掌控，严禁被眼镜物理视口回波篡改回第 0 行！
+                    guard !speechEngine.isListening else { return }
                     guard !wrappedScriptLines.isEmpty else { return }
                     let maxLine = max(wrappedScriptLines.count - SmartClassControlView.physicalViewportLines, 0)
                     let clampedLine = max(0, min(maxLine, newGlassesLine))
@@ -854,15 +971,48 @@ struct SmartClassControlView: View {
                         self.isProgrammaticScrolling = false
                     }
                 }
-                // 4. 切页时视口重置回第 0 行
+                // 4. 切页时视口重置回第 0 行并载入新页逐字稿模型
                 .onReceive(lectureManager.$currentSlideIndex) { _ in
                     self.activeLineIndex = 0
                     self.lectureManager.syncStateToWatch(lineIndex: 0, forceImmediate: true)
                     self.isProgrammaticScrolling = true
+                    
+                    // 🌟 核心防空：切页瞬间同步装载当前页权威逐字稿模型
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        let currentLines = self.wrappedScriptLines
+                        self.speechEngine.loadSlideScriptLines(lines: currentLines, rawScript: self.lectureManager.currentScriptText)
+                    }
+                    
                     withAnimation(.easeInOut(duration: 0.2)) {
                         proxy.scrollTo(0, anchor: .top)
                     }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        self.isProgrammaticScrolling = false
+                    }
+                }
+                // 5. 🤖 AI 语音智能跟随行号联动 (提词位置与识别位置 100% 绝对一致对齐)
+                .onReceive(speechEngine.$activeLineIndex) { aiLine in
+                    guard self.speechEngine.isListening else { return }
+                    guard !wrappedScriptLines.isEmpty else { return }
+                    
+                    let maxIndex = max(wrappedScriptLines.count - 1, 0)
+                    let targetLine = min(max(0, aiLine), maxIndex)
+                    
+                    self.isProgrammaticScrolling = true
+                    
+                    // 🌟 核心对齐：提词位置 (activeLineIndex) 与识别位置 (aiLine) 100% 严格一致
+                    self.activeLineIndex = targetLine
+                    
+                    // 手机端平滑将识别到的提词行对齐至顶部视口
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
+                        proxy.scrollTo(targetLine, anchor: .top)
+                    }
+                    
+                    // 智能眼镜与 Apple Watch 100% 同步推进到同一行
+                    self.syncLineToGlasses(lineIndex: targetLine)
+                    self.lectureManager.syncStateToWatch(lineIndex: targetLine, forceImmediate: true)
+                    
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                         self.isProgrammaticScrolling = false
                     }
                 }
@@ -879,12 +1029,12 @@ struct SmartClassControlView: View {
         let clamped = max(0, min(maxLine, index))
         isProgrammaticScrolling = true
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-            activeLineIndex = clamped
+            activeLineIndex = index
             scrollProxy?.scrollTo(clamped, anchor: .top)
         }
         bleManager.resetGlassesRxShield()
         bleManager.flushFinalScrollSync(lineIndex: clamped)
-        lectureManager.syncStateToWatch(lineIndex: clamped, forceImmediate: true)
+        lectureManager.syncStateToWatch(lineIndex: index, forceImmediate: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             self.isProgrammaticScrolling = false
         }
@@ -893,9 +1043,7 @@ struct SmartClassControlView: View {
     private func syncLineToGlasses(lineIndex: Int) {
         guard bleManager.isConnected else { return }
         if bleManager.isTeleprompterSessionActive && !bleManager.isPushingText {
-            let maxLine = max(wrappedScriptLines.count - SmartClassControlView.physicalViewportLines, 0)
-            let safeLine = max(0, min(maxLine, lineIndex))
-            bleManager.sendScrollSync(lineIndex: safeLine)
+            bleManager.sendScrollSync(lineIndex: lineIndex)
         }
     }
     

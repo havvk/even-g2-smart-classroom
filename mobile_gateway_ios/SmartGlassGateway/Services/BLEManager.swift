@@ -608,6 +608,11 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     var isRecentPhoneScroll: Bool {
         Date().timeIntervalSince(lastPhoneScrollTime) < 0.500
     }
+    
+    /// 仅在用户手指触摸屏幕物理滑动时调用，精准标记物理滑动
+    func markPhonePhysicalScroll() {
+        self.lastPhoneScrollTime = Date()
+    }
     private var lastGlassesRxScrollTime: Date = Date.distantPast
     private var lastScrollSyncSentTime: Date = Date.distantPast
     private var pendingSyncLineIndex: Int?
@@ -681,9 +686,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             if timeSinceGlassesRx < 0.500 {
                 return
             }
-            self.lastPhoneScrollTime = Date()
         } else {
-            self.lastPhoneScrollTime = Date()
             self.lastGlassesRxScrollTime = Date.distantPast
         }
         

@@ -19,7 +19,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.1</string>
 	<key>CFBundleVersion</key>
-	<string>24</string>
+	<string>37</string>
 	<key>MinimumOSVersion</key>
 	<string>10.0</string>
 	<key>NSMotionUsageDescription</key>
