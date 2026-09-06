@@ -45,9 +45,12 @@ enum G2Channel {
     case content
     case rendering
     case teleprompter
+    case audio
 }
 
 class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
+    static let shared = BLEManager()
+    
     @Published var isConnected = false
     @Published var isScanning = false
     @Published var connectedPeripheralName: String? = nil
@@ -63,13 +66,34 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     // 实时日志推送回调 (direction, hexBytes, description)
     var onG2TelemetryLog: ((String, String, String) -> Void)?
     
-    // CoreBluetooth 句柄与 G2 专属多通道写特征
+    // CoreBluetooth 句柄与 G2 专属多通道写特征 (支持左右双镜腿伴生拓扑)
     private var centralManager: CBCentralManager!
-    private var targetPeripheral: CBPeripheral?
-    private var controlTxChar: CBCharacteristic?      // UUID 包含 0001 (控制握手)
-    private var contentTxChar: CBCharacteristic?      // UUID 包含 5401 (文本内容)
-    private var renderingTxChar: CBCharacteristic?    // UUID 包含 6401 (渲染控制)
-    private var teleprompterTxChar: CBCharacteristic? // UUID 包含 7401 (提词器专用)
+    private var targetPeripheral: CBPeripheral?       // 主显示/触控外设 (_R_ 镜腿为主)
+    private var audioPeripheral: CBPeripheral?        // 专属麦克风外设 (严格绑定 _L_ 左镜腿)
+    private var controlTxChar: CBCharacteristic?      // UUID 包含 0001 (主外设控制握手)
+    private var contentTxChar: CBCharacteristic?      // UUID 包含 5401 (主外设文本内容)
+    private var renderingTxChar: CBCharacteristic?    // UUID 包含 6401 (主外设渲染控制)
+    private var teleprompterTxChar: CBCharacteristic? // UUID 包含 7401 (主外设提词专用)
+    
+    // 专属左耳麦克风通道特征 (严格绑定 audioPeripheral)
+    private var audioTxChar: CBCharacteristic?        // UUID 包含 6401 (左耳音频写特征)
+    private var audioRxChar: CBCharacteristic?        // UUID 包含 6402 (左耳音频 Notify 特征)
+    private var audioContentTxChar: CBCharacteristic? // UUID 包含 5401 (左耳 EvenHub 写特征)
+    private var audioControlTxChar: CBCharacteristic? // UUID 包含 0001 (左耳控制写特征)
+    
+    // MARK: - 智能眼镜麦克风与音频流管道 (Glasses Mic & Audio Stream)
+    @Published var connectedAudioPeripheralName: String? = nil
+    @Published var isAudioPeripheralConnected: Bool = false
+    @Published var isGlassesMicActive: Bool = false
+    @Published var isAudioTxReady: Bool = false
+    @Published var isAudioNotifyReady: Bool = false
+    @Published var audioPacketPPS: Int = 0
+    @Published var totalAudioPacketsReceived: Int = 0
+    @Published var lastAudioPacketHex: String = "无"
+    var onAudioPacketReceived: ((Data) -> Void)?
+    private let audioProcessingQueue = DispatchQueue(label: "cn.ylive.SmartGlassGateway.audioQueue", qos: .userInteractive)
+    private var ppsCounter: Int = 0
+    private var ppsTimer: Timer?
     
     // 手势与翻页回调
     var onPageControlTriggered: ((String) -> Void)?
@@ -101,6 +125,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     }
     
     func addLog(_ message: String) {
+        NSLog("🔵 [BLE] %@", message)
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.bleLogHistory.append(message)
@@ -132,25 +157,55 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             self.isScanning = true
             self.lastBLEStatusMessage = "正在扫描/检索附近的 Even G2 眼镜..."
             
-            // 核心修复 1: 优先检索已经被 iOS 系统级别配对连接的 G2 设备
+            // 核心修复 1: 优先检索已经被 iOS 系统级别配对连接的 G2 设备 (区分左右耳)
             let knownServices = [
                 CBUUID(string: "00002760-08c2-11e1-9073-0e8ac72e0001"),
+                CBUUID(string: "00002760-08c2-11e1-9073-0e8ac72e5450"),
+                CBUUID(string: "00002760-08c2-11e1-9073-0e8ac72e6450"),
                 CBUUID(string: "6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
             ]
             let connectedPeripherals = cm.retrieveConnectedPeripherals(withServices: knownServices)
+            var foundLeft: CBPeripheral?
+            var foundRight: CBPeripheral?
+            
             for p in connectedPeripherals {
                 let name = p.name ?? ""
-                if name.contains("Even G2") || name.contains("Even") || name.contains("_L_") {
-                    self.addLog("⚡️ [系统快连] 成功检索到 iOS 系统已连接设备: \(name)")
-                    self.targetPeripheral = p
-                    self.targetPeripheral?.delegate = self
-                    cm.connect(p, options: nil)
-                    return
+                self.addLog("⚡️ [系统快连探测] 检索到已连外设: \(name)")
+                if name.contains("_L_") {
+                    foundLeft = p
+                } else if name.contains("_R_") {
+                    foundRight = p
+                } else if name.contains("Even") {
+                    foundLeft = p
                 }
             }
             
-            // 核心修复 2: 发起物理广播扫描
-            cm.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+            // 规则 1: 麦克风硬件只在左耳 (_L_)，必须锁定左耳
+            if let left = foundLeft {
+                self.addLog("🎯 [左耳连接] 锁定 G2 左耳 (麦克风硬件主力端): \(left.name ?? "")")
+                self.audioPeripheral = left
+                left.delegate = self
+                cm.connect(left, options: [CBConnectPeripheralOptionNotifyOnDisconnectionKey: true])
+                if self.targetPeripheral == nil {
+                    self.targetPeripheral = left
+                }
+            }
+            
+            // 规则 2: 右耳 (_R_) 负责 MicroLED 提词显示与 Touchpad 触控板
+            if let right = foundRight {
+                self.addLog("👓 [右耳连接] 锁定 G2 右耳 (显示/触控端): \(right.name ?? "")")
+                if self.targetPeripheral == nil || self.targetPeripheral?.name?.contains("_L_") != true {
+                    self.targetPeripheral = right
+                }
+                right.delegate = self
+                cm.connect(right, options: [CBConnectPeripheralOptionNotifyOnDisconnectionKey: true])
+            }
+            
+            // 规则 3: 若左耳麦克风尚未连接，保持后台广播扫描不中断！
+            if self.audioPeripheral == nil || self.audioPeripheral?.state != .connected {
+                self.addLog("🔍 [持续寻探左耳] 左耳麦克风硬件尚未就绪，启动后台 BLE 广播扫描寻找 _L_ 镜腿...")
+                cm.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+            }
         }
     }
     
@@ -166,8 +221,11 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             guard let self = self else { return }
             self.isManualDisconnect = true
             self.stopLinkProbing()
-            if let peripheral = self.targetPeripheral {
-                self.centralManager.cancelPeripheralConnection(peripheral)
+            if let p = self.targetPeripheral {
+                self.centralManager.cancelPeripheralConnection(p)
+            }
+            if let ap = self.audioPeripheral {
+                self.centralManager.cancelPeripheralConnection(ap)
             }
             self.handlePhysicalDisconnect(peripheral: self.targetPeripheral, error: nil)
             self.lastBLEStatusMessage = "已手动断开蓝牙"
@@ -180,18 +238,6 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             guard let self = self else { return }
             if central.state == .poweredOn {
                 if !self.isManualDisconnect {
-                    // 优先从已知 UUID 直接恢复连接！
-                    if let savedUUIDStr = UserDefaults.standard.string(forKey: "last_connected_g2_uuid"),
-                       let uuid = UUID(uuidString: savedUUIDStr) {
-                        let knownPeripherals = central.retrievePeripherals(withIdentifiers: [uuid])
-                        if let known = knownPeripherals.first {
-                            self.addLog("⚡️ [快速寻径] 发现已知 G2 外设: \(known.name ?? "Even G2")，立即直连！")
-                            self.targetPeripheral = known
-                            self.targetPeripheral?.delegate = self
-                            self.centralManager.connect(known, options: [CBConnectPeripheralOptionNotifyOnDisconnectionKey: true])
-                            return
-                        }
-                    }
                     self.startScanning()
                 }
             } else {
@@ -207,26 +253,65 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         let name = peripheral.name ?? advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? ""
         guard name.contains("Even G2") || name.contains("Even") else { return }
         
-        // 关键物理规则 (对齐 teleprompter.py 规范): 左耳 _L_ 为包含 MicroLED 显示引擎的 Master 设备，必须优先锁定 _L_
-        if name.contains("_L_") || !name.contains("_R_") {
-            addLog("🎯 优先锁定 G2 左耳主显示镜腿: \(name)")
-            targetPeripheral = peripheral
-            targetPeripheral?.delegate = self
-            UserDefaults.standard.set(peripheral.identifier.uuidString, forKey: "last_connected_g2_uuid")
+        self.addLog("🔍 [BLE 广播发现] \(name) (RSSI: \(RSSI))")
+        
+        if name.contains("_L_") {
+            if self.audioPeripheral == nil || self.audioPeripheral?.state != .connected {
+                self.addLog("🎯 [捕获左耳] 锁定 G2 左耳 (麦克风硬件端): \(name)，立即发起连接！")
+                self.audioPeripheral = peripheral
+                peripheral.delegate = self
+                central.connect(peripheral, options: [CBConnectPeripheralOptionNotifyOnDisconnectionKey: true])
+                if self.targetPeripheral == nil {
+                    self.targetPeripheral = peripheral
+                }
+                UserDefaults.standard.set(peripheral.identifier.uuidString, forKey: "last_connected_g2_uuid_left")
+            }
+        } else if name.contains("_R_") {
+            if self.targetPeripheral == nil || self.targetPeripheral?.state != .connected {
+                self.addLog("👓 [捕获右耳] 锁定 G2 右耳 (显示/触控端): \(name)，发起连接...")
+                self.targetPeripheral = peripheral
+                peripheral.delegate = self
+                central.connect(peripheral, options: [CBConnectPeripheralOptionNotifyOnDisconnectionKey: true])
+                UserDefaults.standard.set(peripheral.identifier.uuidString, forKey: "last_connected_g2_uuid_right")
+            }
+        }
+        
+        // 只有双耳都连接就绪才停止扫描
+        if self.audioPeripheral?.state == .connected && self.targetPeripheral?.state == .connected {
             stopScanning()
-            centralManager.connect(peripheral, options: [CBConnectPeripheralOptionNotifyOnDisconnectionKey: true])
         }
     }
     
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        let name = peripheral.name ?? "Even G2"
+        addLog("🔌 [物理连接成功] didConnect: \(name)")
+        
+        if name.contains("_L_") {
+            self.audioPeripheral = peripheral
+            DispatchQueue.main.async {
+                self.connectedAudioPeripheralName = name
+                self.isAudioPeripheralConnected = true
+                self.addLog("🎙️ [麦克风硬件就绪] 成功挂载 G2 左耳音频外设: \(name)")
+            }
+            if self.targetPeripheral == nil {
+                self.targetPeripheral = peripheral
+            }
+        } else if name.contains("_R_") {
+            self.targetPeripheral = peripheral
+            DispatchQueue.main.async {
+                self.connectedPeripheralName = name
+                self.addLog("👓 [主显设备就绪] 成功挂载 G2 右耳主外设: \(name)")
+            }
+        }
+        
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.isConnected = true
             self.hasHandshakeExecuted = false
             self.teleprompterSeq = 0x01
             self.teleprompterMsgId = 0x14
-            self.connectedPeripheralName = peripheral.name ?? "Even G2 Smart Glass"
-            self.lastBLEStatusMessage = "🟢 蓝牙已物理连接: \(self.connectedPeripheralName ?? "") (配置通道中...)"
+            self.connectedPeripheralName = self.targetPeripheral?.name ?? name
+            self.lastBLEStatusMessage = "🟢 蓝牙已物理连接: \(self.connectedPeripheralName ?? "")"
             self.updateReadyForTeleprompter()
             self.startLinkProbing()
         }
@@ -275,7 +360,16 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             self.contentTxChar = nil
             self.renderingTxChar = nil
             self.teleprompterTxChar = nil
+            self.audioTxChar = nil
+            self.audioRxChar = nil
+            self.audioContentTxChar = nil
+            self.audioControlTxChar = nil
             self.currentGlassesRSSI = 0
+            self.isGlassesMicActive = false
+            self.isAudioTxReady = false
+            self.isAudioNotifyReady = false
+            self.stopPPSMonitor()
+            self.audioPacketPPS = 0
             self.updateReadyForTeleprompter()
             
             if !self.isManualDisconnect {
@@ -386,27 +480,57 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             addLog("🔍 特征值: \(uuidStr) [Notify/Ind:\(canNotify), Write:\(canWrite)]")
             
             let uuidSuffix = String(uuidStr.suffix(4))
-            // 订阅所有支持 Notify/Indicate 的特征通道 (包含 Nordic 串口 6E40 通道与 5402)
+            let isLeftTemple = (peripheral == audioPeripheral) || (peripheral.name?.contains("_L_") == true)
+            
+            // 订阅所有支持 Notify/Indicate 的特征通道 (包含 Nordic 串口 6E40 通道与 5402、6402)
             if canNotify {
                 peripheral.setNotifyValue(true, for: characteristic)
-                addLog("🔔 [物理 CCCD 激活] 正在开启 [\(uuidSuffix)] 通道 Notify 接收...")
+                addLog("🔔 [物理 CCCD 激活] 正在开启 [\(uuidSuffix)] 通道 Notify 接收 (\(peripheral.name ?? "外设"))...")
+                if uuidStr.hasSuffix("6402") {
+                    audioRxChar = characteristic
+                    addLog("🎙️ [独立音频通道] 成功捕获 6402 音频流 Notify 特征值 (\(peripheral.name ?? "左耳"))")
+                }
             }
             
-            // 按 UUID 结尾绑定 G2 专属 Channel 特征通道 (排除 6E40 串口)
+            // 按 UUID 结尾绑定 G2 专属 Channel 特征通道 (排除 6E40 串口，严格区分左右耳)
             if canWrite {
-                if uuidStr.hasSuffix("0001") {
-                    controlTxChar = characteristic
-                    addLog("✍️ 绑定 [0001 控制通道] 写特征: \(uuidStr)")
-                } else if uuidStr.hasSuffix("5401") {
-                    contentTxChar = characteristic
-                    addLog("✍️ 绑定 [5401 内容通道] 写特征: \(uuidStr)")
+                if isLeftTemple {
+                    // 左耳：专职麦克风硬件
+                    if uuidStr.hasSuffix("6401") {
+                        audioTxChar = characteristic
+                        DispatchQueue.main.async {
+                            self.isAudioTxReady = true
+                        }
+                        addLog("✍️ 绑定 [左耳 6401 麦克风控制写通道] 特征: \(uuidStr)")
+                    } else if uuidStr.hasSuffix("5401") {
+                        audioContentTxChar = characteristic
+                        addLog("✍️ 绑定 [左耳 5401 内容通道] 写特征: \(uuidStr)")
+                    } else if uuidStr.hasSuffix("0001") {
+                        audioControlTxChar = characteristic
+                        addLog("✍️ 绑定 [左耳 0001 控制通道] 写特征: \(uuidStr)")
+                    }
+                } else {
+                    // 右耳：专职主显、提词与触控
+                    if uuidStr.hasSuffix("0001") {
+                        controlTxChar = characteristic
+                        addLog("✍️ 绑定 [右耳 0001 控制通道] 写特征: \(uuidStr)")
+                    } else if uuidStr.hasSuffix("5401") {
+                        contentTxChar = characteristic
+                        addLog("✍️ 绑定 [右耳 5401 内容通道] 写特征: \(uuidStr)")
+                    } else if uuidStr.hasSuffix("6401") {
+                        renderingTxChar = characteristic
+                        addLog("✍️ 绑定 [右耳 6401 渲染通道] 写特征: \(uuidStr)")
+                    } else if uuidStr.hasSuffix("7401") {
+                        teleprompterTxChar = characteristic
+                        addLog("✍️ 绑定 [右耳 7401 提词通道] 写特征: \(uuidStr)")
+                    }
                 }
             }
         }
         
-        let hasAnyTxChar = controlTxChar != nil || contentTxChar != nil
+        let hasAnyTxChar = controlTxChar != nil || contentTxChar != nil || audioContentTxChar != nil
         if hasAnyTxChar {
-            addLog("✍️ 已成功绑定 5401 物理写特征通道")
+            addLog("✍️ 已成功绑定 G2 物理写特征通道 (6401音频写就绪: \(audioTxChar != nil))")
             DispatchQueue.main.async { [weak self] in
                 self?.updateReadyForTeleprompter()
             }
@@ -429,6 +553,11 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                     self.addLog("🔒 [物理订阅锁] 5402 Notify 100% 订阅就绪，允许推屏!")
                     self.updateReadyForTeleprompter()
                     self.onGlassesReadyToRender?()
+                }
+            } else if uuidStr.contains("6402") {
+                DispatchQueue.main.async {
+                    self.isAudioNotifyReady = characteristic.isNotifying
+                    self.addLog("🎙️ [物理订阅锁] 6402 音频流通道订阅就绪! (isNotifying=\(characteristic.isNotifying))")
                 }
             }
         }
@@ -477,12 +606,26 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         
         let uuidSuffix = String(characteristic.uuid.uuidString.suffix(4))
         
-        // 核心过滤 1: 6402 为麦克风 PCM 音频流通道，必须在接收端静默拦截，严禁打印日志轰炸
+        // 核心通道 1: 6402 为麦克风 LC3 音频流通道 (单包 205 字节，~20 pps)
         if uuidSuffix == "6402" {
+            audioProcessingQueue.async { [weak self] in
+                guard let self = self else { return }
+                self.ppsCounter += 1
+                self.onAudioPacketReceived?(data)
+                
+                // 仅每 20 包 (约 1 秒) 更新一次遥测调试信息，避免主线程日志轰炸
+                if self.ppsCounter % 20 == 1 {
+                    let hexPreview = data.prefix(16).map { String(format: "%02X", $0) }.joined(separator: " ")
+                    DispatchQueue.main.async {
+                        self.totalAudioPacketsReceived += 1
+                        self.lastAudioPacketHex = "\(hexPreview)... (\(data.count)B)"
+                    }
+                }
+            }
             return
         }
         
-        // 核心过滤 2: 过滤 6402 音频流，只放行含有 0xAA 协议帧或 Notify 特征的数据
+        // 核心过滤 2: 过滤非 0xAA 的非协议杂乱帧 (如纯文本/串口杂音)
         let hexStr = data.map { String(format: "%02X", $0) }.joined(separator: " ")
         
         addLog("📩 [Rx Notify] 通道 [\(uuidSuffix)] (\(data.count)B): \(hexStr)")
@@ -1618,24 +1761,37 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     @Published var physicalWriteCount: Int = 0
     
     func sendRawData(_ data: Data, channel: G2Channel = .content, withResponse: Bool = false, logDesc: String? = nil) {
-        guard let peripheral = targetPeripheral, peripheral.state == .connected else {
-            addLog("⚠️ 发送失败: 蓝牙物理未连接 (State: \(targetPeripheral?.state.rawValue ?? -1))")
-            DispatchQueue.main.async {
-                self.isConnected = false
-            }
+        // 目标外设与特征通道精准选择：音频流控优先左耳 audioPeripheral，主命令使用 targetPeripheral
+        let p: CBPeripheral?
+        let txChar: CBCharacteristic?
+        
+        switch channel {
+        case .control:
+            p = targetPeripheral ?? audioPeripheral
+            txChar = (p == targetPeripheral ? controlTxChar : audioControlTxChar) ?? controlTxChar ?? audioControlTxChar
+        case .content:
+            p = targetPeripheral ?? audioPeripheral
+            txChar = (p == targetPeripheral ? contentTxChar : audioContentTxChar) ?? contentTxChar ?? audioContentTxChar
+        case .teleprompter:
+            p = targetPeripheral ?? audioPeripheral
+            txChar = (p == targetPeripheral ? teleprompterTxChar : contentTxChar) ?? contentTxChar
+        case .rendering:
+            p = targetPeripheral ?? audioPeripheral
+            txChar = (p == targetPeripheral ? renderingTxChar : audioTxChar) ?? contentTxChar
+        case .audio:
+            p = audioPeripheral ?? targetPeripheral
+            txChar = (p == audioPeripheral ? audioTxChar : renderingTxChar) ?? audioTxChar ?? contentTxChar
+        }
+        
+        guard let finalTxChar = txChar else {
+            addLog("⚠️ 发送失败: 无法找到 [\(channel)] 通道对应的 TX 特征值")
             return
         }
         
-        // 自动保持同步
-        if !isConnected {
-            DispatchQueue.main.async {
-                self.isConnected = true
-            }
-        }
-        
-        // 100% 对齐 teleprompter.py: 唯一物理写特征 5401 (contentTxChar)
-        guard let txChar = contentTxChar ?? controlTxChar else {
-            addLog("⚠️ 发送失败: 无法找到 5401 通道对应的 TX 特征值")
+        // 关键安全防护：确保使用的外设与特征值所属的外设绝对一致，杜绝跨外设写特征
+        let actualPeripheral = finalTxChar.service?.peripheral ?? p
+        guard let peripheral = actualPeripheral, peripheral.state == .connected else {
+            addLog("⚠️ 发送失败: 目标蓝牙外设未连接 (ch=\(channel), p=\(p?.name ?? "nil"))")
             return
         }
         
@@ -1645,17 +1801,17 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
         
         let dateStr = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
-        print("🔥 [5401 物理 BLE 写入第 \(physicalWriteCount + 1) 包] \(dateStr) | len=\(data.count)b | desc=\(logDesc ?? "")")
+        let uuidSuffix = String(finalTxChar.uuid.uuidString.suffix(4))
+        print("🔥 [\(uuidSuffix) 物理 BLE 写入第 \(physicalWriteCount + 1) 包] \(dateStr) | len=\(data.count)b | ch=\(channel) | desc=\(logDesc ?? "")")
         
-        // 尊重 5401 蓝牙物理特征值广播属性，动态安全选择写入模式 (防止系统抛出拒绝写入 Error)
-        let writeType: CBCharacteristicWriteType = getWriteType(for: txChar)
-        peripheral.writeValue(data, for: txChar, type: writeType)
+        // 尊重蓝牙物理特征值广播属性，动态安全选择写入模式 (防止系统抛出拒绝写入 Error)
+        let writeType: CBCharacteristicWriteType = getWriteType(for: finalTxChar)
+        peripheral.writeValue(data, for: finalTxChar, type: writeType)
         
         let hexString = data.map { String(format: "%02X", $0) }.joined(separator: " ")
-        let uuidSuffix = String(txChar.uuid.uuidString.suffix(4))
         
         if let logDesc = logDesc {
-            addLog("⬆️ [TX 发送] \(logDesc) (Type: \(writeType == .withResponse ? "WithResp" : "NoResp")) -> [\(uuidSuffix)]")
+            addLog("⬆️ [TX 发送 -> \(uuidSuffix)] \(logDesc) (Type: \(writeType == .withResponse ? "WithResp" : "NoResp"))")
         }
         onG2TelemetryLog?("Tx", hexString, logDesc ?? "发送 G2 帧 [\(uuidSuffix)]")
     }
@@ -1766,6 +1922,164 @@ extension BLEManager {
         default:
             break
         }
+    }
+    
+    // MARK: - 智能眼镜麦克风音频流控制 (Glasses Mic Control via Service 0x64-50 & 0xE0 / 0x0E)
+    
+    /// 启动眼镜镜腿麦克风采音流
+    func startGlassesMicrophone() {
+        guard isConnected else {
+            addLog("⚠️ 无法启动眼镜麦克风: 蓝牙未连接")
+            return
+        }
+        
+        // 1. 确保左耳 6402 Notify 处于激活状态
+        if let rxChar = audioRxChar, let peripheral = rxChar.service?.peripheral ?? audioPeripheral {
+            if !rxChar.isNotifying {
+                addLog("🔔 [6402 订阅检查] 发现 6402 未激活，立即请求 setNotifyValue(true)...")
+                peripheral.setNotifyValue(true, for: rxChar)
+            }
+        }
+        
+        // 2. 前置会话保障：若尚未进入提词会话态，自动挂载提词测试屏显以激活 MicroLED 容器，确保 MCU 解锁麦克风硬件
+        if !isTeleprompterSessionActive && !isPushingText {
+            addLog("⚡️ [眼镜模式激活] 检测到尚未进入会话态，自动下发屏显容器使能麦克风硬件...")
+            sendTeleprompterText("NCU 智能眼镜采音测试\n麦克风流传输中...", targetWidthChars: 28, scrollModeAI: true, startLine: 0)
+        }
+        
+        addLog("🎙️ [眼镜麦克风] 正在多通道激活麦克风采音 (左耳 6401/5401 + 右耳 5401)...")
+        var seq = self.teleprompterSeq
+        
+        // A. 官方标准 Cmd=18 (APP_REQUEST_AUDIO_CTR_PACKET) 报文
+        let pkt18 = G2ProtocolEncoder.buildAudioControlPacket(enable: true, seq: &seq, cmd: 18)
+        self.teleprompterSeq = seq
+        
+        // 写入左耳 6401
+        if let char = audioTxChar, let p = char.service?.peripheral ?? audioPeripheral {
+            let writeType = getWriteType(for: char)
+            p.writeValue(pkt18, for: char, type: writeType)
+            addLog("⬆️ [TX -> 左耳 6401] AudioCtrCmd18(Enable=1)")
+        }
+        // 写入左耳 5401 (若存在)
+        if let char = audioContentTxChar, let p = char.service?.peripheral ?? audioPeripheral {
+            let writeType = getWriteType(for: char)
+            p.writeValue(pkt18, for: char, type: writeType)
+            addLog("⬆️ [TX -> 左耳 5401] AudioCtrCmd18(Enable=1)")
+        }
+        // 写入右耳 5401
+        if let char = contentTxChar, let p = char.service?.peripheral ?? targetPeripheral {
+            let writeType = getWriteType(for: char)
+            p.writeValue(pkt18, for: char, type: writeType)
+            addLog("⬆️ [TX -> 右耳 5401] AudioCtrCmd18(Enable=1)")
+        }
+        
+        // B. 辅助透传指令 [0x0E, 0x01]
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self = self, self.isConnected else { return }
+            let rawCmd = G2ProtocolEncoder.buildRawMicControlPacket(enable: true)
+            if let char = self.audioTxChar, let p = char.service?.peripheral ?? self.audioPeripheral {
+                let writeType = self.getWriteType(for: char)
+                p.writeValue(rawCmd, for: char, type: writeType)
+                self.addLog("⬆️ [TX -> 左耳 6401] RawMicCmd[0x0E, 0x01]")
+            }
+            if let char = self.audioContentTxChar, let p = char.service?.peripheral ?? self.audioPeripheral {
+                let writeType = self.getWriteType(for: char)
+                p.writeValue(rawCmd, for: char, type: writeType)
+                self.addLog("⬆️ [TX -> 左耳 5401] RawMicCmd[0x0E, 0x01]")
+            }
+            if let char = self.contentTxChar, let p = char.service?.peripheral ?? self.targetPeripheral {
+                let writeType = self.getWriteType(for: char)
+                p.writeValue(rawCmd, for: char, type: writeType)
+                self.addLog("⬆️ [TX -> 右耳 5401] RawMicCmd[0x0E, 0x01]")
+            }
+        }
+        
+        // C. 兼容性备选：80ms 后发送 Cmd=15
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) { [weak self] in
+            guard let self = self, self.isConnected else { return }
+            var s = self.teleprompterSeq
+            let pkt15 = G2ProtocolEncoder.buildAudioControlPacket(enable: true, seq: &s, cmd: 15)
+            self.teleprompterSeq = s
+            if let char = self.audioTxChar, let p = char.service?.peripheral ?? self.audioPeripheral {
+                let writeType = self.getWriteType(for: char)
+                p.writeValue(pkt15, for: char, type: writeType)
+            }
+            if let char = self.contentTxChar, let p = char.service?.peripheral ?? self.targetPeripheral {
+                let writeType = self.getWriteType(for: char)
+                p.writeValue(pkt15, for: char, type: writeType)
+            }
+        }
+        
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.isGlassesMicActive = true
+            self.startPPSMonitor()
+        }
+    }
+    
+    /// 关闭眼镜镜腿麦克风采音流 (保护眼镜电池)
+    func stopGlassesMicrophone() {
+        guard isConnected else { return }
+        
+        addLog("🎙️ [眼镜麦克风] 正在多通道下发 AudioCtrCmd 关闭麦克风采音 (省电保护)...")
+        var seq = self.teleprompterSeq
+        let pkt18 = G2ProtocolEncoder.buildAudioControlPacket(enable: false, seq: &seq, cmd: 18)
+        self.teleprompterSeq = seq
+        
+        if let char = audioTxChar, let p = char.service?.peripheral ?? audioPeripheral {
+            let writeType = getWriteType(for: char)
+            p.writeValue(pkt18, for: char, type: writeType)
+        }
+        if let char = audioContentTxChar, let p = char.service?.peripheral ?? audioPeripheral {
+            let writeType = getWriteType(for: char)
+            p.writeValue(pkt18, for: char, type: writeType)
+        }
+        if let char = contentTxChar, let p = char.service?.peripheral ?? targetPeripheral {
+            let writeType = getWriteType(for: char)
+            p.writeValue(pkt18, for: char, type: writeType)
+        }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) { [weak self] in
+            guard let self = self, self.isConnected else { return }
+            let rawCmd = G2ProtocolEncoder.buildRawMicControlPacket(enable: false)
+            if let char = self.audioTxChar, let p = char.service?.peripheral ?? self.audioPeripheral {
+                let writeType = self.getWriteType(for: char)
+                p.writeValue(rawCmd, for: char, type: writeType)
+            }
+            if let char = self.audioContentTxChar, let p = char.service?.peripheral ?? self.audioPeripheral {
+                let writeType = self.getWriteType(for: char)
+                p.writeValue(rawCmd, for: char, type: writeType)
+            }
+            if let char = self.contentTxChar, let p = char.service?.peripheral ?? self.targetPeripheral {
+                let writeType = self.getWriteType(for: char)
+                p.writeValue(rawCmd, for: char, type: writeType)
+            }
+        }
+        
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.isGlassesMicActive = false
+            self.stopPPSMonitor()
+            self.audioPacketPPS = 0
+        }
+    }
+    
+    private func startPPSMonitor() {
+        stopPPSMonitor()
+        ppsCounter = 0
+        ppsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                self.audioPacketPPS = self.ppsCounter
+                self.ppsCounter = 0
+            }
+        }
+    }
+    
+    private func stopPPSMonitor() {
+        ppsTimer?.invalidate()
+        ppsTimer = nil
+        ppsCounter = 0
     }
 }
 

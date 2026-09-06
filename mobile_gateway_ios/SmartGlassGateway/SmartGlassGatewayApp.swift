@@ -2,8 +2,8 @@ import SwiftUI
 
 @main
 struct SmartGlassGatewayApp: App {
-    @StateObject private var bleManager = BLEManager()
-    @StateObject private var speechEngine = SpeechFollowEngine()
+    @StateObject private var bleManager = BLEManager.shared
+    @StateObject private var speechEngine = SpeechFollowEngine.shared
     @StateObject private var webSocketClient = WebSocketClient()
     
     var body: some Scene {

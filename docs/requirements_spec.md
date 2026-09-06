@@ -276,7 +276,12 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    MIC["🎤 iPhone 麦克风"] --> ASR["iOS Speech\n(On-device ASR)"]
+    subgraph Audio_Sources ["双路音频输入源"]
+        MIC_PHONE["📱 手机麦克风 / 领夹麦\n(48kHz 原生立体声)"]
+        MIC_GLASSES["👓 G2 镜腿近场麦克风\n(BLE 6402 / LC3 解码 16kHz)"]
+    end
+    MIC_PHONE --> ASR["iOS Speech\n(On-device ASR)"]
+    MIC_GLASSES --> ASR
     ASR --> |"实时转录文本"| MATCH["模糊滑动窗口\n匹配引擎"]
     SCRIPT["当前 Slide\nscript_text"] --> MATCH
     MATCH --> |"匹配位置 (行号)"| SCROLL["ScrollSync 指令\n生成器"]
@@ -287,7 +292,11 @@ flowchart LR
 
 ### 7.2 核心组件设计
 
-#### 7.2.1 ASR 引擎 (SpeechRecognitionEngine)
+#### 7.2.1 ASR 引擎与双路音频输入适配器 (AudioSourceAdapter)
+- **输入源双轨制**：
+  - **模式 A（手机麦克风）**：利用 iPhone 底层三麦克风波束成形阵列采音，适合手机放在讲台上方或胸前口袋场景；
+  - **模式 B（G2 眼镜麦克风）**：通过 BLE `6402` 特征值接收 205B 的 LC3 音频包，经 `liblc3` 解码为 16kHz S16LE PCM 灌入 ASR。适合教师离开讲台在教室内漫游巡视、与学生近距离互动的场景；
+  - **无感热切换**：网关 UI 支持一键切换语音输入源，底层重置 `SFSpeechAudioBufferRecognitionRequest` 并平滑续期，不中断提词会话。
 - **框架**：iOS `Speech.framework`，使用 `SFSpeechAudioBufferRecognitionRequest` 流式识别
 - **模式**：On-device 推理（`requiresOnDeviceRecognition = true`），零网络延迟
 - **语言**：`zh-CN` (普通话)，支持运行时切换

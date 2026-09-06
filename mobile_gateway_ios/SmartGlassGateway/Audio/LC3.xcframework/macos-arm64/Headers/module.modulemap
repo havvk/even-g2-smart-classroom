@@ -1,0 +1,4 @@
+module LC3 [system] {
+    header "lc3.h"
+    export *
+}

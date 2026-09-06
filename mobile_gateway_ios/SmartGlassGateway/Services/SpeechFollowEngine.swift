@@ -24,11 +24,30 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
     // MARK: - Published 状态
     @Published var isListening: Bool = false
     @Published var partialTranscript: String = ""
+    @Published var lastRecognizedText: String = ""
     @Published var activeLineIndex: Int = 0
     @Published var isDigressed: Bool = false
+    static let preferredAudioSourceKey = "smartglass_preferred_audio_source"
+    
     @Published var isManualOverrideActive: Bool = false
     @Published var confidenceScore: Float = 0.0
     @Published var authorizationStatus: SFSpeechRecognizerAuthorizationStatus = .notDetermined
+    @Published var currentAudioSource: AudioSourceType = {
+        if let saved = UserDefaults.standard.string(forKey: SpeechFollowEngine.preferredAudioSourceKey),
+           let source = AudioSourceType(rawValue: saved) {
+            return source
+        }
+        return .phoneMic
+    }() {
+        didSet {
+            UserDefaults.standard.set(currentAudioSource.rawValue, forKey: SpeechFollowEngine.preferredAudioSourceKey)
+            if oldValue != currentAudioSource && isListening {
+                cleanRestartPipeline(reason: "音频输入源切换至 \(currentAudioSource.rawValue)")
+            }
+        }
+    }
+    
+    private var audioFrameCounter: Int = 0
     
     // MARK: - 回调通知
     var onVoiceKeywordTriggered: ((String) -> Void)?
@@ -38,7 +57,11 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-CN"))
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private let audioEngine = AVAudioEngine()
+    
+    // MARK: - 音频输入源 (双路架构: 手机 48kHz / 眼镜 16kHz LC3)
+    private var activeAudioSource: AudioInputSourceProtocol?
+    private let phoneAudioSource = PhoneBuiltinAudioSource()
+    private lazy var glassesAudioSource = GlassesBLEAudioSource()
     
     // MARK: - 内部控制状态
     private var isRestarting: Bool = false
@@ -136,10 +159,17 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
         startAudioPipeline(reason: "用户手动开启监听")
     }
     
-    // MARK: - 3. 启动高保真原生音频流水线 (48kHz 高清无压缩，绝不使用 HFP 电话音质)
+    // MARK: - 3. 音频输入源热切换 (手机麦克风 vs 眼镜麦克风)
+    func switchAudioSource(to newSource: AudioSourceType) {
+        guard currentAudioSource != newSource else { return }
+        NSLog("🔄 [SpeechEngine] 用户设置偏好音频源: %@ -> %@", currentAudioSource.rawValue, newSource.rawValue)
+        self.currentAudioSource = newSource
+    }
+    
+    // MARK: - 4. 启动音频流水线 (双路自适应: 手机 48kHz / 眼镜 16kHz LC3)
     private func startAudioPipeline(reason: String) {
         guard isListening else { return }
-        NSLog("🎙️ [SpeechEngine] 正在启动 48kHz 高保真音频流水线 (原因: %@)...", reason)
+        NSLog("🎙️ [SpeechEngine] 正在启动音频流水线 (源: %@, 原因: %@)...", currentAudioSource.rawValue, reason)
         
         if let task = recognitionTask {
             recognitionTask = nil
@@ -148,41 +178,59 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
         recognitionRequest?.endAudio()
         recognitionRequest = nil
         
-        if audioEngine.isRunning {
-            audioEngine.stop()
-        }
-        audioEngine.inputNode.removeTap(onBus: 0)
+        activeAudioSource?.stop()
+        activeAudioSource = nil
         
         do {
-            let audioSession = AVAudioSession.sharedInstance()
-            // 🛡️ 核心保障：仅使用 .duckOthers，严禁添加 .allowBluetoothHFP！
-            try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
-            try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
-            
             let request = SFSpeechAudioBufferRecognitionRequest()
-            // 🛡️ 核心保障：取消 requiresOnDeviceRecognition 限制，恢复苹果满血神经语言模型
+            // 🛡️ 核心保障：使用苹果全能力神经识别引擎
             request.shouldReportPartialResults = true
             self.recognitionRequest = request
             
-            let inputNode = audioEngine.inputNode
-            let recordingFormat = inputNode.outputFormat(forBus: 0)
+            let source: AudioInputSourceProtocol
+            switch currentAudioSource {
+            case .phoneMic:
+                source = phoneAudioSource
+            case .glassesMic:
+                source = glassesAudioSource
+            }
+            self.activeAudioSource = source
             
-            inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
-                self?.recognitionRequest?.append(buffer)
+            source.onAudioBufferCaptured = { [weak self] buffer in
+                guard let self = self else { return }
+                self.audioFrameCounter += 1
+                if self.audioFrameCounter % 20 == 1 {
+                    NSLog("🎙️ [SpeechEngine] ASR 接收音频流正常 (已流入 %ld 帧 PCM, 格式: %@)", self.audioFrameCounter, buffer.format.description)
+                }
+                self.recognitionRequest?.append(buffer)
+            }
+            source.onError = { [weak self] error in
+                NSLog("❌ [SpeechEngine] 音频源异常: %@", error.localizedDescription)
+                if self?.isListening == true {
+                    self?.cleanRestartPipeline(reason: "音频源异常自愈")
+                }
             }
             
-            audioEngine.prepare()
-            try audioEngine.start()
-            
+            try source.start()
             startRecognitionTask()
-            NSLog("✅ [SpeechEngine] 48kHz 高清音频流已就绪！")
+            NSLog("✅ [SpeechEngine] 音频流水线已就绪 (源: %@)！", currentAudioSource.rawValue)
         } catch {
             NSLog("❌ [SpeechEngine] 音频流水线启动失败: %@", error.localizedDescription)
+            
+            // 🛡️ 容错保护：若眼镜麦克风启动失败（如未连蓝牙），自动平滑降级回手机麦克风
+            if currentAudioSource == .glassesMic {
+                NSLog("⚠️ [SpeechEngine] 眼镜麦克风不可用，自动降级回 iPhone 手机麦克风")
+                DispatchQueue.main.async {
+                    self.currentAudioSource = .phoneMic
+                }
+                cleanRestartPipeline(reason: "眼镜麦克风不可用自动降级")
+                return
+            }
             self.isListening = false
         }
     }
     
-    // MARK: - 4. 内部启动识别任务
+    // MARK: - 5. 内部启动识别任务
     private func startRecognitionTask() {
         guard let request = recognitionRequest else { return }
         
@@ -191,8 +239,10 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
             
             if let result = result {
                 let transcript = result.bestTranscription.formattedString
+                NSLog("🗣️ [SpeechEngine] ASR 实时识别文字: '%@'", transcript)
                 DispatchQueue.main.async {
                     self.partialTranscript = transcript
+                    self.lastRecognizedText = transcript
                     if !transcript.isEmpty {
                         self.processTranscriptAlignment(transcript)
                     }
@@ -217,7 +267,7 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
         }
     }
     
-    // MARK: - 5. 规范安全重启流水线 (彻底消除中途热换导致的破损音频帧)
+    // MARK: - 6. 规范安全重启流水线 (彻底消除中途热换导致的破损音频帧)
     private func cleanRestartPipeline(reason: String) {
         guard isListening else { return }
         guard !isRestarting else { return }
@@ -225,20 +275,18 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
         
         NSLog("🔄 [SpeechEngine] 正在规范重启音频流水线 (原因: %@)...", reason)
         
-        // 1. 干净移除音频 tap 并停止 audioEngine
-        if audioEngine.isRunning {
-            audioEngine.stop()
-        }
-        audioEngine.inputNode.removeTap(onBus: 0)
+        // 1. 干净停止当前音频源
+        activeAudioSource?.stop()
+        activeAudioSource = nil
         
-        // 2. 干净结束旧任务
+        // 2. 干净结束旧识别任务
         recognitionTask?.cancel()
         recognitionTask = nil
         recognitionRequest?.endAudio()
         recognitionRequest = nil
         
-        // 3. 延迟 60ms 释放底层硬件后干净重新启动
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
+        // 3. 延迟 80ms 释放底层硬件或 BLE 通道后干净重新启动
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
             guard let self = self else { return }
             self.isRestarting = false
             guard self.isListening else { return }
@@ -246,7 +294,7 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
         }
     }
     
-    // MARK: - 6. 停止监听
+    // MARK: - 7. 停止监听
     func stopListening() {
         self.isListening = false
         self.isRestarting = false
@@ -258,14 +306,39 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
         recognitionRequest?.endAudio()
         recognitionRequest = nil
         
-        if audioEngine.isRunning {
-            audioEngine.stop()
-        }
-        audioEngine.inputNode.removeTap(onBus: 0)
+        activeAudioSource?.stop()
+        activeAudioSource = nil
         
         self.partialTranscript = ""
         self.confidenceScore = 0.0
-        NSLog("⏹️ [SpeechEngine] 语音提词引擎已完全停止")
+        NSLog("⏹️ [SpeechEngine] 语音提词引擎已完全停止 (已保留最后识别结果: '%@')", lastRecognizedText)
+    }
+    
+    // MARK: - 麦克风试音与实时识别控制
+    func clearRecognizedText() {
+        DispatchQueue.main.async {
+            self.partialTranscript = ""
+            self.lastRecognizedText = ""
+        }
+    }
+    
+    /// 启动麦克风测试 (试音 + 实时 ASR 识别)
+    func startMicTesting(source: AudioSourceType = .glassesMic) {
+        NSLog("🎙️ [SpeechEngine] 用户发起麦克风试音测试 (源: %@)", source.rawValue)
+        self.clearRecognizedText()
+        self.currentAudioSource = source
+        if !self.isListening {
+            self.startListening()
+        } else {
+            self.cleanRestartPipeline(reason: "启动试音测试并强制指定音频源")
+        }
+    }
+    
+    /// 停止麦克风测试
+    func stopMicTesting() {
+        NSLog("⏹️ [SpeechEngine] 用户停止麦克风试音测试")
+        self.stopListening()
+        BLEManager.shared.stopGlassesMicrophone()
     }
     
     // MARK: - 7. 人在回路 (HOTL) 物理手势优先让位

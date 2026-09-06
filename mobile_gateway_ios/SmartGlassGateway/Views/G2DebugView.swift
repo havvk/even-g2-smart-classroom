@@ -331,6 +331,129 @@ AI 智慧课堂正在实时联动中
                     .cornerRadius(12)
                     .padding(.horizontal)
                     
+                    // 2.5 Even G2 麦克风与 6402 音频流遥测
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Image(systemName: "waveform.circle.fill")
+                                .font(.title3)
+                                .foregroundColor(.teal)
+                            Text("G2 麦克风与 6402 音频流遥测")
+                                .font(.headline)
+                            Spacer()
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(bleManager.isGlassesMicActive ? Color.green : Color.gray)
+                                    .frame(width: 8, height: 8)
+                                Text(bleManager.isGlassesMicActive ? "采集激活" : "已关闭")
+                                    .font(.subheadline)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(bleManager.isGlassesMicActive ? .green : .secondary)
+                            }
+                        }
+                        
+                        Text("通道：Service 0x6450 / 独立写 6401 (Cmd 18/15) / Notify 6402 (205B LC3 音频包，5 帧 10ms，16kHz 单声道)。")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        // 独立物理通道绑定状态胶囊
+                        HStack(spacing: 8) {
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(bleManager.isAudioTxReady ? Color.green : Color.orange)
+                                    .frame(width: 6, height: 6)
+                                Text("6401 写通道: \(bleManager.isAudioTxReady ? "就绪" : "未绑定")")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(bleManager.isAudioTxReady ? .green : .orange)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color(UIColor.tertiarySystemFill))
+                            .cornerRadius(6)
+                            
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(bleManager.isAudioNotifyReady ? Color.green : Color.orange)
+                                    .frame(width: 6, height: 6)
+                                Text("6402 Notify: \(bleManager.isAudioNotifyReady ? "已订阅" : "待激活")")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(bleManager.isAudioNotifyReady ? .green : .orange)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color(UIColor.tertiarySystemFill))
+                            .cornerRadius(6)
+                            
+                            Spacer()
+                        }
+                        
+                        HStack(spacing: 12) {
+                            Button(action: {
+                                bleManager.startGlassesMicrophone()
+                            }) {
+                                Label("激活眼镜麦克风", systemImage: "mic.fill")
+                                    .font(.caption)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                                    .background(Color.teal.opacity(0.2))
+                                    .foregroundColor(.teal)
+                                    .cornerRadius(8)
+                            }
+                            
+                            Button(action: {
+                                bleManager.stopGlassesMicrophone()
+                            }) {
+                                Label("关闭麦克风", systemImage: "mic.slash.fill")
+                                    .font(.caption)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                                    .background(Color.gray.opacity(0.2))
+                                    .foregroundColor(.gray)
+                                    .cornerRadius(8)
+                            }
+                        }
+                        
+                        HStack(spacing: 20) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("收包速率 (PPS)")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text("\(bleManager.audioPacketPPS) pps")
+                                    .font(.subheadline)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(bleManager.audioPacketPPS > 0 ? .green : .primary)
+                            }
+                            
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("累计包数")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text("\(bleManager.totalAudioPacketsReceived)")
+                                    .font(.subheadline)
+                                    .fontWeight(.bold)
+                            }
+                            
+                            Spacer()
+                        }
+                        
+                        if !bleManager.lastAudioPacketHex.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("最新 6402 音频包 (前 16 字节 ... 末尾 Seq 序号):")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text(bleManager.lastAudioPacketHex)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .padding(6)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color(UIColor.tertiarySystemFill))
+                                    .cornerRadius(6)
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(Color(UIColor.secondarySystemBackground))
+                    .cornerRadius(12)
+                    .padding(.horizontal)
+                    
                     // 3. G2 眼镜返回消息调试卡片 (Rx Data Feed)
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {

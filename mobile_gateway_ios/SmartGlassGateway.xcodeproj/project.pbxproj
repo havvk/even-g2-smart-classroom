@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A10000212C50000100000001 /* Audio/G2LC3AudioDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000212C50000100000001 /* Audio/G2LC3AudioDecoder.swift */; };
+		A10000222C50000100000001 /* Audio/AudioInputSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000222C50000100000001 /* Audio/AudioInputSource.swift */; };
+		A10000232C50000100000001 /* Audio/LC3.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B10000232C50000100000001 /* Audio/LC3.xcframework */; };
 		A10000012C50000100000001 /* SmartGlassGatewayApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000012C50000100000001 /* SmartGlassGatewayApp.swift */; };
 		A10000022C50000100000001 /* Models/TeleprompterPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000022C50000100000001 /* Models/TeleprompterPayload.swift */; };
 		A10000032C50000100000001 /* Services/HUDLayoutAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000032C50000100000001 /* Services/HUDLayoutAdapter.swift */; };
@@ -64,6 +67,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		B10000212C50000100000001 /* Audio/G2LC3AudioDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Audio/G2LC3AudioDecoder.swift; sourceTree = "<group>"; };
+		B10000222C50000100000001 /* Audio/AudioInputSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Audio/AudioInputSource.swift; sourceTree = "<group>"; };
+		B10000232C50000100000001 /* Audio/LC3.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Audio/LC3.xcframework; sourceTree = "<group>"; };
 		B10000012C50000100000001 /* SmartGlassGatewayApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassGatewayApp.swift; sourceTree = "<group>"; };
 		B10000022C50000100000001 /* Models/TeleprompterPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/TeleprompterPayload.swift; sourceTree = "<group>"; };
 		B10000032C50000100000001 /* Services/HUDLayoutAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/HUDLayoutAdapter.swift; sourceTree = "<group>"; };
@@ -104,6 +110,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000232C50000100000001 /* Audio/LC3.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -124,6 +131,9 @@
 		F10000002C50000100000001 /* SmartGlassGateway */ = {
 			isa = PBXGroup;
 			children = (
+				B10000212C50000100000001 /* Audio/G2LC3AudioDecoder.swift */,
+				B10000222C50000100000001 /* Audio/AudioInputSource.swift */,
+				B10000232C50000100000001 /* Audio/LC3.xcframework */,
 				B10000012C50000100000001 /* SmartGlassGatewayApp.swift */,
 				B10000022C50000100000001 /* Models/TeleprompterPayload.swift */,
 				B10000032C50000100000001 /* Services/HUDLayoutAdapter.swift */,
@@ -269,6 +279,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000212C50000100000001 /* Audio/G2LC3AudioDecoder.swift in Sources */,
+				A10000222C50000100000001 /* Audio/AudioInputSource.swift in Sources */,
 				A10000012C50000100000001 /* SmartGlassGatewayApp.swift in Sources */,
 				A10000022C50000100000001 /* Models/TeleprompterPayload.swift in Sources */,
 				A10000032C50000100000001 /* Services/HUDLayoutAdapter.swift in Sources */,

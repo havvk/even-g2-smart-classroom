@@ -829,4 +829,35 @@ class G2ProtocolEncoder {
         
         return nil
     }
+    
+    // MARK: - Audio Control (Service 0xE0 & Raw 0x0E)
+    
+    /// 构建 EvenHub (APP_REQUEST_AUDIO_CTR_PACKET) 麦克风启停控制帧
+    /// - Parameters:
+    ///   - enable: true 开启麦克风采音, false 关闭麦克风
+    ///   - seq: 蓝牙帧序列号计数器
+    ///   - cmd: 命令字枚举 (默认 18 = 0x12, 备用兼容 15 = 0x0F)
+    ///   - magic: 握手随机数 (0x64 ~ 0xFF)
+    /// - Returns: 带 AA 21 帧头与 CRC16 尾部的 BLE 下发数据帧
+    static func buildAudioControlPacket(enable: Bool, seq: inout UInt8, cmd: UInt8 = 18, magic: UInt8 = 0xA1) -> Data {
+        var payload = Data()
+        // Field 1: Cmd = APP_REQUEST_AUDIO_CTR_PACKET (18 -> 0x12, 或备用 15 -> 0x0F)
+        payload.append(contentsOf: [0x08, cmd])
+        // Field 2: MagicRandom = magic -> 0x10 <magic>
+        payload.append(contentsOf: [0x10, magic])
+        // Field 18: AudioCtrCommand (Tag: (18 << 3) | 2 = 146 -> Varint: 0x92 0x01)
+        payload.append(contentsOf: [0x92, 0x01])
+        // SubMessage Length: 2 bytes
+        payload.append(0x02)
+        // SubField 1: AudoFuncEn (Tag 1: 0x08), value 1 or 0
+        payload.append(contentsOf: [0x08, enable ? 0x01 : 0x00])
+        
+        return buildPacket(seq: &seq, serviceHi: 0xE0, serviceLo: 0x00, payload: payload)
+    }
+    
+    /// 构建透传模式麦克风控制帧 [0x0E, 0x01] (开启) / [0x0E, 0x00] (关闭)
+    static func buildRawMicControlPacket(enable: Bool) -> Data {
+        return Data([0x0E, enable ? 0x01 : 0x00])
+    }
 }
+

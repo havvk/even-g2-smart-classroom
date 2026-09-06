@@ -100,6 +100,39 @@ final class G2ProtocolTests: XCTestCase {
             XCTAssertEqual(rawLine, 3)
         }
     }
+    
+    // MARK: - 18.5 模块 5: 麦克风音频控制帧测试 (EvenHub Cmd=15 / 0x0E)
+    
+    func testAudioControlPacket_TC_AUDIO_001() {
+        var seq: UInt8 = 0x05
+        let enablePkt = G2ProtocolEncoder.buildAudioControlPacket(enable: true, seq: &seq, magic: 0xA1)
+        XCTAssertEqual(seq, 0x06, "自增序列号消耗 1")
+        
+        // 校验 Header (8 字节)
+        XCTAssertEqual(enablePkt[0], 0xAA, "Magic 为 0xAA")
+        XCTAssertEqual(enablePkt[1], 0x21, "Type 为 0x21 (Cmd)")
+        XCTAssertEqual(enablePkt[2], 0x05, "Seq 匹配")
+        XCTAssertEqual(enablePkt[4], 0x01, "pktTot 为 1")
+        XCTAssertEqual(enablePkt[5], 0x01, "pktSer 为 1")
+        XCTAssertEqual(enablePkt[6], 0xE0, "ServiceHi 为 0xE0 (EvenHub)")
+        XCTAssertEqual(enablePkt[7], 0x00, "ServiceLo 为 0x00")
+        
+        // 校验 Payload: 08 0F 10 A1 92 01 02 08 01
+        let payload = enablePkt.subdata(in: 8..<(enablePkt.count - 2))
+        XCTAssertEqual([UInt8](payload), [0x08, 0x0F, 0x10, 0xA1, 0x92, 0x01, 0x02, 0x08, 0x01])
+        
+        // 校验 CRC
+        let crcBytes = Array(enablePkt.suffix(2))
+        let computedCRC = G2ProtocolEncoder.crc16CCITT(payload)
+        XCTAssertEqual(crcBytes[0], UInt8(computedCRC & 0xFF))
+        XCTAssertEqual(crcBytes[1], UInt8((computedCRC >> 8) & 0xFF))
+        
+        // 校验透传指令
+        let rawEnable = G2ProtocolEncoder.buildRawMicControlPacket(enable: true)
+        XCTAssertEqual([UInt8](rawEnable), [0x0E, 0x01])
+        let rawDisable = G2ProtocolEncoder.buildRawMicControlPacket(enable: false)
+        XCTAssertEqual([UInt8](rawDisable), [0x0E, 0x00])
+    }
 }
 
 // Data Hex 拓展工具 helper

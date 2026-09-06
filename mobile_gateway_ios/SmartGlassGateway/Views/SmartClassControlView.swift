@@ -750,6 +750,21 @@ struct SmartClassControlView: View {
                 }
                 .buttonStyle(PlainButtonStyle())
                 
+                // 🌟 双路音频输入源切换胶囊 (二选一即触即切)
+                AudioSourceToggleCapsule(speechEngine: speechEngine, isHUDStyle: true)
+                
+                // 若正在使用眼镜麦克风且正在收音，呈现 PPS 脉冲指示
+                if speechEngine.currentAudioSource == .glassesMic && speechEngine.isListening {
+                    HStack(spacing: 3) {
+                        Circle()
+                            .fill(bleManager.audioPacketPPS > 0 ? Color.green : Color.orange)
+                            .frame(width: 5, height: 5)
+                        Text("\(bleManager.audioPacketPPS) pps")
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
                 if speechEngine.isListening {
                     if speechEngine.isManualOverrideActive {
                         HStack(spacing: 4) {

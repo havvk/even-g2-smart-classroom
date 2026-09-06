@@ -28,7 +28,8 @@ Base UUID: 00002760-08c2-11e1-9073-0e8ac72e{xxxx}
 | **控制与内容写通道**| `00002760-08c2-11e1-9073-0e8ac72e5401` | `0x0842` | Phone $\rightarrow$ G2 (Write) | Write Without Response, MTU 512, 主 Session 鉴权、仪表盘与通用命令 |
 | **眼镜 Notify 监听通道**| `00002760-08c2-11e1-9073-0e8ac72e5402` | `0x0844` | G2 $\rightarrow$ Phone (Notify)| Notify 监听应答 (需向 `0x2902` CCCD 写入 `0x0100` 激活) |
 | **Service 声明** | `00002760-08c2-11e1-9073-0e8ac72e5450` | - | - | 服务广播描述符 |
-| **GPU 渲染通道** | `00002760-08c2-11e1-9073-0e8ac72e6402` | `0x0864` | Phone $\rightarrow$ G2 (Write) | Write Without Response, 204字节 GPU VSYNC 渲染脉冲/RAW 画布帧 |
+| **渲染写/流控写通道** | `00002760-08c2-11e1-9073-0e8ac72e6401` | `0x0862` | Phone $\rightarrow$ G2 (Write) | Write Without Response, 渲染控制脉冲与音频流控 |
+| **渲染通知/麦克风音频流** | `00002760-08c2-11e1-9073-0e8ac72e6402` | `0x0864` | G2 $\rightarrow$ Phone (Notify)| Notify 持续流, 205字节原始 LC3 麦克风音频包 (16kHz mono) 与渲染通知 |
 | **提词器专用写通道**|`00002760-08c2-11e1-9073-0e8ac72e7401` | - | Phone $\rightarrow$ G2 (Write) | Write Without Response, 提词器硬件前台与视口控制通道 |
 
 ### 2.3 蓝牙物理层连接参数 (Connection Parameters)
@@ -1381,4 +1382,100 @@ Payload: 08 FF 01 10 39 6A 04 08 00 10 04
 > ⚠️ **当前我方代码采用 14 页补满策略 (`G2ProtocolEncoder.formatTextToPages(targetPageCount: 14)`) 作为兼容性变通方案**——通过填满固件的 14 页 Buffer 隐式标记内容边界。此策略在物理真机测试中确认可正常工作 (§16.1)，但额外传输了 12 页无效空白数据，增加了约 1.5 秒的 BLE 传输延迟。
 
 > 💡 **优化路径**：若要实现官方级别的按需下发（减少 BLE 传输量、降低推屏延迟），需要在代码中补充上述 3 层机制——动态 Init 参数 + type=255 Complete 帧 + 双 Commit 序列。
+
+---
+
+## 26. Even G2 麦克风音频采集与 LC3 编码流通信规范 (2026 全新逆向实证) 🆕
+
+### 26.1 左右镜腿 (L/R Arm) 物理双外设拓扑与麦克风分布
+
+Even Realities G2 智能眼镜在蓝牙物理层由**左右两个独立的 BLE 射频外设**组成，二者之间**不存在内部有线通信总线**：
+- **广播标识**：分别以 `Even G2_XX_L_YYYYYY`（左镜腿）与 `Even G2_XX_R_YYYYYY`（右镜腿）独立广播。
+- **右镜腿 (Right Arm)**：主导光学引擎 MicroLED 视口显示、前台 UI 容器渲染与 Touchpad 触控板滑动通知。
+- **左镜腿 (Left Arm)**：**麦克风阵列的主要硬件物理通道**。在音频功能激活后，由左侧镜腿专职向手机端推送高频音频流。
+
+---
+
+### 26.2 音频服务 (Service 6450) 与 GATT 特征通道
+
+音频采集不走 EvenHub 基础信令通道，而是走独立的流传输服务：
+
+| 通道名称 | 物理 Characteristic UUID | 属性 | 数据流向 | 协议用途 |
+| :--- | :--- | :--- | :--- | :--- |
+| **渲染与流控写** | `00002760-08c2-11e1-9073-0e8ac72e6401` | Write Without Response | 手机 $\rightarrow$ 眼镜 | 显存控制脉冲与音频流控 |
+| **音频流接收通道** | `00002760-08c2-11e1-9073-0e8ac72e6402` | **Notify** | 眼镜 $\rightarrow$ 手机 | **持续推送原始麦克风音频压缩包 (205B/包)** |
+
+> ⚠️ **与信令通道的关键差异**：
+> `6402` 特征值推送的音频流数据为**纯二进制流式数据（Unframed Payload）**，**不携带** `0xAA 0x21` 的 Envelope 帧头与 CRC 校验尾，必须绕过常规的 `processReceivedG2Data` 解析器，直接送入专门的音频解包队列。
+
+---
+
+### 26.3 麦克风启停控制协议 (Audio Control Command)
+
+固件对麦克风硬件设有严格的低功耗保护机制：
+
+1. **激活前置条件**：
+   - 必须先在屏幕上挂载至少一个活动容器或进入提词模式（即存在有效会话），否则固件静默丢弃音频开启指令。
+2. **开启指令 (AudioCtrCmd)**：
+   - 通道：主会话写通道 `5401`
+   - 服务 ID：`sid = 0xe0` (EvenHub Service)
+   - 命令枚举：`Cmd = 18` (`APP_REQUEST_AUDIO_CTR_PACKET`)
+   - Protobuf 结构：
+     ```protobuf
+     message AudioCtrCommand {
+       uint32 AudoFuncEn = 1; // 1 = 启动拾音, 0 = 停止拾音
+     }
+     ```
+   - 固件响应：眼镜在 `5402` 上返回 `Cmd = 19` (`AudioCtrRes`)，其中 `AudioStat = 1`，标志麦克风硬件上电就绪。
+   - 兼容透传指令：在基础固件模式下，向 `5401` 发送 `[0x0E, 0x01]` 亦可使能麦克风。
+3. **关闭指令**：
+   - 下发 `AudioCtrCommand { AudoFuncEn: 0 }` 或 `[0x0E, 0x00]`。
+   - 必须在停止提词或暂停授课时显式调用，防止镜腿麦克风持续工作快速耗尽眼镜电池。
+
+---
+
+### 26.4 205 字节音频帧结构与 LC3 编码参数
+
+眼镜端采用 **Bluetooth LE Audio 标准编解码器 LC3 (Low Complexity Communications Codec)**，参数如下：
+- **采样率**：16,000 Hz (16 kHz)
+- **声道**：单声道 Mono
+- **帧时长**：10 ms (对应 160 个采样点)
+- **单帧压缩字节**：40 字节 (对应 32 kbps 音频质量)
+- **传输速率**：约 20 包/秒 (约 32.8 kbps 蓝牙物理带宽，极度省电且防丢包)
+
+#### 205 字节 BLE Notification 报文二进制划分：
+```text
+┌─────────────────────────────────────────────────────────┬─────────────────────┐
+│             5 × 40-byte LC3 音频压缩帧 (共 200 字节)      │ 5-byte Trailer 元数据│
+│  [Frame 0]   [Frame 1]   [Frame 2]   [Frame 3]   [Frame 4]  │     ...   [SeqNo]   │
+└─────────────────────────────────────────────────────────┴─────────────────────┘
+  ◄── 0..39 ──► ◄── 40..79 ─► ◄── 80..119 ► ◄─ 120..159 ─► ◄─ 160..199 ─►
+  ◄─────────────────────── 205 字节 (单包 BLE Notification) ──────────────────────►
+```
+- **Byte 0..199**：包含 5 个连续的 10ms LC3 音频帧（共 $5 \times 10\text{ms} = 50\text{ms}$ 语音时长）。
+- **Byte 200..203**：固件内部元数据。
+- **Byte 204**：单调递增包序号（`0x00 ~ 0xFF` 循环），接收端用于校验蓝牙传输丢包并执行 PLC (Packet Loss Concealment) 丢包隐藏补偿。
+
+---
+
+### 26.5 解码流水线与端侧 ASR 桥接方案
+
+```text
+[6402 接收 (205B)] 
+       │
+       ▼ (提取 5 个 40B 帧)
+[Google liblc3 解码器 (lc3_decode)] 
+       │
+       ▼ (输出 5 × 160 = 800 个 S16LE PCM 采样点)
+[组装 AVAudioPCMBuffer (16kHz 16-bit Mono)] 
+       │
+       ▼
+[SFSpeechAudioBufferRecognitionRequest.append(buffer)] 
+       │
+       ▼
+[Apple 神经引擎本地实时转录]
+```
+1. **解码库选型**：直接集成 Google 开源纯 C 参考实现 `liblc3`（零外部依赖，极适合 iOS 原生静态编译）。
+2. **缓冲注入**：解码出的 800 个 `Int16` 采样点封装为 `AVAudioPCMBuffer`，直接注入原生 `recognitionRequest`，实现与手机麦克风 100% 接口对齐。
+
 

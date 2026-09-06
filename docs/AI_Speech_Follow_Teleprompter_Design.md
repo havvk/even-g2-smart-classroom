@@ -22,14 +22,21 @@
 
 ## 2. 总体系统架构（三层协同流水线）
 
-整个系统基于端侧实时流式计算设计，划分为 **音频捕获与端侧 ASR 层**、**逐字稿智能对齐引擎层** 和 **MicroLED 硬件视口阻尼驱动层**：
+整个系统基于端侧实时流式计算设计，划分为 **双路音频捕获与端侧 ASR 层**、**逐字稿智能对齐引擎层** 和 **MicroLED 硬件视口阻尼驱动层**：
 
 ```mermaid
 graph TD
-    A["🎤 教师语音输入 (iPhone 领夹麦 / 手机麦)"] --> B["1. 端侧低延迟流式 ASR 层 (Speech.framework)"]
+    subgraph Audio_Source_Switch ["双路音频输入源切换 (Audio Input Source)"]
+        A1["📱 模式 A: 手机内置麦克风 / 领夹麦\n(48kHz 原生立体声 / 波束成形)"]
+        A2["👓 模式 B: Even G2 镜腿近场麦克风\n(BLE 6402 通道 / 205B LC3 流)"]
+        A2 -->|Google liblc3 纯 C 解码| A3["16kHz 16-bit PCM 流"]
+    end
+
+    A1 --> B["1. 端侧低延迟流式 ASR 层 (Speech.framework)"]
+    A3 --> B
     
     subgraph ASR_Layer ["音频捕获与会话保活"]
-        B --> B1["AVAudioEngine 16kHz PCM 流捕获"]
+        B --> B1["AVAudioPCMBuffer 实时灌入"]
         B1 --> B2["双缓冲无感续期状态机 (突破 1 分钟超时限制)"]
         B2 --> B3["实时增量转录流 (Partial Transcript Stream)"]
     end
@@ -59,18 +66,37 @@ graph TD
 
 ## 3. 详细子系统设计
 
-### 3.1 端侧流式 ASR 与会话无感续期机制
+### 3.1 双路语音输入源架构（Dual Audio Source Architecture）与端侧流式 ASR
 
-1. **输入源优先级**：
-   - 优先选择外接麦克风（无线 2.4G 领夹麦 / 蓝牙耳麦，极高信噪比）；
-   - 次优选择 iPhone 机身底部降噪立体声麦克风阵列；
-   - 采用 `AVAudioSession.Category.record`，设置模式为 `.measurement`，开启 `.duckOthers` 确保音频流独占。
-2. **端侧神经推理引擎选型**：
+为了兼顾“**手机在讲台身边（超高信噪比）**”与“**教师脱离讲台、在教室内走动巡视（近场高保真）**”两大实际教学场景，系统抽象了统一的 `AudioInputSourceProtocol` 音频输入适配层：
+
+#### 3.1.1 双路输入源技术特征与场景矩阵
+
+| 输入源模式 | 物理链路 | 采样率与编码 | 拾音距离与信噪比 | 最佳适用场景 |
+| :--- | :--- | :--- | :--- | :--- |
+| **📱 模式 A：手机/外置麦克风 (`PhoneBuiltinSource`)** | 原生 `AVAudioEngine.inputNode` | 48kHz 原生立体声 / 硬件三麦克风波束成形 | 适合 0.5m ~ 2m 范围，环境降噪优异 | 手机固定在讲台上方、夹在胸前口袋或手持讲课 |
+| **👓 模式 B：G2 眼镜麦克风 (`GlassesBLESource`)** | 蓝牙 `6450/6402` Notify 通道 | 16kHz Mono LC3 编码 (205B/包) $\rightarrow$ 解码为 S16LE PCM | 紧贴脸颊面部，**无感近场拾音** | 教师离开讲台在教室内巡视互动、答疑交流 |
+
+#### 3.1.2 模式 B：Even G2 蓝牙音频流接收与解码流水线
+1. **控制握手**：
+   - 必须在提词会话激活后下发 EvenHub `Cmd = 18` (`AudioCtrCmd { AudoFuncEn: 1 }`)；
+   - 收到眼镜 `5402` 回复 `Cmd = 19` 确认后开启 `6402` Notify 接收。
+2. **LC3 帧解码与缓冲组装**：
+   - 接收 `6402` 每秒推送约 20 个 205 字节二进制报文；
+   - 提取前 200 字节的 5 个 40 字节 LC3 帧，调用 Google `liblc3` 解码器；
+   - 还原为 800 个 16kHz 16-bit 单声道采样点（50ms 时长音频）；
+   - 组装进 `AVAudioPCMBuffer(pcmFormat: 16kHz Mono, frameCapacity: 800)`。
+3. **动态热切换机制 (Seamless Audio Source Switching)**：
+   - 用户在网关界面或控制台随时切换音频源；
+   - 切换时仅需优雅调用 `recognitionRequest.endAudio()`，重置 `AudioInputSource` 驱动，无缝重连新任务，无需重启提词器或重新推屏。
+
+#### 3.1.3 端侧神经推理引擎选型与会话保活
+1. **本地神经推理**：
    - 基于 Apple iOS 原生 `SFSpeechRecognizer(locale: Locale(identifier: "zh-CN"))`；
    - 强制启用 `requiresOnDeviceRecognition = true`，所有转录在苹果神经引擎（ANE）本地执行：
      - **极低网络抖动**：转录延迟稳定在 **60ms ~ 120ms**；
      - **零带宽与隐私合规**：授课语音绝不上传公网，无任何 API 消耗费用。
-3. **双缓冲会话无感续期（Seamless Session Rolling）**：
+2. **双缓冲会话无感续期（Seamless Session Rolling）**：
    - **痛点**：Apple `SFSpeechRecognitionTask` 内部为了保护系统资源，单次识别任务会在持续 60 秒无声或超过时间阈值时自动抛出 `isFinal` 或静默挂起。
    - **架构解法**：
      - 维护两个任务通道：`ActiveTask` 与 `StandbyTask`；

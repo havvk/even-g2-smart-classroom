@@ -333,6 +333,10 @@ struct TeleprompterPreviewView: View {
                         }
                     }
                     
+                    if script.scrollMode == .ai {
+                        AudioSourceToggleCapsule(speechEngine: speechEngine, isHUDStyle: true)
+                    }
+                    
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Text("每行字数")

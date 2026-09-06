@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct TeleprompterListView: View {
     @EnvironmentObject var bleManager: BLEManager
     @ObservedObject var storage = ScriptStorage.shared
+    @ObservedObject private var speechEngine = SpeechFollowEngine.shared
     
     @State private var showingNewEditor: Bool = false
     @State private var showingFileImporter: Bool = false
@@ -48,6 +49,9 @@ struct TeleprompterListView: View {
                         .foregroundColor(.secondary)
                     
                     Spacer()
+                    
+                    // 🎙️ 语音输入音源切换胶囊 (二选一即触即切)
+                    AudioSourceToggleCapsule(speechEngine: speechEngine)
                     
                     // 排序维度选择
                     Menu {
