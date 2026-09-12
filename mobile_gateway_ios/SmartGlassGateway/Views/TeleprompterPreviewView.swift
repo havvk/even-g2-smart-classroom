@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 struct TeleprompterLineOffsetKey: PreferenceKey {
     static var defaultValue: [Int: CGFloat] = [:]
@@ -174,20 +175,72 @@ struct TeleprompterPreviewView: View {
                         ForEach(Array(wrappedLines.enumerated()), id: \.offset) { index, lineText in
                             let isInViewport = (index >= bounds.vStart && index <= bounds.vEnd)
                             let isViewportTop = (index == bounds.vStart)
+                            let isCurrentReading = (speechEngine.isListening && index == activeLineIndex)
+                            let isPastRead = (speechEngine.isListening && index < activeLineIndex)
                             
                             HStack(alignment: .center, spacing: 8) {
-                                Text(String(format: "%02d", index + 1))
-                                    .font(.system(.caption2, design: .monospaced))
-                                    .foregroundColor(isInViewport ? Color.purple : Color.gray.opacity(0.3))
-                                    .frame(width: 22, alignment: .trailing)
+                                HStack(spacing: 3) {
+                                    if isCurrentReading {
+                                        Circle()
+                                            .fill(Color.green)
+                                            .frame(width: 6, height: 6)
+                                    }
+                                    Text(String(format: "%02d", index + 1))
+                                        .font(.system(.caption2, design: .monospaced))
+                                        .foregroundColor(isCurrentReading ? Color.green : (isPastRead ? Color.gray.opacity(0.3) : (isInViewport ? Color.purple : Color.gray.opacity(0.3))))
+                                }
+                                .frame(width: 28, alignment: .trailing)
                                 
                                 let dynamicSize = min(15.0, max(10.5, 310.0 / CGFloat(widthChars)))
-                                Text(lineText.isEmpty ? " " : lineText)
-                                    .font(.system(size: isInViewport ? dynamicSize : dynamicSize * 0.95, weight: isInViewport ? .medium : .regular))
-                                    .foregroundColor(isInViewport ? Color.primary : Color.secondary.opacity(0.35))
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.70)
-                                    .allowsTightening(true)
+                                
+                                if isCurrentReading {
+                                    let order = max(0, min(speechEngine.currentWordOrder, lineText.count))
+                                    if order == 0 {
+                                        Text(lineText.isEmpty ? " " : lineText)
+                                            .font(.system(size: dynamicSize, weight: .bold))
+                                            .foregroundColor(Color.green)
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.70)
+                                            .allowsTightening(true)
+                                    } else if order >= lineText.count {
+                                        Text(lineText.isEmpty ? " " : lineText)
+                                            .font(.system(size: dynamicSize, weight: .medium))
+                                            .foregroundColor(Color.gray.opacity(0.45))
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.70)
+                                            .allowsTightening(true)
+                                    } else {
+                                        let spokenIndex = lineText.index(lineText.startIndex, offsetBy: order)
+                                        let spokenPart = String(lineText[..<spokenIndex])
+                                        let remainingPart = String(lineText[spokenIndex...])
+                                        
+                                        (Text(spokenPart)
+                                            .foregroundColor(Color.gray.opacity(0.45))
+                                            .font(.system(size: dynamicSize, weight: .medium))
+                                         +
+                                         Text(remainingPart)
+                                            .foregroundColor(Color.green)
+                                            .font(.system(size: dynamicSize, weight: .bold))
+                                        )
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.70)
+                                        .allowsTightening(true)
+                                    }
+                                } else if isPastRead {
+                                    Text(lineText.isEmpty ? " " : lineText)
+                                        .font(.system(size: dynamicSize * 0.95, weight: .regular))
+                                        .foregroundColor(Color.gray.opacity(0.40))
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.70)
+                                        .allowsTightening(true)
+                                } else {
+                                    Text(lineText.isEmpty ? " " : lineText)
+                                        .font(.system(size: isInViewport ? dynamicSize : dynamicSize * 0.95, weight: isInViewport ? .medium : .regular))
+                                        .foregroundColor(isInViewport ? Color.primary : Color.secondary.opacity(0.35))
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.70)
+                                        .allowsTightening(true)
+                                }
                                 
                                 Spacer()
                             }
@@ -195,7 +248,10 @@ struct TeleprompterPreviewView: View {
                             .padding(.vertical, 4)
                             .background(
                                 Group {
-                                    if isInViewport {
+                                    if isCurrentReading {
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(Color.green.opacity(0.12))
+                                    } else if isInViewport {
                                         RoundedRectangle(cornerRadius: 6)
                                             .fill(isViewportTop ? Color.purple.opacity(0.12) : Color.purple.opacity(0.04))
                                     } else {
@@ -361,6 +417,38 @@ struct TeleprompterPreviewView: View {
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                         }
+                        
+                        // 🌟 每屏行数调节器 (3~10行动态调节，默认 9 行)
+                        HStack {
+                            Text("每屏行数")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text("\(bleManager.linesPerPage) 行 / 屏")
+                                .font(.caption2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.purple)
+                        }
+                        
+                        HStack(spacing: 8) {
+                            Text("3行")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            
+                            Slider(
+                                value: Binding(
+                                    get: { Double(bleManager.linesPerPage) },
+                                    set: { bleManager.linesPerPage = min(9, max(1, Int($0))) }
+                                ),
+                                in: 3...9,
+                                step: 1
+                            )
+                            .accentColor(.purple)
+                            
+                            Text("9行")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
                 .padding(.horizontal, 24)
@@ -460,7 +548,18 @@ struct TeleprompterPreviewView: View {
         }
         bleManager.currentFocusPageLine = 0
         bleManager.resetGlassesRxShield()
-        bleManager.sendTeleprompterText(script.content, targetWidthChars: Int(widthChars), scrollModeAI: false)
+        
+        let isAI = (script.scrollMode == .ai)
+        bleManager.sendTeleprompterText(script.content, targetWidthChars: Int(widthChars), scrollModeAI: isAI, linesPerPage: bleManager.linesPerPage)
+        
+        // 🌟 核心打通：推流后自动装载脚本进入语音跟随引擎并开启监听
+        speechEngine.loadSlideScriptLines(lines: self.wrappedLines, rawScript: script.content)
+        if isAI && bleManager.isConnected {
+            speechEngine.startListening()
+            speechEngine.onSpeechSyncUpdated = { [weak bleManager] line, order in
+                bleManager?.sendAISync(lineIndex: line, wordOrder: order)
+            }
+        }
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
             isPushing = false

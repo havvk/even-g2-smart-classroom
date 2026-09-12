@@ -113,10 +113,6 @@ def format_text_to_pages(text: str, max_line_width: int = 56, lines_per_page: in
             page_chunk.append("")
         pages.append("\n".join(page_chunk))
 
-    while len(pages) < 14:
-        empty_chunk = [""] * lines_per_page
-        pages.append("\n".join(empty_chunk))
-
     return pages
 
 
@@ -150,13 +146,16 @@ class TestG2Protocol(unittest.TestCase):
         self.assertEqual(crc_actual, crc_expected)
 
     def test_teleprompter_init_parameters_TC_CFG_001(self):
+        # 🌟 最新固件实测解密 (tests/最新固件下推送提词、改变提词位置.pklg):
+        # Field 9 (0x48 0x09) 为每屏行数 lines_per_page=9
+        # Field 10 (0x50 0x00) 官方实测值为 0
         display = bytes([
             0x08, 0x00, 0x10, 0x00, 0x18, 0x00,
             0x20, 59,
             0x28, 0xC9, 0x04,
             0x30, 0xB7, 0x04,
             0x38, 0xA9, 0x18,
-            0x40, 0x00, 0x48, 0x01, 0x50, 0x09, 0x58, 0x00
+            0x40, 0x00, 0x48, 0x09, 0x50, 0x00, 0x58, 0x00
         ])
         settings = bytes([0x08, 0x01, 0x12, len(display)]) + display
         payload = bytes([0x08, 0x01, 0x10, 0x14, 0x1A, len(settings)]) + settings
@@ -166,16 +165,17 @@ class TestG2Protocol(unittest.TestCase):
         self.assertIn("203b", hex_data, "display_width 必须设置为 59")
         self.assertIn("30b704", hex_data, "line_height 必须设置为 567")
         self.assertIn("38a918", hex_data, "viewport_height 必须设置为 3113")
-        self.assertIn("5009", hex_data, "render_mode 必须设置为 9")
+        self.assertIn("4809", hex_data, "lines_per_page (Field 9) 必须设置为 9 (激活一屏9行满屏视口)")
+        self.assertIn("5000", hex_data, "Field 10 官方最新固件实测必须设置为 0")
 
-    def test_14_pages_buffer_completion_TC_TXT_003(self):
+    def test_on_demand_pages_without_padding_TC_TXT_003(self):
+        # 🌟 §25 官方按需下发真机验证: 严格按实际内容行数对齐，绝不填充 14 页大量空白
         short_text = "同学们好，今天我们来讨论 G2 眼镜。"
         pages = format_text_to_pages(short_text)
         
-        self.assertGreaterEqual(len(pages), 14, "短文本必须自动扩展补满 14 页缓冲")
-        for i, page in enumerate(pages):
-            lines = page.split("\n")
-            self.assertEqual(len(lines), 10, f"第 {i} 页必须刚好拥有 10 个行位")
+        self.assertEqual(len(pages), 1, "短文本必须按需仅生成 1 页，严禁自动补满 14 页空白缓冲")
+        lines = pages[0].split("\n")
+        self.assertEqual(len(lines), 10, "每页槽位格式对齐 10 行物理槽位")
 
     def test_position_notification_decoding_TC_NOTIFY_002(self):
         # 抓包实测数据: Service 0x0601 Notification for Line 3

@@ -51,15 +51,17 @@ graph TD
         C --> C4["④ 句尾语义锚点自动切页 (Auto-Slide Pivot)"]
     end
 
-    subgraph Viewport_Layer ["3. 硬件视口阻尼驱动层 (Viewport Controller)"]
+    subgraph Viewport_Layer ["3. 硬件视口与字符衰减驱动层 (Viewport & Dimming Controller)"]
         C -->|"权威目标行号 (TargetLine)"| E["视口阻尼平滑滤波器"]
+        C -->|"行内字序偏移 (WordOrder)"| E0["字序单调递增游标 (RunDot Monotonic Tracker)"]
         E --> E1["视口死区计算 (Deadband: 保持黄金阅读区)"]
-        E1 --> E2["BLE 250ms 频率节流保护"]
-        E2 --> F["Even G2 智能眼镜 (0x06-20 Type 165 ScrollSync)"]
+        E0 --> E2["BLE 100~150ms 双轨动态节流门禁"]
+        E1 --> E2
+        E2 --> F["Even G2 智能眼镜 (0x06-20 Type 6 AISync: 视口微步 + 逐字灰阶衰减)"]
         C4 -->|"跨 Slide 切页触发"| G["LectureSessionManager.gotoNextSlide()"]
     end
 
-    H["⌚️ Apple Watch 转腕 / 手机体感甩动"] -.->|"最高优先级瞬时抢占 (HOTL Override)"| E
+    H["⌚️ Apple Watch 转腕 / 手机体感甩动"] -.->|"最高优先级瞬时抢占 (Type 165 ScrollSync)"| E
 ```
 
 ---
@@ -162,22 +164,53 @@ stateDiagram-v2
   ```
   此时教室大屏与智能眼镜同步切至下一张 PPT，下一页首段提词自动推入眼镜，真正实现**“全程不摸任何设备，口述完自动翻页”**。
 
+
 ---
 
-## 4. 硬件视口阻尼平滑算法（MicroLED Viewport Damper）
+### 3.3 字符级游标追踪与逐字灰度衰减（Word-Level Dimming / RunDot）模型 🆕
 
-Even G2 智能眼镜物理 MicroLED 视口高度为 **5.5 行**，中央人体工程学最佳舒适阅读区为 **3~4 行**。高频的跳行会导致教师眼部眩晕。
+除了“按行滚屏”提供宏观视口对齐外，系统进一步引入官方原生的**字符级随读光标追踪算法**，驱动 Even G2 MicroLED 硬件实现“已读文字即时变暗、未读文字全绿高亮”的卡拉OK级阅读辅助：
+
+#### 3.3.1 字符偏移量与原始串投影映射 (Raw Character Projection)
+ASR 转录出的实时文本 $T_{asr}$ 通常不含标点且可能存在音近字；而智能眼镜 MicroLED 渲染器内部依据的是推送讲稿的**原始文本行（Raw Text Line，含空格与原始标点）**。
+1. **LCS 匹配区定位**：在当前活跃行 $L_{curr}$ 的清洗文本 $C_{curr}$ 中，找到与 ASR 尾部探针的最长公共匹配子串，获得其在清洗文本中的右边界下标 $idx_{clean}$；
+2. **原始字符下标逆向投影**：遍历原始字符串 $RawLine$，跳过清洗剥除的标点符号，将 $idx_{clean}$ 精准投影回原始字符串的物理字符下标：
+   $$WordOrder = \text{ProjectIndex}(idx_{clean}, RawLine)$$
+   确保眼镜固件在 `0 ..< WordOrder` 的字形点阵上准确施加 PWM 灰阶衰减。
+
+#### 3.3.2 行内单调递增水位线 (High-Water Mark Monotonicity)
+由于 ASR 实时流在整句结束前可能发生个别字的重识别抖动，为防止光机文字出现“忽明忽暗”的闪烁感：
+- 维护当前行字序水位线 `currentWordOrder`；
+- 在行号未发生变化时，强制约束：
+  $$WordOrder_{new} = \max(WordOrder_{current}, WordOrder_{matched})$$
+- 只有在跨行切换或用户通过 HOTL 手势人工重置时，才将水位线归零重新计数。
+
+#### 3.3.3 行尾饱和自动满阶 (Line-End Saturation)
+当满足下列任一条件时，判定当前行朗读基本完成，字序自动饱和至行总长度：
+- 匹配到的字符数占比超过该行有效字符的 $85\%$；
+- 剩余未读字符数 $\le 2$ 个字；
+此时置 $WordOrder = RawLine.count$，整行文字平稳过渡为灰阶衰减态，引导教师目光自然下移至下一行。
+
+---
+
+## 4. 硬件视口与字级衰减驱动层（MicroLED Viewport & Dimming Controller）
+
+Even G2 智能眼镜物理 MicroLED 视口满屏完整展现 **10 行文本**（与官方逆向工程规范 §10.7 验证三 100% 一致）。高频的跳行会导致眼部眩晕，而过于频繁的 BLE 报文会造成蓝牙通道拥塞。
 
 ### 4.1 视口死区推进模型（Deadband Advance Model）
-- 视口基准行保持为 $V_{top}$；
-- 当语音识别到的当前讲述行 $L_{read}$ 处于视口前半段（$L_{read} - V_{top} \le 1$）时：
-  **视口绝对不发包下移**，维持教师视线平稳；
-- 只有当讲述行推进到当前视口的下半段（$L_{read} - V_{top} \ge 2$）时：
-  驱动视口向下平移 1~2 行，使即将阅读的下一句话始终自然展现在视口中央下方。
+- 开局推流时，眼镜从第 0 页第 0 行顶格满屏完整呈现（Line 0~9）；
+- 当总行数在 10 行以内（单张幻灯片满屏）时，视口保持完全静止，朗读期间严禁下发任何 Type 165 干扰，仅由 Type 4 驱动逐字变暗；
+- 只有当总行数 > 10 的超长文本，且讲述行深入到视口下半段（$L_{read} > V_{top} + 3$）时：
+  驱动视口向下平移，使即将阅读的下一句话始终自然展现在视野中。
 
-### 4.2 BLE 发包节流门禁
-- 限制底层 `0x06-20 ScrollSync` 发包间隔不小于 **250ms**；
-- 仅在目标行号产生变化且与硬件记录不一致时发包，坚决杜绝蓝牙空转拥堵。
+### 4.2 双轨自适应 BLE 发包节流门禁 (Dual-Track Throttling)
+系统区分两类不同时效要求的下发指令：
+1. **行号推进指令（Line Advance）**：
+   - 具有最高动画优先级，间隔门禁设为 **$\ge 150\text{ms}$**（完全匹配 G2 MCU 单行视口滚动动画时长）；
+2. **字符游标推进指令（WordOrder RunDot）**：
+   - 在当前行内随着教师持续发音高频发生，采用自适应合并节流：
+   - 门禁设为 **$100\text{ms} \sim 150\text{ms}$**；若在此窗口内多次识别出新字符，仅在计时器触发时下发最新单调递增的 $WordOrder$；
+   - 报文合并：若行号推进与字符更新同时发生，单包下发最新 `(lineIndex, wordOrder)`，杜绝链路抖动。
 
 ---
 
@@ -217,19 +250,44 @@ Even G2 智能眼镜物理 MicroLED 视口高度为 **5.5 行**，中央人体�
 ## 6. 协议交互与跨端状态同步
 
 ### 6.1 下发 Even G2 智能眼镜帧格式
-利用已在 Build 22/23/24 中严格对齐官方的 `0x06-20 Type 165 ScrollSync` 协议：
 
-```
+系统区分两类下发报文：
+
+#### 1. AI 语音跟随兼字级灰阶衰减报文 (`0x06-20 Type 4 TeleprompterWordDimmingSync`)
+当 ASR 转录识别到当前行和字符偏移时下发，直接触发 MicroLED 逐字变暗与平滑滚行（2026-09-10 物理抓包证实）：
+
+```text
 [Packet Header]
-Magic:   0xED 0x47
+Magic:   0xAA 0x21
 Seq:     0xXX
 Len:     0x0E (14 Bytes)
-Service: 0x06 0x20 (Teleprompter Control)
+Service: 0x06 0x20 (Teleprompter Data Service)
 
 [Protobuf Payload]
-Tag 0x08 (field 1: service_type): 0xA5 0x01 (Type 165 = ScrollSync)
-Tag 0x10 (field 2: target_line):  encodeVarint(clampedLineIndex)
-Tag 0x18 (field 3: scroll_mode):  0x01 (AI Follow Mode)
+Tag 0x08 (field 1: type):        0x04 (Type 4: WordDimmingSync)
+Tag 0x10 (field 2: msg_id):      encodeVarint(teleprompterMsgId)
+Tag 0x32 (field 6: body):        [Len=0x06]
+    Tag 0x08 (body.page_index):  encodeVarint(pageIndex)
+    Tag 0x10 (body.line_index):  encodeVarint(lineIndex)
+    Tag 0x18 (body.char_offset): encodeVarint(charOffset)  <-- 🎯 驱动逐字变暗核心字段 (0~line.count)
+```
+
+#### 2. 手势/转腕/表冠人工介入报文 (`0x06-20 Type 165 ScrollSync`)
+当用户通过 Apple Watch 表冠、转腕或手机屏幕手动拖拽滚动时下发（全行保持原亮度，仅移动视口）：
+
+```text
+[Packet Header]
+Magic:   0xAA 0x21
+Seq:     0xXX
+Len:     0x0E (14 Bytes)
+Service: 0x06 0x20 (Teleprompter Data Service)
+
+[Protobuf Payload]
+Tag 0x08 (field 1: type):        0xA5 0x01 (Type 165: ScrollSync)
+Tag 0x10 (field 2: msg_id):      encodeVarint(teleprompterMsgId)
+Tag 0x5A (field 11: body):       [Len=0x04]
+    Tag 0x08 (body.page_index):  encodeVarint(pageIndex)
+    Tag 0x10 (body.line_index):  encodeVarint(lineIndex)
 ```
 
 ### 6.2 手机与大屏状态同步

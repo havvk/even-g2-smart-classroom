@@ -65,18 +65,18 @@ final class G2ProtocolTests: XCTestCase {
         XCTAssertTrue(hexString.contains("5009"), "render_mode 必须设置为 9")
     }
     
-    // MARK: - 18.3 模块 3: 提词排版与 14 页缓冲测试
+    // MARK: - 18.3 模块 3: 提词排版与按需下发测试
     
     func testTextFormatting_TC_TXT_001_003() {
         let sampleText = "今天我们召开《人机协同程序设计》课程全校统一数智化教学集体备课研讨会"
-        let pages = G2ProtocolEncoder.formatTextToPages(sampleText)
+        let (pages, totalLines) = G2ProtocolEncoder.formatTextToPagesOnDemand(sampleText)
         
-        // 14 页硬性缓冲区断言
-        XCTAssertGreaterThanOrEqual(pages.count, 14, "短文本必须自动扩充补满 14 页缓冲区")
+        // 按需生成有效页数断言 (绝不填充 14 页空白缓冲)
+        XCTAssertEqual(pages.count, 1, "短文本必须按需仅生成 1 页，绝不扩充补满 14 页空白缓冲区")
+        XCTAssertGreaterThan(totalLines, 0, "总行数必须大于 0")
         
-        // 检查首页行数与前置 \n
+        // 检查首页行数与首行不得为空
         let firstPageLines = pages[0].components(separatedBy: "\n")
-        XCTAssertEqual(firstPageLines.count, 10, "每页必须精确容纳 10 行")
         XCTAssertFalse(firstPageLines[0].isEmpty, "首行不得为前置 \\n 空行")
     }
     

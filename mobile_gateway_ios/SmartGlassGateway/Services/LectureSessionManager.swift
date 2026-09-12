@@ -8,7 +8,7 @@ class LectureSessionManager: ObservableObject {
     
     // MARK: - Published 状态
     @Published var baseURL: String = "https://syb.ncu.edu.cn"
-    @Published var sessionId: String = "c81431e6"
+    @Published var sessionId: String = "bb5c9390"
     @Published var sessionInfo: SmartClassSessionInfo?
     @Published var currentSlideIndex: Int = 0 // 0-based
     @Published var totalSlides: Int = 1
@@ -93,10 +93,17 @@ class LectureSessionManager: ObservableObject {
             }
         }
         
-        // 🤖 监听自研 AI 语音提词引擎行号推进通知
+        // ✨ 监听自研 AI 语音提词引擎行号与逐字变暗同步通知 (Word-Level Dimming / RunDot)
+        SpeechFollowEngine.shared.onSpeechSyncUpdated = { [weak self] targetLine, wordOrder in
+            DispatchQueue.main.async {
+                self?.syncAIToGlasses(lineIndex: targetLine, wordOrder: wordOrder)
+            }
+        }
+        
+        // 🤖 监听自研 AI 语音提词引擎纯行号推进通知 (向后兼容)
         SpeechFollowEngine.shared.onLineIndexUpdated = { [weak self] targetLine in
             DispatchQueue.main.async {
-                self?.scrollGlassesToLine(targetLine)
+                self?.currentLineIndex = targetLine
             }
         }
         
@@ -121,7 +128,8 @@ class LectureSessionManager: ObservableObject {
         
         SmartClassAPIService.shared.fetchSessionInfo(baseURL: self.baseURL, sessionId: self.sessionId) { [weak self] result in
             guard let self = self else { return }
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
                 self.isLoading = false
                 switch result {
                 case .success(let info):
@@ -374,8 +382,8 @@ class LectureSessionManager: ObservableObject {
         ble.currentFocusPageLine = 0
         ble.currentTotalLines = max(actualTotal, 1)
         
-        // 切页时下发整页文本，并设置从第 0 行开始
-        ble.sendTeleprompterText(text, targetWidthChars: 28, scrollModeAI: false, startLine: 0)
+        // 切页时下发整页文本，从第 0 行顶格展开 9 行完整满屏
+        ble.sendTeleprompterText(text, targetWidthChars: 28, scrollModeAI: false, startLine: 0, linesPerPage: ble.linesPerPage)
         
         // 🤖 同步将当前幻灯片权威逐字稿载入自研 AI 语音提词引擎构建音素模型
         SpeechFollowEngine.shared.loadSlideScriptLines(lines: self.getWrappedScriptLines(), rawScript: text)
@@ -383,10 +391,13 @@ class LectureSessionManager: ObservableObject {
     
     // MARK: - 5. 手势/手表反向控屏 (调用生产 POST page-nav)
     func gotoNextSlide() {
-        guard currentSlideIndex < totalSlides - 1 else { return }
+        guard currentSlideIndex < totalSlides - 1 else {
+            NSLog("⚠️ [LectureManager] 当前已是最后一页 (P%ld/%ld)，忽略下一页请求", currentSlideIndex + 1, totalSlides)
+            return
+        }
         // 🛡️ 硬件注销敏感期防撞车门禁：如果上一次换页的 state=4 注销尚未完成确认，吸收过频连续手势防冲突
         if let ble = bleManager, ble.isWaitingForSessionTeardown {
-            NSLog("🛡️ [LectureManager] 正在等待上一次换页注销确认 (isWaitingForSessionTeardown)，吸收过频连续手势")
+            NSLog("🛡️ [LectureManager] 正在等待上一次换页注销确认 (isWaitingForSessionTeardown)，吸收过频连续切页请求")
             return
         }
         let target = currentSlideIndex + 1
@@ -394,9 +405,12 @@ class LectureSessionManager: ObservableObject {
     }
     
     func gotoPrevSlide() {
-        guard currentSlideIndex > 0 else { return }
+        guard currentSlideIndex > 0 else {
+            NSLog("⚠️ [LectureManager] 当前已是第一页 (P1/%ld)，忽略上一页请求", totalSlides)
+            return
+        }
         if let ble = bleManager, ble.isWaitingForSessionTeardown {
-            NSLog("🛡️ [LectureManager] 正在等待上一次换页注销确认 (isWaitingForSessionTeardown)，吸收过频连续手势")
+            NSLog("🛡️ [LectureManager] 正在等待上一次换页注销确认 (isWaitingForSessionTeardown)，吸收过频连续切页请求")
             return
         }
         let target = currentSlideIndex - 1
@@ -410,6 +424,11 @@ class LectureSessionManager: ObservableObject {
     
     private func requestPageChange(target: Int) {
         let now = Date()
+        let elapsed = now.timeIntervalSince(lastLocalPageRequestTime)
+        if elapsed < 0.300 {
+            NSLog("🛡️ [切页防重] 300ms 内吸收过频本地切页请求 (距上次仅 %.3fs，目标页: %ld)", elapsed, target)
+            return
+        }
         self.lastLocalPageRequestTime = now
         
         // 1. 本地状态与 UI 瞬时 60fps 乐观更新
@@ -450,7 +469,20 @@ class LectureSessionManager: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: persistItem)
     }
     
-    // MARK: - 6. 页内长文本 (>9行) 微步滚动控制
+    // MARK: - 6. 页内长文本 (>9行) 微步滚动与 AI 字级变暗控制
+    /// AI 语音跟随模式同步 (Word-Level Dimming / RunDot)
+    func syncAIToGlasses(lineIndex: Int, wordOrder: Int) {
+        guard let ble = bleManager, ble.isConnected else { return }
+        let isLineChanged = (self.currentLineIndex != lineIndex)
+        self.currentLineIndex = lineIndex
+        ble.sendAISync(lineIndex: lineIndex, wordOrder: wordOrder)
+        // 跨行时才同步 Watch 端，避免字符级高频信令拥堵 Watch 蓝牙通道
+        if isLineChanged {
+            self.syncStateToWatch(lineIndex: lineIndex, forceImmediate: false)
+        }
+    }
+    
+    /// 手工/表冠绝对行号滚动控制 (Type 165)
     func scrollGlassesToLine(_ lineIndex: Int) {
         guard let ble = bleManager, ble.isConnected else { return }
         self.currentLineIndex = lineIndex

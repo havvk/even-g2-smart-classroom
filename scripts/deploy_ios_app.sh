@@ -8,7 +8,11 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/../mobile_gateway_ios" && pwd)"
 
-echo "🚀 [1/3] 正在查询已连接的 iPhone 设备..."
+echo "🧪 [0/4] 正在执行 TDD 协议回归门禁测试 (Python Unittest Discovery)..."
+python3 -m unittest discover -s "${SCRIPT_DIR}/../tests" -p "test_*.py"
+echo "✅ [TDD 门禁校验通过] 18 项信令契约与视口排版算法测试全部通过！"
+
+echo "🚀 [1/4] 正在查询已连接的 iPhone 设备..."
 DEVICE_LINE=$(xcodebuild -project "${PROJECT_DIR}/SmartGlassGateway.xcodeproj" -scheme SmartGlassGateway -showdestinations | grep "platform:iOS," | grep -v "placeholder" | grep -v "Simulator" | head -n 1 || true)
 
 if [ -z "${DEVICE_LINE}" ]; then

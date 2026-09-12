@@ -262,21 +262,19 @@ class G2ProtocolEncoder {
     
     // MARK: - 3. Teleprompter Init (Service 0x06-20 type=1)
     
-    /// 物理屏显提词器初始化 (100% 对齐 bt3.pklg 抓包: 0x48 0x01 开启 Touchpad 触控板手势监听)
-    static func buildTeleprompterInit(seq: inout UInt8, msgId: Int, scrollModeAI: Bool = true) -> [Data] {
-        let modeByte: UInt8 = 0x01 // 恒定 0x01 (物理抓包 bt3.pklg 包 #98 对齐: 使能 Touchpad 触控板手势监听)
-        
+    /// 物理屏显提词器初始化 (100% 对齐最新固件实测抓包: Field 9 透传每屏行数 linesPerPage)
+    static func buildTeleprompterInit(seq: inout UInt8, msgId: Int, linesPerPage: Int = 9, scrollModeAI: Bool = true) -> [Data] {
         let display = Data([
             0x08, 0x00,        // field 1
             0x10, 0x00,        // field 2
             0x18, 0x00,        // field 3
-            0x20, 59,          // field 4: display_width = 59
+            0x20, 59,          // field 4: display_width = 59 (全屏 28 汉字排版)
             0x28, 0xC9, 0x04,  // field 5: content_height = 585
             0x30, 0xB7, 0x04,  // field 6: line_height = 567
             0x38, 0xA9, 0x18,  // field 7: viewport_height = 3113
             0x40, 0x00,        // field 8: font_size = 0
-            0x48, modeByte,    // field 9: scroll_mode (1: AI, 0: Manual)
-            0x50, 0x09,        // field 10: render_mode = 9 (全屏)
+            0x48, UInt8(max(1, min(9, linesPerPage))), // field 9: 每屏行数 (实测上限为 9 行，若传 10 行固件会因越界回退至默认 5 行)
+            0x50, 0x00,        // field 10: 0x00 (官方最新固件实测值)
             0x58, 0x00         // field 11 = 0
         ])
         
@@ -293,25 +291,22 @@ class G2ProtocolEncoder {
         return buildPackets(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
-    /// §25 官方按需下发 V2: 支持动态 field_4 (totalPages) 和 field_5 (totalLines)
-    /// 初始化时向 MCU 固件透传规范参数 (field 10 严格固定为 0x09 官方渲染模式)
-    static func buildTeleprompterInitV2(seq: inout UInt8, msgId: Int, totalPages: Int, totalLines: Int, scrollModeAI: Bool = true) -> [Data] {
-        let modeByte: UInt8 = 0x01
-        
+    /// §25 官方按需下发 V2: 100% 对齐最新固件实测抓包 (Field 4/5 动态透传实际页数/行数，Field 9 动态透传每屏行数)
+    static func buildTeleprompterInitV2(seq: inout UInt8, msgId: Int, totalPages: Int = 1, totalLines: Int = 1, linesPerPage: Int = 9, scrollModeAI: Bool = true) -> [Data] {
         var display = Data([
             0x08, 0x00,        // field 1
             0x10, 0x00,        // field 2
             0x18, 0x00         // field 3
         ])
-        display.append(Data([0x20]))              // field 4: totalPages
-        display.append(encodeVarint(totalPages))
-        display.append(Data([0x28]))              // field 5: totalLines
-        display.append(encodeVarint(totalLines))
+        display.append(Data([0x20]))              // field 4: totalPages (动态透传实际总页数，严禁写死 59)
+        display.append(encodeVarint(max(1, totalPages)))
+        display.append(Data([0x28]))              // field 5: totalLines (动态透传实际总行数，严禁写死 585)
+        display.append(encodeVarint(max(1, totalLines)))
         display.append(Data([0x30, 0xB7, 0x04]))  // field 6: line_height = 567
-        display.append(Data([0x38, 0xA9, 0x18]))  // field 7: viewport_height = 3113 (硬件物理屏幕视口高度 = 5.5 行 * 567)
+        display.append(Data([0x38, 0xA9, 0x18]))  // field 7: viewport_height = 3113
         display.append(Data([0x40, 0x00]))         // field 8: font_size = 0
-        display.append(Data([0x48, modeByte]))     // field 9: scroll_mode
-        display.append(Data([0x50, 0x09]))         // field 10: render_mode = 9 (官方标准全屏渲染模式)
+        display.append(Data([0x48, UInt8(max(1, min(9, linesPerPage)))])) // field 9: 每屏行数 (实测上限为 9 行，若传 10 行固件会因越界回退至默认 5 行)
+        display.append(Data([0x50, 0x00]))         // field 10: 0x00 (官方最新固件实测值)
         display.append(Data([0x58, 0x00]))         // field 11 = 0
         
         var settings = Data([0x08, 0x01, 0x12])
@@ -329,11 +324,18 @@ class G2ProtocolEncoder {
     
     /// §25 官方按需下发 V2: 构建 TeleprompterComplete (type=255) 终止帧
     /// 官方 APP 在所有 Content Page 发完后发送此帧，显式告知固件传输结束
-    /// multiprompts.pklg 物理抓包: 08 FF 01 10 [MsgId] 6A 04 08 00 10 04
-    static func buildTeleprompterComplete(seq: inout UInt8, msgId: Int) -> Data {
+    /// multiprompts.pklg / 最新固件物理抓包: 08 FF 01 10 [MsgId] 6A [len] 08 [page] 10 [line]
+    static func buildTeleprompterComplete(seq: inout UInt8, msgId: Int, page: Int = 0, line: Int = 0) -> Data {
+        var inner = Data([0x08])
+        inner.append(encodeVarint(page))
+        inner.append(Data([0x10]))
+        inner.append(encodeVarint(line))
+        
         var payload = Data([0x08, 0xFF, 0x01, 0x10])  // type = 255 (varint: FF 01)
         payload.append(encodeVarint(msgId))
-        payload.append(Data([0x6A, 0x04, 0x08, 0x00, 0x10, 0x04]))  // field_13 = {f1=0, f2=4}
+        payload.append(Data([0x6A]))                  // field_13 (Tag 13 -> (13 << 3) | 2 = 0x6A)
+        payload.append(encodeVarint(inner.count))
+        payload.append(inner)
         return buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
@@ -550,8 +552,8 @@ class G2ProtocolEncoder {
     
     // MARK: - Legacy / UI Control Helpers
     
-    /// 生成 0x06-20 Type 165 手机主动平移视口同步报文 (100% 物理对齐 app-control.pklg 官方 App 抓包 Pkts #065 ~ #119)
-    static func buildScrollSync(seq: inout UInt8, msgId: Int = 0x50, lineIndex: Int) -> Data {
+    /// 生成 0x06-20 Type 165 手机主动平移视口同步报文 (100% 对齐官方抓包 Tag 11 0x5A)
+    static func buildScrollSync(seq: inout UInt8, msgId: Int = 0x50, lineIndex: Int, wordOrder: Int = 0) -> Data {
         let page = lineIndex / 10
         let line = lineIndex % 10
         
@@ -562,15 +564,17 @@ class G2ProtocolEncoder {
         
         var payload = Data([0x08, 0xA5, 0x01, 0x10]) // Type 165 (0xA5 0x01): Teleprompter App Scroll Sync
         payload.append(encodeVarint(msgId))
-        payload.append(Data([0x5A]))                 // Tag 11 (0x5A) 视口定位负载
+        payload.append(Data([0x5A]))                 // Tag 11 (0x5A) 视口定位负载 (len=4: page + line)
         payload.append(encodeVarint(inner.count))
         payload.append(inner)
         
         return buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     
-    /// 生成 0x06-20 Type 6 AI 跟随模式位置同步报文
-    static func buildAISync(seq: inout UInt8, msgId: Int = 0x50, lineIndex: Int) -> Data {
+    /// 生成 0x06-20 Type 4 官方标准 AI 跟随模式位置与逐字变暗同步报文 (Word-Level Dimming / RunDot)
+    /// 100% 物理对齐 tests/AI提词模式亮度变化.pklg 抓包实测
+    /// Protobuf 结构: Tag 1 = 4 (0x08 0x04), Tag 2 = msgId (0x10 ...), Tag 6 = [Tag 1: page, Tag 2: line, Tag 3: char_offset] (0x32 0x06 ...)
+    static func buildAISync(seq: inout UInt8, msgId: Int = 0x50, lineIndex: Int, wordOrder: Int = 0) -> Data {
         let page = lineIndex / 10
         let line = lineIndex % 10
         
@@ -578,11 +582,33 @@ class G2ProtocolEncoder {
         inner.append(encodeVarint(page))
         inner.append(Data([0x10]))
         inner.append(encodeVarint(line))
-        inner.append(Data([0x18, 0x00]))
+        inner.append(Data([0x18]))
+        inner.append(encodeVarint(max(0, wordOrder)))
         
-        var payload = Data([0x08, 0x06, 0x10]) // Type 6: Teleprompter AI Sync Event
+        var payload = Data([0x08, 0x04, 0x10]) // Type 4: Teleprompter AI Word Dimming Sync
         payload.append(encodeVarint(msgId))
-        payload.append(Data([0x2A]))
+        payload.append(Data([0x32]))           // Tag 6 (0x32): (6 << 3) | 2 = 0x32 (Word Dimming Payload)
+        payload.append(encodeVarint(inner.count))
+        payload.append(inner)
+        
+        return buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
+    }
+    
+    /// 生成 0x06-20 Type 255 显存提交与保活心跳报文 (Flush Commit / Heartbeat)
+    /// 100% 物理对齐 tests/AI提词模式亮度变化.pklg 抓包实测
+    /// Protobuf 结构: Tag 1 = 255 (0x08 0xFF 0x01), Tag 2 = msgId (0x10 ...), Tag 13 = [Tag 1: page, Tag 2: line] (0x6A 0x04 ...)
+    static func buildTeleprompterFlush(seq: inout UInt8, msgId: Int = 0x50, lineIndex: Int) -> Data {
+        let page = lineIndex / 10
+        let line = lineIndex % 10
+        
+        var inner = Data([0x08])
+        inner.append(encodeVarint(page))
+        inner.append(Data([0x10]))
+        inner.append(encodeVarint(line))
+        
+        var payload = Data([0x08, 0xFF, 0x01, 0x10]) // Type 255: Varint(255) = 0xFF 0x01
+        payload.append(encodeVarint(msgId))
+        payload.append(Data([0x6A]))                 // Tag 13 (0x6A): (13 << 3) | 2 = 0x6A
         payload.append(encodeVarint(inner.count))
         payload.append(inner)
         
@@ -622,7 +648,7 @@ class G2ProtocolEncoder {
     }
     
     static func buildTeleprompterModeConfigPacket(seq: inout UInt8, mode: UInt8 = 0x00) -> Data {
-        var payload = Data([0x08, 0x01, 0x10, 0x16, 0x48, mode])
+        let payload = Data([0x08, 0x01, 0x10, 0x16, 0x48, mode])
         return buildPacket(seq: &seq, serviceHi: 0x06, serviceLo: 0x20, payload: payload)
     }
     

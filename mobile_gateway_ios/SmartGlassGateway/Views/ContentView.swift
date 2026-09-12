@@ -7,6 +7,7 @@ struct ContentView: View {
     @EnvironmentObject var speechEngine: SpeechFollowEngine
     @State private var showingControlCenter: Bool = false
     @State private var showingSmartClass: Bool = false
+    @State private var showingGestureTest: Bool = false
     
     var body: some View {
         VStack(spacing: 0) {
@@ -41,6 +42,24 @@ struct ContentView: View {
                     .padding(.vertical, 4)
                     .background(Color.purple.opacity(0.15))
                     .foregroundColor(.purple)
+                    .cornerRadius(6)
+                }
+                
+                Spacer()
+                
+                Button(action: {
+                    showingGestureTest.toggle()
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "hand.wave.fill")
+                        Text("隔空手势")
+                    }
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.teal.opacity(0.15))
+                    .foregroundColor(.teal)
                     .cornerRadius(6)
                 }
                 
@@ -111,6 +130,9 @@ struct ContentView: View {
                     .environmentObject(speechEngine)
                     .navigationBarItems(trailing: Button("完成") { showingSmartClass = false })
             }
+        }
+        .sheet(isPresented: $showingGestureTest) {
+            GestureTestView()
         }
     }
     
@@ -404,6 +426,7 @@ struct ControlCenterSheetView: View {
     @EnvironmentObject var speechEngine: SpeechFollowEngine
     @StateObject private var discoveryEngine = ServerDiscoveryEngine.shared
     @Environment(\.presentationMode) var presentationMode
+    @State private var showingGestureTest: Bool = false
     
     @State private var serverUrlInput: String = "ws://192.168.8.59:8000/ws/session/sess_demo"
     
@@ -746,7 +769,25 @@ struct ControlCenterSheetView: View {
                     
                 }
                 
-                // 3. 实时蓝牙协议数据帧日志
+                // 3. 隔空手势翻页测试
+                Section(header: Text("隔空手势翻页 (Camera Air Gestures)"), footer: Text("无需穿戴任何设备，通过前置或后置摄像头识别空中挥手动作直接向大屏及智能眼镜发送翻页指令。")) {
+                    Button(action: {
+                        showingGestureTest = true
+                    }) {
+                        HStack {
+                            Label("打开隔空手势识别测试台", systemImage: "hand.wave.fill")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.teal)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                
+                // 4. 实时蓝牙协议数据帧日志
                 Section(header: HStack {
                     Text("蓝牙通信数据帧控制台 (Rx/Tx)")
                     Spacer()
@@ -794,6 +835,9 @@ struct ControlCenterSheetView: View {
                     }
                 }
             }
+            .sheet(isPresented: $showingGestureTest) {
+                GestureTestView()
+            }
         }
     }
 }
@@ -806,7 +850,7 @@ struct DebugLogView: View {
     var body: some View {
         NavigationView {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Even G2 BLE 通道状态: \(bleManager.connectionState)")
+                Text(verbatim: "Even G2 BLE 通道状态: \(bleManager.connectionState)")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                 

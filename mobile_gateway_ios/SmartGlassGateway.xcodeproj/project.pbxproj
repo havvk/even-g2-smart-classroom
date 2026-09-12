@@ -36,6 +36,10 @@
 		A10000172C50000100000001 /* LectureSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000172C50000100000001 /* LectureSessionManager.swift */; };
 		A10000182C50000100000001 /* SmartClassControlView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000182C50000100000001 /* SmartClassControlView.swift */; };
 		A10000192C50000100000001 /* PhoneMotionRemoteService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000192C50000100000001 /* PhoneMotionRemoteService.swift */; };
+		A100001A2C50000100000001 /* AirWaveGestureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100001A2C50000100000001 /* AirWaveGestureService.swift */; };
+		A100001B2C50000100000001 /* GestureTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100001B2C50000100000001 /* GestureTestView.swift */; };
+		A100001C2C50000100000001 /* SmartClassSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100001C2C50000100000001 /* SmartClassSettingsSheet.swift */; };
+		A100001D2C50000100000001 /* GestureCameraViewportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100001D2C50000100000001 /* GestureCameraViewportView.swift */; };
 		A20000012C50000100000001 /* SmartGlassWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000012C50000100000001 /* SmartGlassWatchApp.swift */; };
 		A20000022C50000100000001 /* Views/WatchContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000022C50000100000001 /* Views/WatchContentView.swift */; };
 		A20000032C50000100000001 /* Services/WatchBLEGatewayService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000032C50000100000001 /* Services/WatchBLEGatewayService.swift */; };
@@ -97,6 +101,10 @@
 		B10000172C50000100000001 /* LectureSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/LectureSessionManager.swift; sourceTree = "<group>"; };
 		B10000182C50000100000001 /* SmartClassControlView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SmartClassControlView.swift; sourceTree = "<group>"; };
 		B10000192C50000100000001 /* PhoneMotionRemoteService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/PhoneMotionRemoteService.swift; sourceTree = "<group>"; };
+		B100001A2C50000100000001 /* AirWaveGestureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/AirWaveGestureService.swift; sourceTree = "<group>"; };
+		B100001B2C50000100000001 /* GestureTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/GestureTestView.swift; sourceTree = "<group>"; };
+		B100001C2C50000100000001 /* SmartClassSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SmartClassSettingsSheet.swift; sourceTree = "<group>"; };
+		B100001D2C50000100000001 /* GestureCameraViewportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/GestureCameraViewportView.swift; sourceTree = "<group>"; };
 		B20000012C50000100000001 /* SmartGlassWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassWatchApp.swift; sourceTree = "<group>"; };
 		B20000022C50000100000001 /* Views/WatchContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/WatchContentView.swift; sourceTree = "<group>"; };
 		B20000032C50000100000001 /* Services/WatchBLEGatewayService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/WatchBLEGatewayService.swift; sourceTree = "<group>"; };
@@ -156,6 +164,10 @@
 				B10000172C50000100000001 /* LectureSessionManager.swift */,
 				B10000182C50000100000001 /* SmartClassControlView.swift */,
 				B10000192C50000100000001 /* PhoneMotionRemoteService.swift */,
+				B100001A2C50000100000001 /* AirWaveGestureService.swift */,
+				B100001B2C50000100000001 /* GestureTestView.swift */,
+				B100001C2C50000100000001 /* SmartClassSettingsSheet.swift */,
+				B100001D2C50000100000001 /* GestureCameraViewportView.swift */,
 			);
 			path = SmartGlassGateway;
 			sourceTree = "<group>";
@@ -306,6 +318,10 @@
 				A10000172C50000100000001 /* LectureSessionManager.swift in Sources */,
 				A10000182C50000100000001 /* SmartClassControlView.swift in Sources */,
 				A10000192C50000100000001 /* PhoneMotionRemoteService.swift in Sources */,
+				A100001A2C50000100000001 /* AirWaveGestureService.swift in Sources */,
+				A100001B2C50000100000001 /* GestureTestView.swift in Sources */,
+				A100001C2C50000100000001 /* SmartClassSettingsSheet.swift in Sources */,
+				A100001D2C50000100000001 /* GestureCameraViewportView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

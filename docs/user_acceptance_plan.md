@@ -30,7 +30,7 @@ python3 tests/test_g2_protocol.py && python3 tests/test_hud_adapter.py
 **预期结果**：
 
 - 终端无缝打印 `Ran 5 tests in 0.000s ... OK` 以及 `Ran 2 tests in 0.000s ... OK`。
-- 物理 8-Byte Header 格式、CRC16 校验算法、`TeleprompterInit` 全屏参数（`display_width = 59`, `line_height = 567`, `render_mode = 9`）、14 页缓冲区补齐及 `0x0601` 位置 Notification 解压算法 **100% 通过（PASSED）**。
+- 物理 8-Byte Header 格式、CRC16 校验算法、`TeleprompterInit` 全屏参数（`display_width = 59`, `line_height = 567`, `lines_per_page = 9`, `field_10 = 0`）、14 页缓冲区补齐及 `0x0601` 位置 Notification 解压算法 **100% 通过（PASSED）**。
 
 ---
 

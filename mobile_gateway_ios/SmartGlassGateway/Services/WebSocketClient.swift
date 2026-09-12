@@ -5,7 +5,7 @@ class WebSocketClient: ObservableObject {
     @Published var isConnected = false
     @Published var currentPayload: TeleprompterSyncPayload?
     @Published var currentPageIndex: Int = 0
-    @Published var serverAddress: String = "wss://syb.ncu.edu.cn/smart-class/ws/session/c81431e6"
+    @Published var serverAddress: String = "wss://syb.ncu.edu.cn/smart-class/ws/session/bb5c9390"
     
     private var webSocketTask: URLSessionWebSocketTask?
     private var urlSession = URLSession(configuration: .default)
@@ -40,7 +40,7 @@ class WebSocketClient: ObservableObject {
         var pathComponents = Array(components.dropFirst()).filter { !$0.isEmpty }
         
         if pathComponents.isEmpty || (pathComponents.count == 1 && pathComponents[0] == "smart-class") {
-            pathComponents = ["smart-class", "ws", "session", "c81431e6"]
+            pathComponents = ["smart-class", "ws", "session", "bb5c9390"]
         }
         
         let cleanPath = pathComponents.joined(separator: "/")

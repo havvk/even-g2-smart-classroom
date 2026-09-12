@@ -736,8 +736,11 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     
     /// 实时当前滚动的焦点行号回调 (用于 9 行所见即所得 View 高亮卡片)
     @Published var currentFocusPageLine: Int = 0
+    /// 实时当前朗读进度行号 (用于 AI 逐字变暗 Type 4 精准咬合)
+    @Published var currentReadingLine: Int = 0
+    @Published var currentWordOrder: Int = 0
     @Published var currentTotalLines: Int = 130
-    @Published var linesPerPage: Int = 10
+    @Published var linesPerPage: Int = 9
     @Published var currentWrappedLines: [String] = []
     @Published var currentGlassesState: GlassesState = .dashboard
     
@@ -760,6 +763,9 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     private var lastScrollSyncSentTime: Date = Date.distantPast
     private var pendingSyncLineIndex: Int?
     private var scrollSyncThrottleWorkItem: DispatchWorkItem?
+    private var lastAISyncSentTime: Date = Date.distantPast
+    private var pendingAISyncTarget: (line: Int, wordOrder: Int)?
+    private var aiSyncThrottleWorkItem: DispatchWorkItem?
     private var pendingRePushTask: (() -> Void)?
     private var rePushTimeoutWorkItem: DispatchWorkItem?
     var isWaitingForSessionTeardown: Bool = false
@@ -793,18 +799,40 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     private func sendSessionKeepaliveHeartbeat() {
         guard isConnected, isTeleprompterSessionActive, !isPushingText, !isWaitingForSessionTeardown else { return }
         let timeSinceLastSync = Date().timeIntervalSince(lastScrollSyncSentTime)
-        guard timeSinceLastSync >= 10.0 else { return }
+        guard timeSinceLastSync >= 6.0 else { return }
         
-        addLog("💓 [10s 视口保活] 闲置满 10s，下发 ScrollSync (Line \(currentFocusPageLine)) 与 0x80-00 物理心跳刷新 G2 固件 120s 倒计时")
-        sendScrollSync(lineIndex: currentFocusPageLine, force: true)
+        let actualLectureLines = LectureSessionManager.shared.getWrappedScriptLines().count
+        let totalLines = actualLectureLines > 0 ? actualLectureLines : currentTotalLines
+        let pageMaxLine = min(9, max(totalLines - 1, 0))
+        
+        addLog("💓 [6s 视口保活] 闲置满 6s，下发 0x06-20 Type 255 显存保活帧 (满屏 Line \(pageMaxLine)) 与 0x80-00 硬件心跳")
+        sendTeleprompterFlush(lineIndex: pageMaxLine)
         
         // 强行追加下发 0x80-00 Flush Commit 显存双缓冲翻转帧
         var seq = teleprompterSeq
-        var msgId = teleprompterMsgId
+        let msgId = teleprompterMsgId
         let commitPkt = G2ProtocolEncoder.buildFlushCommit(seq: &seq, msgId: msgId)
         teleprompterSeq = seq
         teleprompterMsgId = msgId + 1
         sendRawData(commitPkt, channel: .content, logDesc: "保活 0x80-00 物理心跳")
+    }
+    
+    /// 发送 0x06-20 Type 255 提词显存提交与保活帧 (100% 物理对齐 tests/AI提词模式亮度变化.pklg 抓包)
+    func sendTeleprompterFlush(lineIndex: Int) {
+        guard isConnected, (isTeleprompterSessionActive || isHardwareCanvasMounted) else { return }
+        if isWaitingForSessionTeardown || isPushingText { return }
+        
+        let actualLectureLines = LectureSessionManager.shared.getWrappedScriptLines().count
+        let totalLines = actualLectureLines > 0 ? actualLectureLines : currentTotalLines
+        let clampedLine = min(max(lineIndex, 0), max(totalLines - 1, 0))
+        
+        let flushPkt = G2ProtocolEncoder.buildTeleprompterFlush(
+            seq: &teleprompterSeq,
+            msgId: teleprompterMsgId,
+            lineIndex: clampedLine
+        )
+        teleprompterMsgId += 1
+        sendRawData(flushPkt, channel: .content, logDesc: "Type 255 显存提交 (Line \(clampedLine))")
     }
     
     /// 硬件物理屏幕视口高度（行数）
@@ -860,6 +888,72 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         teleprompterMsgId += 1
         sendRawData(syncPkt, channel: .content, logDesc: "双向位置同步 (Line \(clampedLine))")
         addLog("📍 [双向同步] 已发送 0x06-20 Type 165 报文 (Line \(clampedLine))\(force ? " [终点强制对齐]" : "")")
+    }
+    
+    /// 发送 0x06-20 AI 跟随同步与逐字变暗报文 (官方 Type 4 驱动 MicroLED 灰阶字级变暗)
+    /// 100% 物理对齐 tests/AI提词模式亮度变化.pklg 抓包实测
+    func sendAISync(lineIndex: Int, wordOrder: Int, force: Bool = false) {
+        guard isConnected, (isTeleprompterSessionActive || isHardwareCanvasMounted) else { return }
+        if isWaitingForSessionTeardown || isPushingText { return }
+        
+        let actualLectureLines = LectureSessionManager.shared.getWrappedScriptLines().count
+        let totalLines = actualLectureLines > 0 ? actualLectureLines : currentTotalLines
+        let maxAllowedLine = max(totalLines - 1, 0)
+        let targetLine = min(max(lineIndex, 0), maxAllowedLine)
+        let validWordOrder = max(0, wordOrder)
+        
+        let elapsed = Date().timeIntervalSince(lastAISyncSentTime)
+        if !force && elapsed < 0.080 {
+            // 🛡️ 80ms 字符级节流合并，确保高频发音时不阻塞蓝牙信道且反应灵敏
+            self.pendingAISyncTarget = (targetLine, validWordOrder)
+            if aiSyncThrottleWorkItem == nil {
+                let item = DispatchWorkItem { [weak self] in
+                    guard let self = self, let target = self.pendingAISyncTarget else { return }
+                    self.aiSyncThrottleWorkItem = nil
+                    self.sendAISync(lineIndex: target.line, wordOrder: target.wordOrder)
+                }
+                self.aiSyncThrottleWorkItem = item
+                DispatchQueue.main.asyncAfter(deadline: .now() + (0.080 - elapsed), execute: item)
+            }
+            return
+        }
+        
+        self.lastAISyncSentTime = Date()
+        self.pendingAISyncTarget = nil
+        
+        self.currentReadingLine = targetLine
+        self.currentWordOrder = validWordOrder
+        
+        // 🌟 1. 视口随读平滑滚动规范 (100% 物理对齐 tests/AI提词模式亮度变化.pklg):
+        // 当总行数在 10 行以内（满屏）时，开局已顶格满屏完整呈现（Line 0~9），朗读期间视口绝对静止，严禁下发任何 Type 165 干扰！
+        // 只有当总行数 > 10 的超长文本，且朗读深入到当前视口下半区 (targetLine > self.currentFocusPageLine + 3) 时，
+        // 才按需平滑微调焦点行，带单调递增保护，杜绝任何视窗抖动！
+        if totalLines > 10 && targetLine > self.currentFocusPageLine + 3 {
+            let maxFocus = max(totalLines - 5, 0)
+            let newFocus = min(targetLine - 2, maxFocus)
+            if newFocus > self.currentFocusPageLine {
+                self.currentFocusPageLine = newFocus
+                let scrollPkt = G2ProtocolEncoder.buildScrollSync(
+                    seq: &teleprompterSeq,
+                    msgId: teleprompterMsgId,
+                    lineIndex: newFocus
+                )
+                teleprompterMsgId += 1
+                sendRawData(scrollPkt, channel: .content, logDesc: "AI 跟随长文本平滑视口滚动 Type 165 (FocusLine \(newFocus))")
+            }
+        }
+        
+        // 🌟 2. 核心字级变暗信令: 官方标准 Type 4 (Tag 6 0x32 携带 page/line/charOffset) 驱动 MicroLED 灰阶字级变暗
+        let aiPkt = G2ProtocolEncoder.buildAISync(
+            seq: &teleprompterSeq,
+            msgId: teleprompterMsgId,
+            lineIndex: targetLine,
+            wordOrder: validWordOrder
+        )
+        teleprompterMsgId += 1
+        sendRawData(aiPkt, channel: .content, logDesc: "Type 4 镜显字级变暗 (Line \(targetLine), Char \(validWordOrder))")
+        
+        addLog("✨ [镜显逐字变暗] Line \(targetLine), WordOrder \(validWordOrder) (Type 4 已发送)")
     }
     
     /// 手势停顿/滑动结束时调用的终点同步闭环：强行刷新最新终点帧，并开放 Rx 校准通道
@@ -1022,174 +1116,19 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         }
     }
     
-    /// 动态编码并推送讲稿文本到 G2 眼镜 (Lock-Step ACK 驱动步进, 对齐 §20.1 规范)
-    func sendTeleprompterText(_ rawText: String, targetWidthChars: Int = 28, scrollModeAI: Bool = true, startLine: Int = 0) {
-        // 🌟 开关开启时，自动路由至 V2 按需下发路径 (100% 官方原装)
-        if useV2OnDemandPadding {
-            sendTeleprompterTextV2(rawText, targetWidthChars: targetWidthChars, scrollModeAI: scrollModeAI, startLine: startLine)
-            return
-        }
-        
-        guard isConnected else {
-            addLog("⚠️ 蓝牙未连接，请先连接 G2 眼镜")
-            return
-        }
-        guard contentTxChar != nil else {
-            addLog("⚠️ 5401 通道未绑定")
-            return
-        }
-        
-        // 🎯 防并发重入保护: 如果当前正在下发 23 包 Lock-Step 队列，严禁二次调用重入造成 BLE 管道连发碰撞
-        if isPushingText {
-            addLog("⚠️ 当前正在下发讲稿队列中，忽略并发重入请求")
-            return
-        }
-        
-        // =====================================================================
-        // 2.0 [热重推 Push #2+ 专属] 先发 state=4 退出旧 Session，等眼镜确认后自动冷启动重推
-        // 对齐 multiprompts.pklg: state=4 → 等 0D-01 确认 → 新 TeleprompterInit
-        // =====================================================================
-        if isTeleprompterSessionActive {
-            addLog("🔄 [热重推 (Warm Push #2+)] 先发 state=4 退出旧 Session，等待眼镜 0D-01 确认后自动冷启动重推...")
-            
-            // 注册待执行的重推任务：收到 Session Terminated 后自动回调
-            self.pendingRePushTask = { [weak self] in
-                guard let self = self else { return }
-                self.addLog("⚡️ [Session Terminated 确认] 自动启动冷启动重推流程...")
-                self.sendTeleprompterText(rawText, targetWidthChars: targetWidthChars, scrollModeAI: scrollModeAI, startLine: startLine)
-            }
-            
-            // 设置 3.0 秒超时保底：给予 MCU 充足注销窗口，正常收到 0D-01 即刻 cancel，杜绝假超时抢跑引发黑屏
-            let timeoutItem = DispatchWorkItem { [weak self] in
-                guard let self = self else { return }
-                if self.isWaitingForSessionTeardown {
-                    self.addLog("⏱️ [超时保底] 3.0s 未收到 Session Terminated 确认，自动执行自愈冷启动推流")
-                    self.isWaitingForSessionTeardown = false
-                    self.isTeleprompterSessionActive = false
-                    self.isHardwareCanvasMounted = false
-                    if let task = self.pendingRePushTask {
-                        self.pendingRePushTask = nil
-                        task()
-                    }
-                }
-            }
-            self.rePushTimeoutWorkItem = timeoutItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: timeoutItem)
-            
-            // 下发 state=4 退出指令
-            sendExitTeleprompterMode()
-            return  // ← 等待异步回调，不继续执行后续队列构建
-        }
-        
-        // =====================================================================
-        // 以下为冷启动 / 自愈推流路径
-        // =====================================================================
-        
-        // 1. 取消正在执行的任务与重置状态
-        cancelPendingTeleprompterTasks()
-        self.isPushingText = true
-        self.targetStartLine = startLine
-        self.currentFocusPageLine = startLine
-        DispatchQueue.main.async {
-            self.currentFocusPageLine = startLine
-        }
-        
-        let (pages, totalLines) = G2ProtocolEncoder.formatTextToPagesOnDemand(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: self.linesPerPage)
-        self.currentPages = pages
-        self.currentTotalLines = max(totalLines, 1)
-        
-        // 2. 构建 Lock-Step 包队列
-        var packets: [Data] = []
-        var descs: [String] = []
-        
-        var seq: UInt8 = self.teleprompterSeq == 0 ? 0x01 : self.teleprompterSeq
-        var msgId: Int = self.teleprompterMsgId == 0 ? 0x01 : self.teleprompterMsgId
-        
-        // 2.1 [冷启动 vs 热重推判定 (100% 对齐官方 §23.2 与 multiprompts.pklg 抓包)]
-        let isColdStart = !hasAuthBeenDoneForCurrentConnection
-        if isColdStart {
-            addLog("🔑 [BLE 首次冷启动] 下发 Auth (4包) + Setup (6包) 挂载眼镜 MCU 提词画布...")
-            let authPackets = G2ProtocolEncoder.buildAuthPackets(seq: &seq, msgId: &msgId)
-            for (idx, pkt) in authPackets.enumerated() {
-                packets.append(pkt)
-                descs.append("Auth [\(idx + 1)/4]")
-            }
-            let setupPairs = G2ProtocolEncoder.buildOfficialSetupSequence(seq: &seq, msgId: &msgId)
-            for (pkt, desc) in setupPairs {
-                packets.append(pkt)
-                descs.append(desc)
-            }
-            self.hasAuthBeenDoneForCurrentConnection = true
-            self.isHardwareCanvasMounted = true
-        } else {
-            addLog("⚡️ [热重推] 已完成基础 Setup，严格跳过 Auth/Setup，直接下发提词序列 (防黑屏)...")
-        }
-        
-        // 3. TeleprompterInit (0x06-20 type=1)
-        let initPkts = G2ProtocolEncoder.buildTeleprompterInit(seq: &seq, msgId: msgId, scrollModeAI: scrollModeAI)
-        for pkt in initPkts {
-            packets.append(pkt)
-            descs.append("TeleprompterInit (0x06-20)")
-        }
-        msgId += 1
-        
-        // 3.1 0x01-20 系统窗口前台强行绑定 (100% 对齐 bt3.pklg 包 #17: 将画布挂上 MicroLED 屏显视口)
-        packets.append(G2ProtocolEncoder.buildSystemLayoutConfig(seq: &seq, msgId: msgId))
-        descs.append("System Layout Config 1 (0x01-20)")
-        msgId += 1
-        
-        // 3.2 0x01-20 触控板滑动中断使能 (100% 对齐 bt3.pklg 包 #18: 开启 06-01 通道中断)
-        packets.append(G2ProtocolEncoder.buildTouchpadEventListener(seq: &seq, msgId: msgId))
-        descs.append("System Layout Config 2 (0x01-20)")
-        msgId += 1
-        
-        // 2. Pages 灌入 (每页使用唯一单调递增 msgId，确保 MCU RPC 分发器识别为独立新命令)
-        for (i, pageText) in pages.enumerated() {
-            let pagePkts = G2ProtocolEncoder.buildContentPagePackets(seq: &seq, msgId: msgId, pageNum: i, text: pageText)
-            for pkt in pagePkts {
-                packets.append(pkt)
-                descs.append("Page \(i)")
-            }
-            msgId += 1
-        }
-        
-        // 3. HUD Mount (0x04-20)
-        packets.append(G2ProtocolEncoder.buildPkt40HUDMount(seq: &seq, msgId: msgId))
-        descs.append("HUD Mount (0x04-20)")
-        msgId += 1
-        
-        // 4. Touchpad Router (0x09-20)
-        packets.append(G2ProtocolEncoder.buildPkt41TouchpadRouter(seq: &seq, msgId: msgId))
-        descs.append("Touchpad Router -> Teleprompter (0x09-20)")
-        msgId += 1
-        
-        // 5. Line 0 ScrollSync (0x06-20 Type 165) 视口强行对齐第 0 行 (对齐 multiprompts.pklg Pkt #06/#07: 必须在 Render Commit 前!)
-        let syncPkt = G2ProtocolEncoder.buildScrollSync(seq: &seq, msgId: msgId, lineIndex: 0)
-        packets.append(syncPkt)
-        descs.append("ScrollSync Line 0 (0x06-20 Type 165)")
-        msgId += 1
-        
-        // 6. 0x80-00 Render Commit (对齐 multiprompts.pklg Pkt #08: 显存双缓冲翻转，终极点亮 MicroLED 屏显)
-        let pktCommit = G2ProtocolEncoder.buildFlushCommit(seq: &seq, msgId: msgId)
-        packets.append(pktCommit)
-        descs.append("0x80-00 Render Commit (显存翻转点亮屏显)")
-        msgId += 1
-        
-        let modeTag = useV2OnDemandPadding ? "⚡️ [V2 按需切分 (100% 官方)]" : "📦 [V1 14页固定 Buffer 补满]"
-        addLog("\(modeTag) 开始发送 \(packets.count) 包报文 (\(pages.count) 页)...")
-        
-        // 3. 注入 Lock-Step 引擎并启动 (同步更新全局 seq/msgId 保持单调递增，防止黑屏)
-        self.teleprompterSeq = seq
-        self.teleprompterMsgId = msgId
-        self.bt3PendingPackets = packets
-        self.lockStepDescs = descs
-        self.bt3CurrentIndex = 0
-        sendNextBt3PacketInLockstep()
+    /// 动态编码并推送讲稿文本到 G2 眼镜 (100% 官方原装按需下发，严格对齐内容实际行数)
+    func sendTeleprompterText(_ rawText: String, targetWidthChars: Int = 28, scrollModeAI: Bool = true, startLine: Int = 0, linesPerPage: Int? = nil) {
+        let effectiveLinesPerPage = linesPerPage ?? self.linesPerPage
+        // 🌟 统一全量路由至 V2 官方按需下发路径 (严格对齐内容行数，绝不补满 14 页)
+        sendTeleprompterTextV2(rawText, targetWidthChars: targetWidthChars, scrollModeAI: scrollModeAI, startLine: startLine, linesPerPage: effectiveLinesPerPage)
     }
+        
+
     
     /// §25 官方按需下发 V2: 100% 对齐 multiprompts.pklg 官方发包序列
     /// 差异: 动态 Init 参数 + 按需页数(不补满) + type=255 Complete + 双 Render Commit
-    func sendTeleprompterTextV2(_ rawText: String, targetWidthChars: Int = 28, scrollModeAI: Bool = true, startLine: Int = 0) {
+    func sendTeleprompterTextV2(_ rawText: String, targetWidthChars: Int = 28, scrollModeAI: Bool = true, startLine: Int = 0, linesPerPage: Int? = nil) {
+        let effectiveLinesPerPage = linesPerPage ?? self.linesPerPage
         guard isConnected else {
             addLog("⚠️ 蓝牙未连接，请先连接 G2 眼镜")
             return
@@ -1222,7 +1161,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             addLog("⏳ [注销中换页] 旧 Session 注销中，更新目标推送任务为最新页...")
             self.pendingRePushTask = { [weak self] in
                 guard let self = self else { return }
-                self.sendTeleprompterTextV2(rawText, targetWidthChars: targetWidthChars, scrollModeAI: scrollModeAI, startLine: startLine)
+                self.sendTeleprompterTextV2(rawText, targetWidthChars: targetWidthChars, scrollModeAI: scrollModeAI, startLine: startLine, linesPerPage: effectiveLinesPerPage)
             }
             return
         }
@@ -1236,7 +1175,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             self.pendingRePushTask = { [weak self] in
                 guard let self = self else { return }
                 self.addLog("⚡️ [V2 Session Terminated 确认] 自动启动 V2 按需推流...")
-                self.sendTeleprompterTextV2(rawText, targetWidthChars: targetWidthChars, scrollModeAI: scrollModeAI, startLine: startLine)
+                self.sendTeleprompterTextV2(rawText, targetWidthChars: targetWidthChars, scrollModeAI: scrollModeAI, startLine: startLine, linesPerPage: effectiveLinesPerPage)
             }
             
             // 设置 3.0 秒超时保底：给予 MCU 充足注销窗口，正常收到 0D-01 即刻 cancel，杜绝假超时抢跑引发黑屏
@@ -1264,17 +1203,23 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         cancelPendingTeleprompterTasks()
         self.isPushingText = true
         self.targetStartLine = startLine
-        self.currentFocusPageLine = startLine
-        DispatchQueue.main.async {
-            self.currentFocusPageLine = startLine
-        }
+        self.currentReadingLine = startLine
+        self.currentWordOrder = 0
         
-        // 🛡️ 固件底层 Page Slot 槽位恒定为 10 行。下发时严格按 10 行连续紧密装填，
-        // 彻底消除由于非 10 行切分导致的“每显示 N 行就插入大量空行、大量提词被挤爆丢弃”的问题！
+        // 🛡️ 固件底层 Page Slot 物理槽位恒定为 10 行。下发时严格按 10 行连续紧密装填，
+        // 最后一页保留真实行数，按需生成实际页数（绝不多补 14 页空白缓冲）；
+        // 视口满屏高度则由 TeleprompterInit Field 9 (linesPerPage) 动态控制。
         let (pages, totalLines) = G2ProtocolEncoder.formatTextToPagesOnDemand(rawText, maxLineWidth: targetWidthChars * 2, linesPerPage: 10)
         self.currentPages = pages
         self.currentTotalLines = max(totalLines, 1)
         let totalPages = pages.count
+        
+        self.currentFocusPageLine = startLine
+        DispatchQueue.main.async {
+            self.currentFocusPageLine = startLine
+            self.currentReadingLine = startLine
+            self.currentWordOrder = 0
+        }
         
         var packets: [Data] = []
         var descs: [String] = []
@@ -1304,14 +1249,14 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             addLog("⚡️ [V2 热重推] 已完成基础 Setup，严格跳过 Auth/Setup，直接下发提词序列 (防黑屏)...")
         }
         
-        // §25.1: TeleprompterInit V2 参数：100% 官方原装 (切出几页填几页，对齐 multiprompts.pklg 帧 #1)
+        // §25.1: TeleprompterInit V2 参数：100% 官方原装 (Field 4 动态总页数, Field 5 动态总行数, Field 9 动态每屏行数)
         let initPages = totalPages
         let initLines = totalLines
         
-        let initPkts = G2ProtocolEncoder.buildTeleprompterInitV2(seq: &seq, msgId: msgId, totalPages: initPages, totalLines: initLines, scrollModeAI: scrollModeAI)
+        let initPkts = G2ProtocolEncoder.buildTeleprompterInitV2(seq: &seq, msgId: msgId, totalPages: initPages, totalLines: initLines, linesPerPage: effectiveLinesPerPage, scrollModeAI: scrollModeAI)
         for pkt in initPkts {
             packets.append(pkt)
-            descs.append("V2 TeleprompterInit (pages=\(initPages), lines=\(initLines))")
+            descs.append("V2 TeleprompterInit (pages=\(initPages), lines=\(initLines), lpp=\(effectiveLinesPerPage))")
         }
         msgId += 1
         
@@ -1334,7 +1279,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             msgId += 1
         }
         
-        // §25.3: ScrollSync × 2 (对齐 multiprompts.pklg #4/#5: 在 Commit 前发)
+        // §25.3: ScrollSync × 2 (对齐 multiprompts.pklg #4/#5: 在 Commit 前发，首页顶格为 startLine)
         let syncPkt1 = G2ProtocolEncoder.buildScrollSync(seq: &seq, msgId: msgId, lineIndex: startLine)
         packets.append(syncPkt1)
         descs.append("V2 ScrollSync #1 (line \(startLine))")
@@ -1351,10 +1296,12 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         descs.append("V2 Render Commit #1")
         msgId += 1
         
-        // §25.2: TeleprompterComplete type=255 (对齐 multiprompts.pklg #7)
-        let pktComplete = G2ProtocolEncoder.buildTeleprompterComplete(seq: &seq, msgId: msgId)
+        // §25.2: TeleprompterComplete type=255 (对齐 multiprompts.pklg #7 / 最新固件抓包: 动态传入当前 page 与 line)
+        let completePage = startLine / 10
+        let completeLine = startLine % 10
+        let pktComplete = G2ProtocolEncoder.buildTeleprompterComplete(seq: &seq, msgId: msgId, page: completePage, line: completeLine)
         packets.append(pktComplete)
-        descs.append("V2 TeleprompterComplete (type=255)")
+        descs.append("V2 TeleprompterComplete (type=255, p=\(completePage), l=\(completeLine))")
         msgId += 1
         
         // §25.3: Render Commit #2 (对齐 multiprompts.pklg #8)

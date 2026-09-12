@@ -52,6 +52,8 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
     // MARK: - 回调通知
     var onVoiceKeywordTriggered: ((String) -> Void)?
     var onLineIndexUpdated: ((Int) -> Void)?
+    /// 联合同步回调：同时上报权威目标行号 (lineIndex) 与行内字符偏移游标 (wordOrder)
+    var onSpeechSyncUpdated: ((Int, Int) -> Void)?
     
     // MARK: - ASR 核心组件 (指定 zh-CN 语言)
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-CN"))
@@ -73,6 +75,10 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
     private var lastValidMatchTime = Date()
     private var overrideCooldownWorkItem: DispatchWorkItem?
     private var lastScrollSyncTime = Date.distantPast
+    
+    // MARK: - 字级变暗 (Word-Level Dimming / RunDot) 状态控制
+    @Published private(set) var currentWordOrder: Int = 0
+    private var lastWordOrderSentTime = Date.distantPast
     
     private let minScrollIntervalMs: Double = 0.120
     private static let stopwordSet: Set<Character> = Set("的了是在和与于个这那我们你有也")
@@ -115,6 +121,7 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
         self.scriptLines = list
         self.endKeywords = keywords ?? ["下一页", "下一张", "进入下一节", "来看下一张", "下面看", "翻到下一页"]
         self.activeLineIndex = 0
+        self.currentWordOrder = 0
         self.isDigressed = false
         self.confidenceScore = 0.0
         self.lastValidMatchTime = Date()
@@ -343,7 +350,8 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
     
     // MARK: - 7. 人在回路 (HOTL) 物理手势优先让位
     func markManualOverride(reason: String = "Physical Gesture") {
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
             self.isManualOverrideActive = true
             NSLog("🛑 [SpeechEngine] HOTL 物理介入: %@，AI 引擎让位 3.0s", reason)
             
@@ -396,6 +404,7 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
         var bestScore: Float = -1.0
         var bestIdx: Int = curr
         var currBaseScore: Float = 0.0
+        var currEndInTarget: Int = 0
         var matchReason: String = ""
         
         for idx in startIdx...endIdx {
@@ -403,12 +412,13 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
             let candText = cand.cleanText
             guard !candText.isEmpty else { continue }
             
-            let lcs = SpeechFollowEngine.maxCommonSubstringLength(probe, candText)
+            let (lcs, endInS2) = SpeechFollowEngine.maxCommonSubstringMatch(probe, candText)
             let overlap = SpeechFollowEngine.overlapCharCount(probe, candText)
             let baseScore = Float(overlap + lcs * 2)
             
             if idx == curr {
                 currBaseScore = baseScore
+                currEndInTarget = endInS2
             }
             
             var score = baseScore
@@ -450,14 +460,39 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
         
         // 3. 决策推进或坚守
         if bestIdx > curr && bestScore >= 4.0 {
-            commitLineAdvance(targetIndex: bestIdx, reason: matchReason)
-        } else if currBaseScore >= 3.5 {
+            commitLineAdvance(targetIndex: bestIdx, initialWordOrder: 0, reason: matchReason)
+        } else if currBaseScore >= 3.0 || currEndInTarget >= 2 {
             self.lastValidMatchTime = Date()
             if self.isDigressed {
                 self.isDigressed = false
             }
-            let currModel = scriptLines[curr]
-            self.confidenceScore = min(currBaseScore / Float(max(currModel.cleanText.count, 2)), 1.0)
+            let currCand = scriptLines[curr]
+            self.confidenceScore = min(currBaseScore / Float(max(currCand.cleanText.count, 2)), 1.0)
+            
+            // 🎯 字级变暗 (Word-Level Dimming / RunDot) 游标计算
+            if currEndInTarget > 0 {
+                let rawOffset = SpeechFollowEngine.projectCleanIndexToRaw(
+                    cleanIndex: currEndInTarget,
+                    raw: currCand.rawText,
+                    clean: currCand.cleanText
+                )
+                var targetWordOrder = rawOffset
+                let cleanLen = currCand.cleanText.count
+                // 行尾饱和判断：若匹配到达行末 85% 或距离末尾 <= 2 个汉字，饱和至整行长度 (全暗过渡)
+                if cleanLen > 0 && (currEndInTarget >= Int(Float(cleanLen) * 0.85) || cleanLen - currEndInTarget <= 2) {
+                    targetWordOrder = currCand.rawText.count
+                }
+                
+                // 🛡️ 单调递增水位线保护：同一行内只能向前推进，禁止因重识别抖动倒退闪烁
+                if targetWordOrder > self.currentWordOrder {
+                    self.currentWordOrder = targetWordOrder
+                    let now = Date()
+                    if now.timeIntervalSince(self.lastWordOrderSentTime) >= 0.080 {
+                        self.lastWordOrderSentTime = now
+                        self.onSpeechSyncUpdated?(curr, self.currentWordOrder)
+                    }
+                }
+            }
         } else {
             let digressedElapsed = Date().timeIntervalSince(lastValidMatchTime)
             if digressedElapsed > 3.0 && !self.isDigressed {
@@ -468,7 +503,7 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
     }
     
     /// 统一推进行号与节流下发
-    private func commitLineAdvance(targetIndex: Int, reason: String) {
+    private func commitLineAdvance(targetIndex: Int, initialWordOrder: Int = 0, reason: String) {
         self.lastValidMatchTime = Date()
         if self.isDigressed {
             self.isDigressed = false
@@ -482,8 +517,11 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
             
             NSLog("🚀 [SpeechEngine] 成功推进行号: 第 %ld 行 -> 第 %ld 行 (%@)", self.activeLineIndex + 1, targetIndex + 1, reason)
             self.activeLineIndex = targetIndex
+            self.currentWordOrder = initialWordOrder
             self.confidenceScore = 1.0
+            self.lastWordOrderSentTime = now
             onLineIndexUpdated?(targetIndex)
+            onSpeechSyncUpdated?(targetIndex, initialWordOrder)
         }
     }
     
@@ -547,5 +585,56 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
             }
         }
         return count
+    }
+    
+    /// 计算最长公共连续子串长度及其在目标行 (s2) 中的右边界字符下标 (1-based, 用于字级变暗定位)
+    static func maxCommonSubstringMatch(_ s1: String, _ s2: String) -> (length: Int, endOffsetInS2: Int) {
+        guard !s1.isEmpty && !s2.isEmpty else { return (0, 0) }
+        let a1 = Array(s1)
+        let a2 = Array(s2)
+        let m = a1.count
+        let n = a2.count
+        var prev = Array(repeating: 0, count: n + 1)
+        var curr = Array(repeating: 0, count: n + 1)
+        var maxLen = 0
+        var bestEnd = 0
+        for i in 1...m {
+            for j in 1...n {
+                if a1[i - 1] == a2[j - 1] {
+                    curr[j] = prev[j - 1] + 1
+                    if curr[j] > maxLen {
+                        maxLen = curr[j]
+                        bestEnd = j
+                    }
+                } else {
+                    curr[j] = 0
+                }
+            }
+            prev = curr
+            curr = Array(repeating: 0, count: n + 1)
+        }
+        return (maxLen, bestEnd)
+    }
+    
+    /// 将清洗字符串中的字符下标投影映射回原始带标点文本中的物理字符偏移量 (WordOrder)
+    static func projectCleanIndexToRaw(cleanIndex: Int, raw: String, clean: String) -> Int {
+        guard cleanIndex > 0 else { return 0 }
+        guard !raw.isEmpty && !clean.isEmpty else { return 0 }
+        
+        var cleanCount = 0
+        var rawCharIndex = 0
+        let targetClean = min(cleanIndex, clean.count)
+        
+        for ch in raw {
+            rawCharIndex += 1
+            let cleaned = cleanString(String(ch))
+            if !cleaned.isEmpty {
+                cleanCount += 1
+                if cleanCount >= targetClean {
+                    return rawCharIndex
+                }
+            }
+        }
+        return min(rawCharIndex, raw.count)
     }
 }

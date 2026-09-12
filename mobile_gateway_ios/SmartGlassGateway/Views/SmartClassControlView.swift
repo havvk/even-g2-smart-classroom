@@ -113,6 +113,24 @@ struct NCUCASWebView: UIViewRepresentable {
     }
 }
 
+// MARK: - 智慧课堂工作台多视图模式定义
+enum SmartClassViewMode: String, CaseIterable, Identifiable {
+    case teleprompter = "提词监看"
+    case gesture      = "手势全景"
+    case split        = "二合一分割"
+    case pip          = "画中画浮窗"
+    
+    var id: String { rawValue }
+    var iconName: String {
+        switch self {
+        case .teleprompter: return "eyeglasses"
+        case .gesture:      return "hand.wave.fill"
+        case .split:        return "rectangle.split.2x1"
+        case .pip:          return "pip"
+        }
+    }
+}
+
 /// 智慧课堂智能眼镜授课总控台 (Smart Class Control View)
 struct SmartClassControlView: View {
     @ObservedObject var authService = AuthService.shared
@@ -122,6 +140,11 @@ struct SmartClassControlView: View {
     @ObservedObject var watchManager = WatchSessionManager.shared
     @StateObject private var motionRemote = PhoneMotionRemoteService.shared
     @ObservedObject private var speechEngine = SpeechFollowEngine.shared
+    @ObservedObject private var gestureService = AirWaveGestureService.shared
+    
+    // 工作视图模式：提词、手势、二合一分割、画中画浮窗
+    @State private var viewMode: SmartClassViewMode = .teleprompter
+    @State private var showSmartClassSettingsSheet: Bool = false
     
     // 手机体感手势 HUD 动效浮层
     @State private var showGestureToast: Bool = false
@@ -144,7 +167,7 @@ struct SmartClassControlView: View {
     }
     
     @State private var serverUrlInput: String = "https://syb.ncu.edu.cn"
-    @State private var sessionIdInput: String = "c81431e6"
+    @State private var sessionIdInput: String = "bb5c9390"
     
     // 登录模式：默认优先 0: 粘贴/剪贴板 Token 导入（最稳定），1: 统一身份认证 WebView 弹窗
     @State private var showCASSheet: Bool = false
@@ -184,25 +207,39 @@ struct SmartClassControlView: View {
     }
     
     var body: some View {
-        ZStack(alignment: .bottom) {
+        ZStack(alignment: .bottomTrailing) {
             ScrollView {
-                VStack(spacing: 16) {
-                    // MARK: - 1. 教师身份鉴权卡片
+                VStack(spacing: 14) {
+                    // MARK: - 1. 教师身份鉴权卡片 (未鉴权时才显示)
                     authCard
                     
                     // MARK: - 2. 课时连接与状态面板
                     connectionCard
                     
-                    // MARK: - 3. 讲台实时 HUD 提词监看大屏
-                    lectureHUDCard
+                    // MARK: - 2.5 视图工作模式选择分段栏 (提词 / 手势 / 分割 / 画中画)
+                    viewModeSelectorBar
+                    
+                    // MARK: - 2.6 多引擎智能辅驾控制栏 (一键全开 / 独立提词 / 独立手势 / 设置)
+                    engineControlMatrixBar
+                    
+                    // MARK: - 3. 中央多视图动态工作区
+                    centralWorkArea
                     
                     // MARK: - 4. 激光笔平级双向控屏手柄
                     controlActionsCard
                 }
-                .padding()
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
             }
             
-            // 🪄 手机体感手势触发 HUD 动效浮层
+            // 🪄 画中画浮窗：当处于 .pip 模式且手势引擎运行时在右下角悬浮展示
+            if viewMode == .pip && gestureService.isRunning {
+                GestureFloatingPiPView()
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 80)
+            }
+            
+            // 🪄 手机体感/隔空手势触发 HUD 动效浮层
             if showGestureToast, let toast = motionToastText {
                 HStack(spacing: 8) {
                     Image(systemName: "wand.and.stars")
@@ -218,12 +255,24 @@ struct SmartClassControlView: View {
                 .cornerRadius(12)
                 .shadow(color: Color.purple.opacity(0.25), radius: 8, x: 0, y: 3)
                 .padding(.bottom, 24)
+                .frame(maxWidth: .infinity, alignment: .center)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .animation(.spring(response: 0.25, dampingFraction: 0.8), value: showGestureToast)
             }
         }
         .navigationTitle("智慧课堂 HUD 辅驾")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: {
+                    showSmartClassSettingsSheet = true
+                }) {
+                    Image(systemName: "gearshape")
+                        .font(.subheadline)
+                        .foregroundColor(.purple)
+                }
+            }
+        }
         .onAppear {
             serverUrlInput = lectureManager.baseURL
             sessionIdInput = lectureManager.sessionId
@@ -241,10 +290,13 @@ struct SmartClassControlView: View {
                 bleManager.startScanning()
             }
             
-            // 🌟 视图挂载时确保装载当前页权威逐字稿进入 AI 引擎
+            // 🌟 视图挂载时确保装载当前页权威逐字稿进入 AI 引擎并自启跟随
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 let currentLines = self.wrappedScriptLines
                 self.speechEngine.loadSlideScriptLines(lines: currentLines, rawScript: self.lectureManager.currentScriptText)
+                if !self.speechEngine.isListening && self.bleManager.isConnected && !currentLines.isEmpty && currentLines.first != "暂无口述提词" {
+                    self.speechEngine.startListening()
+                }
             }
             
             // 🌟 绑定手机陀螺仪体感遥控手势回调
@@ -261,6 +313,28 @@ struct SmartClassControlView: View {
                 lectureManager.scrollByLineDelta(delta)
                 let label = delta > 0 ? "向前甩动 ⬇️ 视口下滚 \(delta) 行" : "向上挑动 ⬆️ 视口上滚 \(-delta) 行"
                 triggerGestureToast(label)
+            }
+            
+            // 🌟 绑定隔空手势翻页事件回调至智慧课堂 (仅用于呈现 HUD Toast 动效，切页由服务层统一调度)
+            gestureService.onPageFlipDetected = { [weak lectureManager] direction in
+                guard let lectureManager = lectureManager else { return }
+                DispatchQueue.main.async {
+                    let cur = lectureManager.currentSlideIndex
+                    let total = lectureManager.totalSlides
+                    if direction == .nextPage {
+                        if cur >= total - 1 {
+                            triggerGestureToast("👋 隔空手势：已是最后一页 (P\(cur + 1)/\(total))")
+                        } else {
+                            triggerGestureToast("👋 隔空手势 ➡️ 下一页 (P\(cur + 2)/\(total))")
+                        }
+                    } else {
+                        if cur <= 0 {
+                            triggerGestureToast("👋 隔空手势：已是第一页 (P1/\(total))")
+                        } else {
+                            triggerGestureToast("👋 隔空手势 ⬅️ 上一页 (P\(cur)/\(total))")
+                        }
+                    }
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
@@ -305,6 +379,157 @@ struct SmartClassControlView: View {
                     targetWidthChars: 28
                 ))
             }
+        }
+        .sheet(isPresented: $showSmartClassSettingsSheet) {
+            SmartClassSettingsSheet()
+        }
+    }
+    
+    // MARK: - 模式选择分段栏
+    private var viewModeSelectorBar: some View {
+        HStack(spacing: 6) {
+            ForEach(SmartClassViewMode.allCases) { mode in
+                Button(action: {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        viewMode = mode
+                    }
+                    // 若切入包含手势的视图且手势未启动，自动贴心拉起手势识别引擎
+                    if (mode == .gesture || mode == .split || mode == .pip) && !gestureService.isRunning {
+                        gestureService.start()
+                    }
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: mode.iconName)
+                            .font(.system(size: 11, weight: .bold))
+                        Text(mode.rawValue)
+                            .font(.system(size: 11, weight: .bold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 7)
+                    .background(viewMode == mode ? Color.purple : Color(UIColor.tertiarySystemFill))
+                    .foregroundColor(viewMode == mode ? .white : .primary)
+                    .cornerRadius(8)
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        }
+        .padding(4)
+        .background(Color(UIColor.secondarySystemBackground))
+        .cornerRadius(10)
+    }
+    
+    // MARK: - 多引擎智能辅驾控制栏 (一键双开 / 独立控制 / 设置入口)
+    private var engineControlMatrixBar: some View {
+        HStack(spacing: 8) {
+            // A. 一键双开 / 智能全托管
+            let isAllRunning = (speechEngine.isListening && gestureService.isRunning)
+            Button(action: {
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                if isAllRunning {
+                    // 一键全关
+                    speechEngine.stopListening()
+                    gestureService.stop()
+                    triggerGestureToast("已关闭 AI 提词与手势辅驾")
+                } else {
+                    // 一键全开
+                    let currentLines = self.wrappedScriptLines
+                    speechEngine.loadSlideScriptLines(lines: currentLines, rawScript: lectureManager.currentScriptText)
+                    if !speechEngine.isListening { speechEngine.startListening() }
+                    if !gestureService.isRunning { gestureService.start() }
+                    triggerGestureToast("⚡️ AI 语音提词与隔空手势已全开！")
+                }
+            }) {
+                HStack(spacing: 4) {
+                    Image(systemName: isAllRunning ? "sparkles.rectangle.stack.fill" : "bolt.circle.fill")
+                    Text(isAllRunning ? "双引擎运行中" : "一键全开辅驾")
+                }
+                .font(.system(size: 11, weight: .bold))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 6)
+                .background(isAllRunning ? Color.purple : Color.purple.opacity(0.12))
+                .foregroundColor(isAllRunning ? .white : .purple)
+                .cornerRadius(8)
+            }
+            .buttonStyle(PlainButtonStyle())
+            
+            Spacer()
+            
+            // B. 独立 AI 语音跟随开关
+            Button(action: {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                if speechEngine.isListening {
+                    speechEngine.stopListening()
+                } else {
+                    let currentLines = self.wrappedScriptLines
+                    speechEngine.loadSlideScriptLines(lines: currentLines, rawScript: lectureManager.currentScriptText)
+                    speechEngine.startListening()
+                }
+            }) {
+                HStack(spacing: 3) {
+                    Image(systemName: speechEngine.isListening ? "mic.fill" : "mic.slash")
+                    Text(speechEngine.isListening ? "提词跟随:开" : "提词跟随:关")
+                }
+                .font(.system(size: 10, weight: .semibold))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 5)
+                .background(speechEngine.isListening ? Color.green.opacity(0.15) : Color(UIColor.tertiarySystemFill))
+                .foregroundColor(speechEngine.isListening ? .green : .secondary)
+                .cornerRadius(6)
+            }
+            .buttonStyle(PlainButtonStyle())
+            
+            // C. 独立隔空手势开关
+            Button(action: {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                if gestureService.isRunning {
+                    gestureService.stop()
+                } else {
+                    gestureService.start()
+                }
+            }) {
+                HStack(spacing: 3) {
+                    Image(systemName: gestureService.isRunning ? "hand.wave.fill" : "hand.raised.slash")
+                    Text(gestureService.isRunning ? "手势:开" : "手势:关")
+                }
+                .font(.system(size: 10, weight: .semibold))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 5)
+                .background(gestureService.isRunning ? Color.teal.opacity(0.15) : Color(UIColor.tertiarySystemFill))
+                .foregroundColor(gestureService.isRunning ? .teal : .secondary)
+                .cornerRadius(6)
+            }
+            .buttonStyle(PlainButtonStyle())
+            
+
+        }
+    }
+    
+    // MARK: - 中央动态工作区 (按工作模式动态切换)
+    @ViewBuilder
+    private var centralWorkArea: some View {
+        switch viewMode {
+        case .teleprompter:
+            // 模式 1: 经典提词监看大屏
+            lectureHUDCard
+            
+        case .gesture:
+            // 模式 2: 全景手势取景与遥测大卡片
+            VStack(spacing: 12) {
+                GestureCameraViewportView(isCompact: false)
+                GestureTelemetrySubcard(isCompact: false)
+            }
+            
+        case .split:
+            // 模式 3: 二合一垂直分割视图 (上半部手势视口，下半部提词视口)
+            VStack(spacing: 12) {
+                GestureCameraViewportView(isCompact: true)
+                lectureHUDCard
+            }
+            
+        case .pip:
+            // 模式 4: 画中画模式 (主体全屏提词，右下角悬浮手势小窗)
+            lectureHUDCard
         }
     }
     
@@ -457,16 +682,7 @@ struct SmartClassControlView: View {
                 }
                 .fixedSize(horizontal: true, vertical: true)
                 
-                Button(action: {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showConnectionSettings.toggle()
-                    }
-                }) {
-                    Image(systemName: showConnectionSettings ? "chevron.up" : "gearshape")
-                        .font(.caption)
-                        .foregroundColor(.purple)
-                        .padding(4)
-                }
+
             }
             
             // 🌟 同课程可用课时快速选择器 (点击一键切课)
@@ -829,6 +1045,7 @@ struct SmartClassControlView: View {
                             let bounds = viewportBounds
                             let isInViewport = (index >= bounds.vStart && index <= bounds.vEnd)
                             let isCurrentReading = (speechEngine.isListening && index == activeLineIndex)
+                            let isPastRead = (speechEngine.isListening && index < activeLineIndex)
                             let isViewportTop = (index == bounds.vStart)
                             let isHighlighted = isCurrentReading || (!speechEngine.isListening && isViewportTop)
                             
@@ -842,18 +1059,70 @@ struct SmartClassControlView: View {
                                     }
                                     Text(String(format: "%02d", index + 1))
                                         .font(.system(size: 11.5, weight: isHighlighted ? .black : (isInViewport ? .bold : .regular), design: .monospaced))
-                                        .foregroundColor(isCurrentReading ? Color.green : ((!speechEngine.isListening && isViewportTop) ? Color.purple : (isInViewport ? Color.purple.opacity(0.8) : Color.gray.opacity(0.35))))
+                                        .foregroundColor(isCurrentReading ? Color.green : (isPastRead ? Color.gray.opacity(0.35) : ((!speechEngine.isListening && isViewportTop) ? Color.purple : (isInViewport ? Color.purple.opacity(0.8) : Color.gray.opacity(0.35)))))
                                 }
                                 .frame(width: 28, alignment: .trailing)
                                 
-                                // 文本正文：当前朗读行高亮且字号饱满，随语音逐行跳跃
-                                Text(lineText.isEmpty ? " " : lineText)
-                                    .font(.system(size: isHighlighted ? 14.5 : 13.5, weight: isHighlighted ? .bold : (isInViewport ? .semibold : .regular)))
-                                    .foregroundColor(isCurrentReading ? Color.green : ((!speechEngine.isListening && isViewportTop) ? Color.purple : (isInViewport ? Color.primary : Color.secondary.opacity(0.38))))
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.85)
-                                    .allowsTightening(true)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                // 文本正文：
+                                if isCurrentReading {
+                                    // 1. 🤖 当前朗读行：支持字级逐字变暗 (Word-Level Dimming / RunDot)
+                                    let order = max(0, min(speechEngine.currentWordOrder, lineText.count))
+                                    if order == 0 {
+                                        // 尚未开始朗读：整行高亮翠绿加粗
+                                        Text(lineText.isEmpty ? " " : lineText)
+                                            .font(.system(size: 14.5, weight: .bold))
+                                            .foregroundColor(Color.green)
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.85)
+                                            .allowsTightening(true)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    } else if order >= lineText.count {
+                                        // 整行已朗读完毕：整行保持低亮度暗灰
+                                        Text(lineText.isEmpty ? " " : lineText)
+                                            .font(.system(size: 14.5, weight: .medium))
+                                            .foregroundColor(Color.gray.opacity(0.45))
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.85)
+                                            .allowsTightening(true)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    } else {
+                                        // 部分字符已读：前缀已读字符低亮度暗灰 + 后缀未读字符高亮翠绿加粗
+                                        let spokenIndex = lineText.index(lineText.startIndex, offsetBy: order)
+                                        let spokenPart = String(lineText[..<spokenIndex])
+                                        let remainingPart = String(lineText[spokenIndex...])
+                                        
+                                        (Text(spokenPart)
+                                            .foregroundColor(Color.gray.opacity(0.45))
+                                            .font(.system(size: 14.5, weight: .medium))
+                                         +
+                                         Text(remainingPart)
+                                            .foregroundColor(Color.green)
+                                            .font(.system(size: 14.5, weight: .bold))
+                                        )
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.85)
+                                        .allowsTightening(true)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                } else if isPastRead {
+                                    // 2. 📜 历史已读行：整行保持低亮度暗灰
+                                    Text(lineText.isEmpty ? " " : lineText)
+                                        .font(.system(size: 13.5, weight: .regular))
+                                        .foregroundColor(Color.gray.opacity(0.40))
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.85)
+                                        .allowsTightening(true)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                } else {
+                                    // 3. ⏳ 待读未来行 / 手动模式
+                                    Text(lineText.isEmpty ? " " : lineText)
+                                        .font(.system(size: isHighlighted ? 14.5 : 13.5, weight: isHighlighted ? .bold : (isInViewport ? .semibold : .regular)))
+                                        .foregroundColor((!speechEngine.isListening && isViewportTop) ? Color.purple : (isInViewport ? Color.primary : Color.secondary.opacity(0.38)))
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.85)
+                                        .allowsTightening(true)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
                             }
                             .padding(.horizontal, 10)
                             .padding(.vertical, 4) // 恒定上下内边距，单行稳定约 30pt
@@ -992,10 +1261,13 @@ struct SmartClassControlView: View {
                     self.lectureManager.syncStateToWatch(lineIndex: 0, forceImmediate: true)
                     self.isProgrammaticScrolling = true
                     
-                    // 🌟 核心防空：切页瞬间同步装载当前页权威逐字稿模型
+                    // 🌟 核心防空：切页瞬间同步装载当前页权威逐字稿模型并恢复跟随
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                         let currentLines = self.wrappedScriptLines
                         self.speechEngine.loadSlideScriptLines(lines: currentLines, rawScript: self.lectureManager.currentScriptText)
+                        if !self.speechEngine.isListening && self.bleManager.isConnected && !currentLines.isEmpty && currentLines.first != "暂无口述提词" {
+                            self.speechEngine.startListening()
+                        }
                     }
                     
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -1023,8 +1295,7 @@ struct SmartClassControlView: View {
                         proxy.scrollTo(targetLine, anchor: .top)
                     }
                     
-                    // 智能眼镜与 Apple Watch 100% 同步推进到同一行
-                    self.syncLineToGlasses(lineIndex: targetLine)
+                    // 🌟 Apple Watch 状态同步 (眼镜端视口由 BLEManager.sendAISync 单一事实源根据长文本需要自动平滑驱动，UI 层严禁重复发包以绝抖动)
                     self.lectureManager.syncStateToWatch(lineIndex: targetLine, forceImmediate: true)
                     
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
