@@ -303,19 +303,14 @@ class LectureSessionManager: ObservableObject {
             }
         }
         
-        // 组装最终口述稿字典
+        // 组装最终口述稿字典 (直接使用纯净演讲正文，杜绝把【标题】塞入第 0 行导致开局匹配卡死)
         var finalDict: [Int: String] = [:]
         for idx in 0...max(maxSlide, 0) {
-            let title = titles[idx] ?? "第 \(idx + 1) 页"
             if let segList = scripts[idx], !segList.isEmpty {
-                let content = segList.joined(separator: "\n")
-                if content.hasPrefix("【") {
-                    finalDict[idx] = content
-                } else {
-                    finalDict[idx] = "【\(title)】\n\(content)"
-                }
+                let content = segList.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                finalDict[idx] = content
             } else {
-                finalDict[idx] = "【\(title)】\n（本页未设提词，请结合大屏内容讲解）"
+                finalDict[idx] = "（本页未设提词，请结合大屏内容讲解）"
             }
         }
         

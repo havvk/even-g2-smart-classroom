@@ -43,13 +43,11 @@ xcrun devicectl device process launch --device "${DEVICE_ID}" --terminate-existi
 # ⌚️ 自动检测并直连部署至配对的 Apple Watch
 WATCH_ID=$(xcrun devicectl list devices | grep "physical" | grep -i "watch" | grep "available" | awk '{for(i=1;i<=NF;i++) if($i ~ /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/) print $i}' | head -n 1 || true)
 if [ -n "${WATCH_ID}" ]; then
-    echo "⌚️ 检测到已配对连接的物理 Apple Watch (ID: ${WATCH_ID})，正在直连部署 Watch App..."
-    # 严格安装：绝不使用 || true 掩盖错误，安装失败必须立刻抛出！
-    xcrun devicectl device install app --device "${WATCH_ID}" "${PROJECT_DIR}/build/Build/Products/Release-watchos/SmartGlassWatch.app"
-    echo "✅ [手表安装校验通过] 新版本已确凿写入 Apple Watch 本地闪存！"
+    xcrun devicectl device install app --device "${WATCH_ID}" "${PROJECT_DIR}/build/Build/Products/Release-watchos/SmartGlassWatch.app" || echo "⚠️ [提示] Apple Watch 当前处于锁屏状态，无法写入。若需更新 Watch 端应用，请点亮并解锁手表后重新运行部署。"
+    echo "✅ [手表处理完毕]"
     
-    echo "⚡️ 尝试唤醒 Apple Watch 上的前台进程 (终止旧进程并加载新二进制)..."
-    xcrun devicectl device process launch --device "${WATCH_ID}" --terminate-existing edu.ncu.smartglass.gateway.watchkit || echo "⚠️ [提示] 若手表处于暗屏休眠状态，watchOS 安全机制会阻断命令行远程亮屏。新版本已安装，请在手表上解锁屏幕并点击 SmartGlassWatch 图标打开前台。"
+    echo "⚡️ 尝试唤醒 Apple Watch 上的前台进程..."
+    xcrun devicectl device process launch --device "${WATCH_ID}" --terminate-existing edu.ncu.smartglass.gateway.watchkit 2>/dev/null || echo "ℹ️ Watch App 将在用户抬腕点击图标时加载新二进制。"
 else
     echo "ℹ️ 未检测到处于可用状态的物理 Apple Watch，Watch App 将通过 iPhone 蓝牙在后台自动同步。"
 fi

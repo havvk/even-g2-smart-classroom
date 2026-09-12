@@ -1182,10 +1182,11 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             let timeoutItem = DispatchWorkItem { [weak self] in
                 guard let self = self else { return }
                 if self.isWaitingForSessionTeardown {
-                    self.addLog("⏱️ [V2 超时保底] 3.0s 未收到 Session Terminated，自动执行冷启动自愈推流")
+                    self.addLog("⏱️ [V2 超时保底] 3.0s 未收到 Session Terminated，自动执行冷启动自愈推流 (重建视口)")
                     self.isWaitingForSessionTeardown = false
                     self.isTeleprompterSessionActive = false
                     self.isHardwareCanvasMounted = false
+                    self.hasAuthBeenDoneForCurrentConnection = false
                     if let task = self.pendingRePushTask {
                         self.pendingRePushTask = nil
                         task()
@@ -1228,11 +1229,11 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         var msgId: Int = self.teleprompterMsgId == 0 ? 0x01 : self.teleprompterMsgId
         
         // [冷启动 vs 热重推判定 (100% 对齐官方 §23.2 与 multiprompts.pklg 抓包)]
-        // 当次 BLE 物理连接建立后的首次推屏（Push #1 冷启动）：必须下发 Auth (4包) + Setup (6包)
-        // 后续翻页与重推（Push #2+ 热重推）：必须跳过 Auth 和 Setup！绝不重复下发 Setup（重复下发会导致 MCU 视口重置黑屏）！
-        let isColdStart = !hasAuthBeenDoneForCurrentConnection
+        // 当且仅当硬件画布未挂载（首次推屏、眼镜端主动退出到表盘、息屏待机后重入）：必须下发 Auth (4包) + Setup (6包) 重新开辟视口！
+        // 处于持续提词翻页中（热重推）：跳过 Auth/Setup（重复下发会导致 MCU 视口重置黑屏）！
+        let isColdStart = !hasAuthBeenDoneForCurrentConnection || !isHardwareCanvasMounted
         if isColdStart {
-            addLog("🔑 [V2 首次冷启动] 下发 Auth (4包) + Setup (6包) 挂载 MicroLED 画布与视口通道...")
+            addLog("🔑 [V2 首次冷启动/画布重建] 下发 Auth (4包) + Setup (6包) 挂载 MicroLED 画布与视口通道...")
             let authPackets = G2ProtocolEncoder.buildAuthPackets(seq: &seq, msgId: &msgId)
             for (idx, pkt) in authPackets.enumerated() {
                 packets.append(pkt)
@@ -1246,7 +1247,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
             self.hasAuthBeenDoneForCurrentConnection = true
             self.isHardwareCanvasMounted = true
         } else {
-            addLog("⚡️ [V2 热重推] 已完成基础 Setup，严格跳过 Auth/Setup，直接下发提词序列 (防黑屏)...")
+            addLog("⚡️ [V2 热重推] 画布依然活跃挂载，跳过 Auth/Setup，直接下发提词序列 (防黑屏)...")
         }
         
         // §25.1: TeleprompterInit V2 参数：100% 官方原装 (Field 4 动态总页数, Field 5 动态总行数, Field 9 动态每屏行数)
@@ -1374,6 +1375,7 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
         self.isPushingText = false
         self.isTeleprompterSessionActive = false
         self.isHardwareCanvasMounted = false
+        self.hasAuthBeenDoneForCurrentConnection = false
         self.retryCountForCurrentPush = 0
         self.teleprompterPushStatusMessage = "🟡 正在重置屏显..."
         
@@ -1506,20 +1508,27 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                     self.isWaitingForSessionTeardown = false
                     self.isTeleprompterSessionActive = false
                     self.isHardwareRenderConfirmed = false
-                    self.isHardwareCanvasMounted = false
                     self.isPushingText = false
                     self.teleprompterPushStatusMessage = "🔴 提词已退出"
                     self.stopSessionKeepaliveTimer()
                     self.addLog("🛑 [眼镜端退出/会话释放] (Svc \(svcStr): Session Terminated) → Session 已物理注销，UI 状态已同步置为🔴提词已退出")
                     
                     if let task = self.pendingRePushTask {
+                        // 内部热翻页换页注销确认：保持已挂载视口，直接下发新页内容 (跳过 Setup 防黑屏)
                         self.rePushTimeoutWorkItem?.cancel()
                         self.rePushTimeoutWorkItem = nil
                         self.pendingRePushTask = nil
-                        self.addLog("⚡️ 捕获到 Session 注销完成通知，自动启动全新讲稿推流...")
+                        self.addLog("⚡️ 捕获到换页注销完成通知，自动启动全新讲稿推流 (热重推)...")
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.150) {
                             task()
                         }
+                    } else {
+                        // 🚨 外部眼镜端主动退出 (镜腿手势退出 / 息屏休眠 / 返回主表盘):
+                        // 硬件视口与画布已彻底销毁，必须清除挂载标记与连接就绪标记！
+                        // 确保下一次用户翻页或推流时，自动执行完整 Setup 重建视口，杜绝黑屏与无响应！
+                        self.isHardwareCanvasMounted = false
+                        self.hasAuthBeenDoneForCurrentConnection = false
+                        self.addLog("🛑 [眼镜端主动退出] 硬件视口已彻底解挂，下次推流将自动执行 Setup 重建视口")
                     }
                 }
             }
@@ -1555,13 +1564,21 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                         reportedLine = Int(sub[idx10 + 1])
                     }
                     
+                    // 🛡️ 核心防回波污染：在 AI 语音提词跟随期间，眼镜回传的 Tag 0x5A 系 MicroLED 底层对变暗/视口的渲染回执，
+                    // 绝非用户镜腿手势！严禁反向篡改视口行号为 0 或触发外部滚动，彻底根除视口异常回退！
+                    let isAIFollowing = SpeechFollowEngine.shared.isListening || Date().timeIntervalSince(self.lastAISyncSentTime) < 2.0
+                    if isAIFollowing {
+                        onG2TelemetryLog?("Rx", hexString, "06-01 Telemetry: 👓 眼镜视口/变暗渲染回执 (Tag 0x5A, Line \(reportedLine ?? -1))")
+                        continue
+                    }
+                    
                     if let line = reportedLine, line >= 0 && line <= 200 {
                         let maxLine = self.maxMovableLine
                         let clampedLine = min(max(line, 0), maxLine)
                         let timeSincePhoneScroll = Date().timeIntervalSince(self.lastPhoneScrollTime)
                         
-                        // 手机主控保护期 (250ms): 若当前手机刚主动滚动过，且回波落后于预期推进方向，屏蔽以防 UI 抖动
-                        if (timeSincePhoneScroll < 0.250 || self.isPushingText) && clampedLine >= self.currentFocusPageLine {
+                        // 手机主控保护期 (500ms): 若当前手机刚主动滚动过，且回波落后于预期推进方向，屏蔽以防 UI 抖动
+                        if (timeSincePhoneScroll < 0.500 || self.isPushingText) {
                             DispatchQueue.main.async {
                                 self.addLog("🛡️ [主控屏障] 屏蔽眼镜 Touchpad 回波 (Line \(line))，防止 UI 回弹")
                             }
@@ -1778,6 +1795,11 @@ extension BLEManager {
 
     func resetTeleprompterSession() {
         self.isTeleprompterSessionActive = false
+        self.isHardwareCanvasMounted = false
+        self.hasAuthBeenDoneForCurrentConnection = false
+        self.isWaitingForSessionTeardown = false
+        self.pendingRePushTask = nil
+        self.teleprompterPushStatusMessage = "未推屏"
     }
     
     func switchMode(to mode: GlassesState) {

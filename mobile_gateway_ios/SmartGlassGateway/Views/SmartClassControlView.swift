@@ -337,6 +337,10 @@ struct SmartClassControlView: View {
                 }
             }
         }
+        .onDisappear {
+            // 退出智慧课堂模块时，彻底复位提词器视口状态，确保再次进入时能干净重新下发 Setup 重建视口
+            bleManager.resetTeleprompterSession()
+        }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
             autoCheckClipboardToken()
             if authService.isAuthenticated && lectureManager.sessionInfo == nil {
@@ -1009,7 +1013,7 @@ struct SmartClassControlView: View {
                     } else {
                         HStack(spacing: 4) {
                             Circle().fill(Color.green).frame(width: 5, height: 5)
-                            Text("咬合: \(Int(speechEngine.confidenceScore * 100))%")
+                            Text("咬合: \(Int(speechEngine.confidenceScore * 100))% • L\(speechEngine.activeLineIndex + 1)C\(speechEngine.currentWordOrder)")
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .foregroundColor(.green)
                         }
@@ -1044,8 +1048,9 @@ struct SmartClassControlView: View {
                         ForEach(Array(wrappedScriptLines.enumerated()), id: \.offset) { index, lineText in
                             let bounds = viewportBounds
                             let isInViewport = (index >= bounds.vStart && index <= bounds.vEnd)
-                            let isCurrentReading = (speechEngine.isListening && index == activeLineIndex)
-                            let isPastRead = (speechEngine.isListening && index < activeLineIndex)
+                            let effectiveLine = speechEngine.isListening ? speechEngine.activeLineIndex : activeLineIndex
+                            let isCurrentReading = (speechEngine.isListening && index == effectiveLine)
+                            let isPastRead = (speechEngine.isListening && index < effectiveLine)
                             let isViewportTop = (index == bounds.vStart)
                             let isHighlighted = isCurrentReading || (!speechEngine.isListening && isViewportTop)
                             

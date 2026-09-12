@@ -323,6 +323,8 @@ struct TeleprompterPreviewView: View {
                     }
                 }
                 .onReceive(bleManager.$currentFocusPageLine) { newGlassesLine in
+                    // 🛡️ 核心防死锁：当 AI 语音跟随开启时，提词行号由 AI 语音引擎独占掌控，严禁被眼镜物理视口回波篡改回第 0 行！
+                    guard !speechEngine.isListening else { return }
                     guard !wrappedLines.isEmpty else { return }
                     let maxLine = max(wrappedLines.count - TeleprompterPreviewView.physicalViewportLines, 0)
                     let clampedLine = max(0, min(maxLine, newGlassesLine))
@@ -354,7 +356,14 @@ struct TeleprompterPreviewView: View {
                     guard isPlaying && script.scrollMode == .ai && !wrappedLines.isEmpty else { return }
                     let targetLine = min(max(0, aiLine), max(wrappedLines.count - 1, 0))
                     guard targetLine != activeLineIndex else { return }
-                    updateFocusLine(index: targetLine, scrollProxy: proxy)
+                    self.isProgrammaticScrolling = true
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
+                        self.activeLineIndex = targetLine
+                        proxy.scrollTo(targetLine, anchor: .top)
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        self.isProgrammaticScrolling = false
+                    }
                 }
             }
             .background(Color(UIColor.systemGroupedBackground))

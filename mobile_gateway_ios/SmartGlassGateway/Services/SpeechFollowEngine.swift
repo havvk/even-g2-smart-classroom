@@ -78,7 +78,6 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
     
     // MARK: - 字级变暗 (Word-Level Dimming / RunDot) 状态控制
     @Published private(set) var currentWordOrder: Int = 0
-    private var lastWordOrderSentTime = Date.distantPast
     
     private let minScrollIntervalMs: Double = 0.120
     private static let stopwordSet: Set<Character> = Set("的了是在和与于个这那我们你有也")
@@ -119,7 +118,7 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
             list.append(ScriptLineModel(lineIndex: idx, rawText: line, cleanText: base, head2: h2, head3: h3))
         }
         self.scriptLines = list
-        self.endKeywords = keywords ?? ["下一页", "下一张", "进入下一节", "来看下一张", "下面看", "翻到下一页"]
+        self.endKeywords = keywords ?? ["下一页", "下一张", "翻到下一页", "进入下一节"]
         self.activeLineIndex = 0
         self.currentWordOrder = 0
         self.isDigressed = false
@@ -373,18 +372,33 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
     
     // MARK: - 8. 核心文本对齐解算 (局部前向窗口最大综合得分竞争算法)
     private func processTranscriptAlignment(_ transcript: String) {
-        guard !scriptLines.isEmpty else { return }
-        guard !isManualOverrideActive else { return }
+        // 🛡️ 核心防空：若逐字稿未装载或仍为占位符，自动从 LectureSessionManager 实时同步当前页真实排版行
+        if self.scriptLines.isEmpty || self.scriptLines.first?.cleanText.contains("暂无口述提词") == true {
+            let currentLines = LectureSessionManager.shared.getWrappedScriptLines()
+            let rawText = LectureSessionManager.shared.currentScriptText
+            if !currentLines.isEmpty && currentLines.first != "暂无口述提词" {
+                NSLog("🔄 [SpeechEngine] 检测到逐字稿模型未就绪，自动从 LectureManager 同步当前页 (%ld 行)...", currentLines.count)
+                self.loadSlideScriptLines(lines: currentLines, rawScript: rawText)
+            }
+        }
+        guard !scriptLines.isEmpty else {
+            NSLog("⚠️ [SpeechEngine] 逐字稿模型为空，跳过对齐 (可在智慧课堂加载课时或检查网络)")
+            return
+        }
+        guard !isManualOverrideActive else {
+            NSLog("🛑 [SpeechEngine] 人工手势介入中，AI 引擎让位")
+            return
+        }
         
         let totalCount = scriptLines.count
         let cleanText = SpeechFollowEngine.cleanString(transcript)
         guard cleanText.count >= 2 else { return }
         
-        // 1. 检查是否读到当前幻灯片尾部关键词（最后 3 行内）
-        if activeLineIndex >= max(0, totalCount - 3) {
+        // 1. 检查是否读到当前幻灯片尾部关键词（必须在全页最后一行且尾部念出明确切页指令）
+        if totalCount > 0 && activeLineIndex >= totalCount - 1 {
             for keyword in endKeywords {
                 let cleanKw = SpeechFollowEngine.cleanString(keyword)
-                if !cleanKw.isEmpty && cleanText.contains(cleanKw) {
+                if !cleanKw.isEmpty && cleanText.hasSuffix(cleanKw) {
                     NSLog("🎯 [SpeechEngine] 尾部语义锚点命中: '%@'，触发自动切页！", keyword)
                     onVoiceKeywordTriggered?("NEXT")
                     return
@@ -398,7 +412,7 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
         let recentTail = String(cleanText.suffix(min(cleanText.count, 10)))
         
         let curr = self.activeLineIndex
-        let startIdx = curr
+        let startIdx = max(0, curr - 1)
         let endIdx = min(totalCount - 1, curr + 3)
         
         var bestScore: Float = -1.0
@@ -423,7 +437,7 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
             
             var score = baseScore
             if idx == curr {
-                score += 2.0  // 当前行粘性保护
+                score += 3.0  // 当前行温和粘性保护
             } else if idx == curr + 1 {
                 let hasTailH3 = !cand.head3.isEmpty && recentTail.contains(cand.head3)
                 let hasTailH2 = !cand.head2.isEmpty && recentTail.contains(cand.head2)
@@ -431,22 +445,21 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
                 if hasTailH3 {
                     score += 10.0 // 最近尾部命中下行行首 3 字强推进奖励
                 } else if hasTailH2 {
-                    score += 6.0  // 最近尾部命中下行行首 2 字启动奖励
+                    score += 4.0  // 最近尾部命中下行行首 2 字启动奖励
                 } else if hasAnyH3 {
+                    score += 4.0
+                }
+                if lcs >= 2 || overlap >= 3 {
                     score += 5.0
                 }
-                // 🌟 实词推进奖励：若念出了下一行连续 3 字或 4 个实词，额外给予 5 分推进奖励
-                if lcs >= 3 || overlap >= 4 {
-                    score += 5.0
-                }
-            } else if idx == curr + 2 {
+            } else if idx >= curr + 2 {
                 let hasTailH3 = !cand.head3.isEmpty && recentTail.contains(cand.head3)
                 if hasTailH3 {
                     score += 8.0  // 跨行跳读奖励
                 } else if !cand.head3.isEmpty && probe.contains(cand.head3) {
                     score += 4.0
                 }
-                if lcs >= 3 {
+                if lcs >= 2 {
                     score += 4.0
                 }
             }
@@ -459,9 +472,16 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
         }
         
         // 3. 决策推进或坚守
-        if bestIdx > curr && bestScore >= 4.0 {
-            commitLineAdvance(targetIndex: bestIdx, initialWordOrder: 0, reason: matchReason)
-        } else if currBaseScore >= 3.0 || currEndInTarget >= 2 {
+        // 推进条件：若后续行得分显著超越当前行 (>= 3.5)，或当前行未命中但后续行有匹配
+        let shouldAdvance = (bestIdx > curr) && (bestScore >= 4.0 || (currBaseScore < 2.0 && bestScore >= 3.0))
+        
+        if shouldAdvance {
+            let nextCand = scriptLines[bestIdx]
+            let (_, nextEnd) = SpeechFollowEngine.maxCommonSubstringMatch(probe, nextCand.cleanText)
+            let initialOrder = nextEnd > 0 ? SpeechFollowEngine.projectCleanIndexToRaw(cleanIndex: nextEnd, raw: nextCand.rawText, clean: nextCand.cleanText) : 0
+            NSLog("🚀 [SpeechEngine] 触发推进决策 -> 第 %ld 行 (%@, initialOrder=%ld)", bestIdx + 1, matchReason, initialOrder)
+            commitLineAdvance(targetIndex: bestIdx, initialWordOrder: initialOrder, reason: matchReason)
+        } else if currBaseScore >= 2.0 || currEndInTarget >= 1 {
             self.lastValidMatchTime = Date()
             if self.isDigressed {
                 self.isDigressed = false
@@ -478,51 +498,50 @@ class SpeechFollowEngine: NSObject, ObservableObject, SFSpeechRecognizerDelegate
                 )
                 var targetWordOrder = rawOffset
                 let cleanLen = currCand.cleanText.count
-                // 行尾饱和判断：若匹配到达行末 85% 或距离末尾 <= 2 个汉字，饱和至整行长度 (全暗过渡)
-                if cleanLen > 0 && (currEndInTarget >= Int(Float(cleanLen) * 0.85) || cleanLen - currEndInTarget <= 2) {
+                // 行尾饱和判断：若匹配到达行末 80% 或距离末尾 <= 2 个汉字，饱和至整行长度 (全暗过渡)
+                if cleanLen > 0 && (currEndInTarget >= Int(Float(cleanLen) * 0.80) || cleanLen - currEndInTarget <= 2) {
                     targetWordOrder = currCand.rawText.count
                 }
                 
                 // 🛡️ 单调递增水位线保护：同一行内只能向前推进，禁止因重识别抖动倒退闪烁
                 if targetWordOrder > self.currentWordOrder {
                     self.currentWordOrder = targetWordOrder
-                    let now = Date()
-                    if now.timeIntervalSince(self.lastWordOrderSentTime) >= 0.080 {
-                        self.lastWordOrderSentTime = now
-                        self.onSpeechSyncUpdated?(curr, self.currentWordOrder)
-                    }
+                    NSLog("✨ [SpeechEngine] 行内变暗更新: Line %ld, Order %ld/%ld (ASR: '%@')", curr + 1, targetWordOrder, currCand.rawText.count, probe)
+                    self.onSpeechSyncUpdated?(curr, targetWordOrder)
                 }
             }
         } else {
             let digressedElapsed = Date().timeIntervalSince(lastValidMatchTime)
             if digressedElapsed > 3.0 && !self.isDigressed {
                 self.isDigressed = true
-                NSLog("🛡️ [SpeechEngine] 脱稿即兴发挥中 (%.1fs)，坚守当前行 %ld", digressedElapsed, curr + 1)
+                NSLog("🛡️ [SpeechEngine] 脱稿即兴发挥中 (%.1fs)，坚守当前行 %ld (ASR: '%@')", digressedElapsed, curr + 1, probe)
             }
         }
     }
     
     /// 统一推进行号与节流下发
     private func commitLineAdvance(targetIndex: Int, initialWordOrder: Int = 0, reason: String) {
+        guard targetIndex != self.activeLineIndex else { return }
+        
         self.lastValidMatchTime = Date()
         if self.isDigressed {
             self.isDigressed = false
             NSLog("🟢 [SpeechEngine] 讲回逐字稿主线，AI 重新咬合至第 %ld 行 (%@)", targetIndex + 1, reason)
         }
         
-        if targetIndex != self.activeLineIndex {
-            let now = Date()
-            guard now.timeIntervalSince(lastScrollSyncTime) >= minScrollIntervalMs else { return }
-            lastScrollSyncTime = now
-            
-            NSLog("🚀 [SpeechEngine] 成功推进行号: 第 %ld 行 -> 第 %ld 行 (%@)", self.activeLineIndex + 1, targetIndex + 1, reason)
-            self.activeLineIndex = targetIndex
-            self.currentWordOrder = initialWordOrder
-            self.confidenceScore = 1.0
-            self.lastWordOrderSentTime = now
-            onLineIndexUpdated?(targetIndex)
-            onSpeechSyncUpdated?(targetIndex, initialWordOrder)
-        }
+        let now = Date()
+        guard now.timeIntervalSince(lastScrollSyncTime) >= minScrollIntervalMs else { return }
+        lastScrollSyncTime = now
+        
+        let oldIndex = self.activeLineIndex
+        NSLog("🚀 [SpeechEngine] 成功推进行号: 第 %ld 行 -> 第 %ld 行 (%@)", oldIndex + 1, targetIndex + 1, reason)
+        
+        // 🌟 切换当前活跃行号并下发新行首帧 (历史行在手机端由 isPastRead 自动维持全暗，无需连发旧包冲垮信道)
+        self.activeLineIndex = targetIndex
+        self.currentWordOrder = initialWordOrder
+        self.confidenceScore = 1.0
+        onLineIndexUpdated?(targetIndex)
+        onSpeechSyncUpdated?(targetIndex, initialWordOrder)
     }
     
     // MARK: - 9. 字符串清洗与匹配算法工具
