@@ -8,63 +8,33 @@ struct ContentView: View {
     @State private var showingControlCenter: Bool = false
     @State private var showingSmartClass: Bool = false
     @State private var showingGestureTest: Bool = false
+    @State private var showingConversationCopilot: Bool = false
     
     var body: some View {
         VStack(spacing: 0) {
-            // 吸顶全局状态条
-            HStack {
-                HStack(spacing: 6) {
+            // 吸顶全局状态条 (清爽单行防挤压布局)
+            HStack(spacing: 8) {
+                // 1. G2 连接就绪状态 (左侧吸附)
+                HStack(spacing: 5) {
                     Circle()
                         .fill(bleManager.isNotifyReady ? Color.green : (bleManager.isConnected ? Color.orange : Color.red))
                         .frame(width: 8, height: 8)
-                    Text(bleManager.isNotifyReady ? "🟢 G2 就绪" : (bleManager.isConnected ? "🟡 握手中" : "🔴 眼镜未连"))
+                    Text(bleManager.isNotifyReady ? "G2 就绪" : (bleManager.isConnected ? "握手中" : "未连接"))
                         .font(.caption)
                         .fontWeight(.semibold)
+                        .lineLimit(1)
                 }
+                .fixedSize()
                 
                 Spacer()
                 
-                // 🎙️ 全局常驻 Mic 音源切换胶囊 (二选一即触即切)
+                // 2. 🎙️ 全局常驻 Mic 音源切换胶囊 (二选一即触即切)
                 AudioSourceToggleCapsule(speechEngine: speechEngine)
+                    .fixedSize()
                 
                 Spacer()
                 
-                Button(action: {
-                    showingSmartClass.toggle()
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "graduationcap.fill")
-                        Text("智慧课堂")
-                    }
-                    .font(.caption)
-                    .fontWeight(.bold)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.purple.opacity(0.15))
-                    .foregroundColor(.purple)
-                    .cornerRadius(6)
-                }
-                
-                Spacer()
-                
-                Button(action: {
-                    showingGestureTest.toggle()
-                }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "hand.wave.fill")
-                        Text("隔空手势")
-                    }
-                    .font(.caption)
-                    .fontWeight(.bold)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.teal.opacity(0.15))
-                    .foregroundColor(.teal)
-                    .cornerRadius(6)
-                }
-                
-                Spacer()
-                
+                // 3. 控制中心快捷按钮
                 Button(action: {
                     showingControlCenter.toggle()
                 }) {
@@ -74,15 +44,37 @@ struct ContentView: View {
                     }
                     .font(.caption)
                     .fontWeight(.bold)
+                    .lineLimit(1)
                     .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.blue.opacity(0.15))
+                    .padding(.vertical, 5)
+                    .background(Color.blue.opacity(0.12))
                     .foregroundColor(.blue)
                     .cornerRadius(6)
                 }
+                .fixedSize()
+                
+                // 4. 更多工具整合菜单 (规整收纳“智慧课堂”、“隔空手势”等次级弹窗，彻底根除横向挤压)
+                Menu {
+                    Button(action: { showingSmartClass.toggle() }) {
+                        Label("智慧课堂", systemImage: "graduationcap.fill")
+                    }
+                    Button(action: { showingGestureTest.toggle() }) {
+                        Label("隔空手势测试", systemImage: "hand.wave.fill")
+                    }
+                    Button(action: { showingConversationCopilot.toggle() }) {
+                        Label("对话助手浮窗", systemImage: "bubble.left.and.bubble.right.fill")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle.fill")
+                        .font(.system(size: 19))
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 4)
+                }
+                .fixedSize()
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
             .background(Color(UIColor.tertiarySystemBackground))
             
             Divider()
@@ -133,6 +125,12 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingGestureTest) {
             GestureTestView()
+        }
+        .sheet(isPresented: $showingConversationCopilot) {
+            NavigationView {
+                ConversationCopilotView()
+                    .navigationBarItems(trailing: Button("完成") { showingConversationCopilot = false })
+            }
         }
     }
     
@@ -267,7 +265,7 @@ struct DashboardModeView: View {
                     }) {
                         HStack {
                             Image(systemName: "bubble.left.and.bubble.right.fill")
-                            Text("拉起 AI 同传")
+                            Text("拉起对话助手")
                         }
                         .font(.subheadline)
                         .fontWeight(.bold)
@@ -285,52 +283,13 @@ struct DashboardModeView: View {
     }
 }
 
-// MARK: - 模式 3：AI对话与实时同传专属视图 (Conversate Mode)
+// MARK: - 模式 3：对话助手专属视图 (Conversate Mode)
 struct ConversateModeView: View {
     @EnvironmentObject var bleManager: BLEManager
     @EnvironmentObject var webSocketClient: WebSocketClient
     
     var body: some View {
-        VStack(spacing: 16) {
-            HStack {
-                Label("AI 同传对话", systemImage: "bubble.left.and.bubble.right.fill")
-                    .font(.headline)
-                    .foregroundColor(.purple)
-                Spacer()
-                Text("🔴 监听中")
-                    .font(.caption)
-                    .fontWeight(.bold)
-                    .foregroundColor(.red)
-            }
-            .padding()
-            .background(Color.purple.opacity(0.1))
-            .cornerRadius(12)
-            .padding(.horizontal)
-            
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("🤖 Even AI 对话与听写字幕流已建立，眼镜前台正在实时渲染双语字幕...")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .padding()
-                }
-            }
-            
-            Button(action: {
-                bleManager.switchMode(to: .dashboard)
-            }) {
-                Text("结束对话回到主页")
-                    .font(.subheadline)
-                    .fontWeight(.bold)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(Color.gray.opacity(0.2))
-                    .foregroundColor(.primary)
-                    .cornerRadius(10)
-            }
-            .padding(.horizontal)
-            .padding(.bottom, 12)
-        }
+        ConversationCopilotView()
     }
 }
 

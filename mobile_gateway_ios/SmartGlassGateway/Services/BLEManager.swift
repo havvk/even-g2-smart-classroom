@@ -8,7 +8,7 @@ enum GlassesState: String, CaseIterable, Identifiable {
     case disconnected = "未连接"
     case dashboard = "主页仪表盘"
     case teleprompter = "提词前台"
-    case conversate = "AI同传"
+    case conversate = "对话助手"
     case sleeping = "息屏休眠"
     
     var id: String { rawValue }
@@ -746,6 +746,9 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
     
     /// 视口实际对齐行号回调（眼镜端 06-01 遥测/Touchpad 物理触底上报）
     var onGlassesViewportLineReported: ((Int) -> Void)?
+    
+    /// 对话模式下接收到 0x0B-01 事件通知时的外部回调闭包 (例如展开卡片)
+    var onConversateNotification: ((G2ProtocolEncoder.ConversateNotification) -> Void)?
     
     private var currentPages: [String] = []
     var lastPhoneScrollTime: Date = Date.distantPast
@@ -1533,6 +1536,17 @@ class BLEManager: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeriph
                 }
             }
             
+            // 显式拦截并解析 Svc 0B-01 对话模式事件 Notify (如镜腿触控展开卡片)
+            if sHi == 0x0B && sLo == 0x01 {
+                if let notif = G2ProtocolEncoder.parseConversateNotification(relativeData) {
+                    self.addLog("🌟 [0x0B-01 对话事件] 捕获眼镜端上报: type=\(notif.eventType), msgId=\(notif.msgId), expanded=\(notif.isCardExpanded)")
+                    DispatchQueue.main.async {
+                        self.onConversateNotification?(notif)
+                        AICopilotPromptManager.shared.handleConversateNotification(notif)
+                    }
+                }
+            }
+            
             // 显式拦截并解析 Svc 06-01 提词遥测与 Touchpad 手势 Notify
             if sHi == 0x06 && sLo == 0x01 {
                 // 1. 🌟 Tag 0x52 (Type 164 - 固件渲染/屏显就绪回执)
@@ -1910,8 +1924,8 @@ extension BLEManager {
             }
         }
         
-        // 2. 前置会话保障：若尚未进入提词会话态，自动挂载提词测试屏显以激活 MicroLED 容器，确保 MCU 解锁麦克风硬件
-        if !isTeleprompterSessionActive && !isPushingText {
+        // 2. 前置会话保障：仅在普通提词器模式且未激活会话时，才自动挂载提词测试屏显；在对话助手模式下绝不介入！
+        if currentGlassesState == .teleprompter && !isTeleprompterSessionActive && !isPushingText {
             addLog("⚡️ [眼镜模式激活] 检测到尚未进入会话态，自动下发屏显容器使能麦克风硬件...")
             sendTeleprompterText("NCU 智能眼镜采音测试\n麦克风流传输中...", targetWidthChars: 28, scrollModeAI: true, startLine: 0)
         }

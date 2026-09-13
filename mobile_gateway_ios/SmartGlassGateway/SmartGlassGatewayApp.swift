@@ -13,6 +13,7 @@ struct SmartGlassGatewayApp: App {
                 .environmentObject(speechEngine)
                 .environmentObject(webSocketClient)
                 .onAppear {
+                    _ = AudioWhisperPromptManager.shared
                     bleManager.setupWebSocketTelemetryBinding(webSocketClient)
                     LectureSessionManager.shared.setup(webSocketClient: webSocketClient, bleManager: bleManager)
                     setupWatchSessionBinding()

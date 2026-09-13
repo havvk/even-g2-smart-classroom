@@ -65,9 +65,9 @@ final class PhoneBuiltinAudioSource: AudioInputSourceProtocol {
         NSLog("🎙️ [PhoneBuiltinAudioSource] 启动 iPhone 内置麦克风音频采集...")
         
         let audioSession = AVAudioSession.sharedInstance()
-        // 核心保障：仅使用 .duckOthers，严格禁止蓝牙 HFP 电话协议，保持高清录音
-        try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
-        try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+        // 核心保障：使用 .playAndRecord + .allowBluetoothA2DP，支持高清录音与蓝牙/有线耳机私密语音耳语共存 (坚决不使用 .duckOthers，避免侧链在1秒处引入音量突变)
+        try audioSession.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .allowBluetoothA2DP])
+        try audioSession.setActive(true)
         
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
@@ -89,6 +89,15 @@ final class PhoneBuiltinAudioSource: AudioInputSourceProtocol {
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
         self.isRunning = false
+        
+        // 恢复纯高保真回放会话，避免残留录音模式干扰播放
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .spokenAudio, options: [])
+            try session.setActive(true)
+        } catch {
+            NSLog("⚠️ [PhoneBuiltinAudioSource] 还原播放会话失败: %@", error.localizedDescription)
+        }
     }
 }
 

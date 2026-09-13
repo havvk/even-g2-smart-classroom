@@ -885,5 +885,175 @@ class G2ProtocolEncoder {
     static func buildRawMicControlPacket(enable: Bool) -> Data {
         return Data([0x0E, enable ? 0x01 : 0x00])
     }
+    
+    // MARK: - Conversate Service (0x0B-20 / 0x0B-01)
+    
+    /// 将十六进制字符串转为 Data 字节数据
+    static func dataFromHex(_ hexString: String) -> Data {
+        let len = hexString.count / 2
+        var data = Data(capacity: len)
+        var i = hexString.startIndex
+        for _ in 0..<len {
+            let j = hexString.index(i, offsetBy: 2)
+            let bytes = hexString[i..<j]
+            if let num = UInt8(bytes, radix: 16) {
+                data.append(num)
+            }
+            i = j
+        }
+        return data
+    }
+
+    /// 官方对话模式初始化十六进制常量模版 (含多语言选项与 Y 轴视口挂载参数)
+    static let conversateInitPayloadHex = "080110011ada010801120a0801100118002001280020002a0d0a034f46461206e585b3e997ad2a140a044155544f120ce887aae58aa8e6a380e6b58b2a180a025a481212e4b8ade69687efbc88e7ae80e4bd93efbc892a180a0254571212e4b8ade69687efbc88e7b981e4bd93efbc892a0c0a024a411206e697a5e8afad2a120a024553120ce8a5bfe78fade78999e8afad2a0c0a0246521206e6b395e8afad2a180a0244451212e5beb7e8afadefbc88e5beb7e59bbdefbc892a120a024954120ce6848fe5a4a7e588a9e8afad2a0c0a024b4f1206e99fa9e8afad32034f4646"
+    
+    /// 构造启动对话模式的初始化报文 (Service 0x0B-20, Type 1)
+    /// - Parameter seq: 自增序列号
+    /// - Returns: 带 AA 21 帧头与 CRC16 尾部的完整 BLE 报文
+    static func buildConversateInit(seq: inout UInt8) -> Data {
+        var payload = dataFromHex(conversateInitPayloadHex)
+        if payload.count > 3 {
+            payload[3] = UInt8(seq & 0x7F)
+        }
+        return buildPacket(seq: &seq, serviceHi: 0x0B, serviceLo: 0x20, payload: payload)
+    }
+    
+    /// 构造下半区 3 行实时语音转写帧 (Service 0x0B-20, Type 6)
+    /// - Parameters:
+    ///   - seq: 自增序列号
+    ///   - text: 转写文本 (UTF-8)
+    ///   - isFinal: 是否整句断句完成 (0 = 原位增量打字, 1 = 向上平滑滚屏)
+    /// - Returns: 带 AA 21 帧头与 CRC16 尾部的完整 BLE 报文
+    static func buildConversateTranscript(seq: inout UInt8, text: String, isFinal: Bool) -> Data {
+        let textBytes = Data(text.utf8)
+        var sub = Data([0x0A])
+        sub.append(encodeVarint(textBytes.count))
+        sub.append(textBytes)
+        sub.append(contentsOf: [0x10, isFinal ? 0x01 : 0x00])
+        
+        var payload = Data([0x08, 0x06, 0x10])
+        payload.append(encodeVarint(Int(seq)))
+        payload.append(0x42)
+        payload.append(encodeVarint(sub.count))
+        payload.append(sub)
+        
+        return buildPacket(seq: &seq, serviceHi: 0x0B, serviceLo: 0x20, payload: payload)
+    }
+    
+    /// 构造上半区原生 AI 药丸胶囊卡片 (Service 0x0B-20, Type 5)
+    /// - Parameters:
+    ///   - seq: 自增序列号
+    ///   - title: 胶囊标题 (建议 8~12 汉字极简微标签，折叠态单行呈现)
+    ///   - detail: 展开详情 (多行结构化文字，单击镜腿物理展开后持续常显)
+    ///   - cardType: 卡片样式枚举 (默认 4 = 原生圆角胶囊边框 + 智能图标)
+    /// - Returns: 带 AA 21 帧头与 CRC16 尾部的完整 BLE 报文
+    static func buildConversateAIPrompt(seq: inout UInt8, title: String, detail: String = "", cardType: UInt32 = 4) -> Data {
+        let titleBytes = Data(title.utf8)
+        let detailBytes = Data(detail.utf8)
+        
+        var sub = Data([0x08, UInt8(cardType & 0x7F)])
+        if !titleBytes.isEmpty {
+            sub.append(0x12)
+            sub.append(encodeVarint(titleBytes.count))
+            sub.append(titleBytes)
+        }
+        if !detailBytes.isEmpty {
+            sub.append(0x1A)
+            sub.append(encodeVarint(detailBytes.count))
+            sub.append(detailBytes)
+        }
+        sub.append(contentsOf: [0x20, 0x00]) // Status = 0
+        
+        var payload = Data([0x08, 0x05, 0x10])
+        payload.append(encodeVarint(Int(seq)))
+        payload.append(0x3A)
+        payload.append(encodeVarint(sub.count))
+        payload.append(sub)
+        
+        return buildPacket(seq: &seq, serviceHi: 0x0B, serviceLo: 0x20, payload: payload)
+    }
+    
+    /// 构造显存锁存提交与看门狗保活心跳帧 (Service 0x0B-20, Type 255)
+    /// - Parameter seq: 自增序列号
+    /// - Returns: 显存锁存报文
+    static func buildConversateSync(seq: inout UInt8) -> Data {
+        var payload = Data([0x08, 0xFF, 0x01, 0x10])
+        payload.append(encodeVarint(Int(seq)))
+        payload.append(contentsOf: [0x5A, 0x00])
+        return buildPacket(seq: &seq, serviceHi: 0x0B, serviceLo: 0x20, payload: payload)
+    }
+    
+    /// 构造退出对话模式会话释放帧 (Service 0x0B-20, Type 1)
+    /// - Parameter seq: 自增序列号
+    /// - Returns: 会话注销报文
+    static func buildConversateExit(seq: inout UInt8) -> Data {
+        var payload = Data([0x08, 0x01, 0x10])
+        payload.append(encodeVarint(Int(seq)))
+        payload.append(contentsOf: [0x1A, 0x04, 0x08, 0x02, 0x20, 0x00])
+        return buildPacket(seq: &seq, serviceHi: 0x0B, serviceLo: 0x20, payload: payload)
+    }
+    
+    // MARK: - Conversate Event Notifications (0x0B-01)
+    
+    /// 对话模式眼镜端主动上报事件模型 (Service 0x0B-01)
+    struct ConversateNotification {
+        let eventType: Int   // 163 (0xA3) = Type 3 卡片展开事件
+        let msgId: Int       // 对应的消息 ID
+        let rawPayload: Data
+        
+        /// 是否为佩戴者触控展开卡片事件 (Tag 1 = 163 -> Type 3)
+        var isCardExpanded: Bool {
+            return eventType == 163
+        }
+    }
+    
+    /// 解析 0x0B-01 对话事件通知包
+    static func parseConversateNotification(_ packet: Data) -> ConversateNotification? {
+        guard packet.count >= 8,
+              packet[0] == 0xAA,
+              packet[6] == 0x0B,
+              packet[7] == 0x01 else {
+            return nil
+        }
+        
+        let payload = packet.count > 10 ? packet.subdata(in: 8..<(packet.count - 2)) : packet.subdata(in: 8..<packet.count)
+        var eventType = 0
+        var msgId = 0
+        var i = 0
+        
+        while i < payload.count {
+            let tag = payload[i]
+            if tag == 0x08 && i + 1 < payload.count { // Tag 1: Event Type Varint
+                i += 1
+                var shift = 0
+                var val = 0
+                while i < payload.count {
+                    let b = Int(payload[i])
+                    val |= (b & 0x7F) << shift
+                    i += 1
+                    if (b & 0x80) == 0 { break }
+                    shift += 7
+                }
+                eventType = val
+            } else if tag == 0x10 && i + 1 < payload.count { // Tag 2: msg_id Varint
+                i += 1
+                var shift = 0
+                var val = 0
+                while i < payload.count {
+                    let b = Int(payload[i])
+                    val |= (b & 0x7F) << shift
+                    i += 1
+                    if (b & 0x80) == 0 { break }
+                    shift += 7
+                }
+                msgId = val
+            } else {
+                i += 1
+            }
+        }
+        
+        return ConversateNotification(eventType: eventType, msgId: msgId, rawPayload: payload)
+    }
 }
+
 

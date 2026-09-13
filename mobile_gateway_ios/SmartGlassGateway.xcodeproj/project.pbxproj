@@ -40,6 +40,14 @@
 		A100001B2C50000100000001 /* GestureTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100001B2C50000100000001 /* GestureTestView.swift */; };
 		A100001C2C50000100000001 /* SmartClassSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100001C2C50000100000001 /* SmartClassSettingsSheet.swift */; };
 		A100001D2C50000100000001 /* GestureCameraViewportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100001D2C50000100000001 /* GestureCameraViewportView.swift */; };
+		A10000242C50000100000001 /* Audio/DualTrackSpeakerDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000242C50000100000001 /* Audio/DualTrackSpeakerDetector.swift */; };
+		A10000252C50000100000001 /* Services/AICopilotPromptManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000252C50000100000001 /* Services/AICopilotPromptManager.swift */; };
+		A10000262C50000100000001 /* Services/ConversationCopilotManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000262C50000100000001 /* Services/ConversationCopilotManager.swift */; };
+		A10000272C50000100000001 /* Views/ConversationCopilotView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000272C50000100000001 /* Views/ConversationCopilotView.swift */; };
+		A10000282C50000100000001 /* Audio/AudioWhisperPromptManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000282C50000100000001 /* Audio/AudioWhisperPromptManager.swift */; };
+		A10000292C50000100000001 /* Models/ConversationSessionRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000292C50000100000001 /* Models/ConversationSessionRecord.swift */; };
+		A100002A2C50000100000001 /* Services/ConversationSummaryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100002A2C50000100000001 /* Services/ConversationSummaryService.swift */; };
+		A100002B2C50000100000001 /* Views/ConversationSummarySheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100002B2C50000100000001 /* Views/ConversationSummarySheetView.swift */; };
 		A20000012C50000100000001 /* SmartGlassWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000012C50000100000001 /* SmartGlassWatchApp.swift */; };
 		A20000022C50000100000001 /* Views/WatchContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000022C50000100000001 /* Views/WatchContentView.swift */; };
 		A20000032C50000100000001 /* Services/WatchBLEGatewayService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000032C50000100000001 /* Services/WatchBLEGatewayService.swift */; };
@@ -105,6 +113,14 @@
 		B100001B2C50000100000001 /* GestureTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/GestureTestView.swift; sourceTree = "<group>"; };
 		B100001C2C50000100000001 /* SmartClassSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SmartClassSettingsSheet.swift; sourceTree = "<group>"; };
 		B100001D2C50000100000001 /* GestureCameraViewportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/GestureCameraViewportView.swift; sourceTree = "<group>"; };
+		B10000242C50000100000001 /* Audio/DualTrackSpeakerDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Audio/DualTrackSpeakerDetector.swift; sourceTree = "<group>"; };
+		B10000252C50000100000001 /* Services/AICopilotPromptManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/AICopilotPromptManager.swift; sourceTree = "<group>"; };
+		B10000262C50000100000001 /* Services/ConversationCopilotManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/ConversationCopilotManager.swift; sourceTree = "<group>"; };
+		B10000272C50000100000001 /* Views/ConversationCopilotView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ConversationCopilotView.swift; sourceTree = "<group>"; };
+		B10000282C50000100000001 /* Audio/AudioWhisperPromptManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Audio/AudioWhisperPromptManager.swift; sourceTree = "<group>"; };
+		B10000292C50000100000001 /* Models/ConversationSessionRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/ConversationSessionRecord.swift; sourceTree = "<group>"; };
+		B100002A2C50000100000001 /* Services/ConversationSummaryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/ConversationSummaryService.swift; sourceTree = "<group>"; };
+		B100002B2C50000100000001 /* Views/ConversationSummarySheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ConversationSummarySheetView.swift; sourceTree = "<group>"; };
 		B20000012C50000100000001 /* SmartGlassWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartGlassWatchApp.swift; sourceTree = "<group>"; };
 		B20000022C50000100000001 /* Views/WatchContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/WatchContentView.swift; sourceTree = "<group>"; };
 		B20000032C50000100000001 /* Services/WatchBLEGatewayService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/WatchBLEGatewayService.swift; sourceTree = "<group>"; };
@@ -168,6 +184,14 @@
 				B100001B2C50000100000001 /* GestureTestView.swift */,
 				B100001C2C50000100000001 /* SmartClassSettingsSheet.swift */,
 				B100001D2C50000100000001 /* GestureCameraViewportView.swift */,
+				B10000242C50000100000001 /* Audio/DualTrackSpeakerDetector.swift */,
+				B10000252C50000100000001 /* Services/AICopilotPromptManager.swift */,
+				B10000262C50000100000001 /* Services/ConversationCopilotManager.swift */,
+				B10000272C50000100000001 /* Views/ConversationCopilotView.swift */,
+				B10000282C50000100000001 /* Audio/AudioWhisperPromptManager.swift */,
+				B10000292C50000100000001 /* Models/ConversationSessionRecord.swift */,
+				B100002A2C50000100000001 /* Services/ConversationSummaryService.swift */,
+				B100002B2C50000100000001 /* Views/ConversationSummarySheetView.swift */,
 			);
 			path = SmartGlassGateway;
 			sourceTree = "<group>";
@@ -322,6 +346,14 @@
 				A100001B2C50000100000001 /* GestureTestView.swift in Sources */,
 				A100001C2C50000100000001 /* SmartClassSettingsSheet.swift in Sources */,
 				A100001D2C50000100000001 /* GestureCameraViewportView.swift in Sources */,
+				A10000242C50000100000001 /* Audio/DualTrackSpeakerDetector.swift in Sources */,
+				A10000252C50000100000001 /* Services/AICopilotPromptManager.swift in Sources */,
+				A10000262C50000100000001 /* Services/ConversationCopilotManager.swift in Sources */,
+				A10000272C50000100000001 /* Views/ConversationCopilotView.swift in Sources */,
+				A10000282C50000100000001 /* Audio/AudioWhisperPromptManager.swift in Sources */,
+				A10000292C50000100000001 /* Models/ConversationSessionRecord.swift in Sources */,
+				A100002A2C50000100000001 /* Services/ConversationSummaryService.swift in Sources */,
+				A100002B2C50000100000001 /* Views/ConversationSummarySheetView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
